@@ -33,6 +33,9 @@ yarn-error.*
 # local env files
 .env*.local
 
+# app config with secrets (use app.json.example as template, copy to app.json and add your keys)
+app.json
+
 # typescript
 *.tsbuildinfo
 
