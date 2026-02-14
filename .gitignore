@@ -44,3 +44,7 @@ app-example
 # generated native folders
 /ios
 /android
+
+# docs (excluded from repo)
+FIREBASE_SETUP.md
+README.md
