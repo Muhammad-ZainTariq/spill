@@ -1,4 +1,5 @@
-import { supabase } from '@/lib/supabase';
+import { auth, db } from '@/lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
 import { Feather } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { Image } from 'expo-image';
@@ -74,92 +75,18 @@ export default function MessagesTab() {
   }, [selectedConversation, navigation]);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setCurrentUserId(user?.id || null);
-    });
+    setCurrentUserId(auth.currentUser?.uid || null);
     loadConversations(true);
-
-    const conversationsChannel = supabase
-      .channel('conversations-updates')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages' },
-        (payload) => {
-          setTimeout(() => loadConversations(false), 500);
-          if (selectedConversation && payload.new && (payload.new as any).conversation_id === selectedConversation.id) {
-            loadMessages();
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'conversations' },
-        () => setTimeout(() => loadConversations(false), 500)
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'conversations' },
-        () => setTimeout(() => loadConversations(false), 500)
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(conversationsChannel);
-    };
+    const interval = setInterval(() => loadConversations(false), 10000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
     if (!selectedConversation) return;
     loadMessages();
-    subscribeToMessages();
-    return () => {
-      if (messagesChannelRef.current) {
-        supabase.removeChannel(messagesChannelRef.current);
-        messagesChannelRef.current = null;
-      }
-    };
+    const interval = setInterval(loadMessages, 5000);
+    return () => clearInterval(interval);
   }, [selectedConversation]);
-
-  const subscribeToMessages = () => {
-    if (!selectedConversation?.id) return;
-    if (messagesChannelRef.current) {
-      supabase.removeChannel(messagesChannelRef.current);
-      messagesChannelRef.current = null;
-    }
-
-    const channel = supabase
-      .channel(`messages:${selectedConversation.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${selectedConversation.id}`,
-        },
-        (payload) => {
-          const newMessage = payload.new as Message;
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === newMessage.id)) return prev;
-            return [...prev, newMessage];
-          });
-
-          supabase
-            .from('profiles')
-            .select('id, display_name, anonymous_username, avatar_url')
-            .eq('id', newMessage.sender_id)
-            .single()
-            .then(({ data }) => {
-              setMessages((prev) =>
-                prev.map((m) => (m.id === newMessage.id ? { ...m, sender: data || undefined } : m))
-              );
-            });
-        }
-      )
-      .subscribe();
-
-    messagesChannelRef.current = channel;
-  };
 
   const loadConversations = async (showLoading = false) => {
     try {
@@ -193,11 +120,6 @@ export default function MessagesTab() {
     try {
       const sentMessage = await sendMessage(selectedConversation.id, content);
 
-      await supabase
-        .from('conversations')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', selectedConversation.id);
-
       if (sentMessage && currentUserId) {
         setMessages((prev) => {
           if (prev.some((m) => m.id === sentMessage.id)) return prev;
@@ -215,26 +137,27 @@ export default function MessagesTab() {
     }
   };
 
-  const searchUsers = async (query: string) => {
-    if (!query.trim()) {
+  const searchUsers = async (searchQ: string) => {
+    if (!searchQ.trim()) {
       setSearchResults([]);
       setIsSearching(false);
       return;
     }
     try {
       setIsSearching(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, display_name, anonymous_username, avatar_url')
-        .neq('id', user.id)
-        .or(`display_name.ilike.%${query}%,anonymous_username.ilike.%${query}%`)
-        .limit(20);
-
-      if (error) throw error;
-      setSearchResults(data || []);
+      if (!auth.currentUser) return;
+      const { getDocs, collection, query, where, limit } = await import('firebase/firestore');
+      const q = query(
+        collection(db, 'users'),
+        where('anonymous_username', '>=', searchQ.trim()),
+        where('anonymous_username', '<=', searchQ.trim() + '\uf8ff'),
+        limit(20)
+      );
+      const snap = await getDocs(q);
+      const list = snap.docs
+        .filter((d) => d.id !== auth.currentUser?.uid)
+        .map((d) => ({ id: d.id, ...d.data() }));
+      setSearchResults(list);
     } catch (error) {
       console.error('Error searching users:', error);
       setSearchResults([]);
@@ -253,11 +176,8 @@ export default function MessagesTab() {
   const startConversation = async (userId: string) => {
     try {
       const conv = await getOrCreateConversation(userId);
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
+      const profileSnap = await getDoc(doc(db, 'users', userId));
+      const profile = profileSnap.exists() ? { id: userId, ...profileSnap.data() } : null;
 
       setSelectedConversation({ ...conv, otherUser: profile });
       setSearchQuery('');

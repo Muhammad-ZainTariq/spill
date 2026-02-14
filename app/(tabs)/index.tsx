@@ -566,6 +566,19 @@ export default function HomeScreen() {
                   <Text style={styles.sideMenuItemText}>Settings</Text>
                   <Feather name="chevron-right" size={20} color="#9ca3af" />
                 </Pressable>
+                {userProfile?.is_admin && (
+                  <Pressable
+                    style={styles.sideMenuItem}
+                    onPress={() => {
+                      setMenuVisible(false);
+                      router.push('/admin' as any);
+                    }}
+                  >
+                    <Feather name="shield" size={20} color="#ec4899" />
+                    <Text style={[styles.sideMenuItemText, { color: '#ec4899', fontWeight: '700' }]}>Admin</Text>
+                    <Feather name="chevron-right" size={20} color="#9ca3af" />
+                  </Pressable>
+                )}
               </View>
             </View>
           </Reanimated.View>
@@ -663,12 +676,36 @@ export default function HomeScreen() {
                     </Text>
                   </Pressable>
                 </View>
-                <Pressable
-                  style={styles.moreButton}
-                  onPress={() => handleMoreOptions(post.id, post.user_id)}
-                >
-                  <Text style={styles.moreIcon}>⋯</Text>
-                </Pressable>
+                <View style={styles.headerRightRow}>
+                  <Pressable
+                    style={[styles.aiPill, aiLoadingId === post.id && styles.aiPillLoading]}
+                    disabled={aiLoadingId === post.id}
+                    onPress={async () => {
+                      if (aiResponses[post.id]) return;
+                      try {
+                        setAiLoadingId(post.id);
+                        const response = await getAIOpinion(post.content);
+                        setAiResponses(prev => ({ ...prev, [post.id]: response }));
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      } catch (error) {
+                        console.error('Error getting AI opinion', error);
+                      } finally {
+                        setAiLoadingId(null);
+                      }
+                    }}
+                  >
+                    {aiLoadingId === post.id ? (
+                      <ActivityIndicator size="small" color="#ec4899" style={{ marginRight: 4 }} />
+                    ) : null}
+                    <Text style={styles.aiPillText}>AI</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.moreButton}
+                    onPress={() => handleMoreOptions(post.id, post.user_id)}
+                  >
+                    <Text style={styles.moreIcon}>⋯</Text>
+                  </Pressable>
+                </View>
               </View>
 
               {/* Post Content */}
@@ -735,40 +772,19 @@ export default function HomeScreen() {
                 </View>
               </View>
 
-              {/* AI Opinion Section */}
-              <View style={styles.aiSection}>
-                {aiResponses[post.id] ? (
-                  <View style={styles.aiResponseBox}>
-                    <Text style={styles.aiResponseLabel}>AI thinks:</Text>
-                    <Text style={styles.aiResponseText}>{aiResponses[post.id]}</Text>
-                  </View>
-                ) : null}
-                <Pressable
-                  style={[styles.aiButton, aiLoadingId === post.id && styles.aiButtonLoading]}
-                  disabled={aiLoadingId === post.id}
-                  onPress={async () => {
-                    try {
-                      setAiLoadingId(post.id);
-                      const response = await getAIOpinion(post.content);
-                      setAiResponses(prev => ({ ...prev, [post.id]: response }));
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    } catch (error) {
-                      console.error('Error getting AI opinion:', error);
-                    } finally {
-                      setAiLoadingId(null);
-                    }
-                  }}
-                >
-                  {aiLoadingId === post.id ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
-                      <Text style={styles.aiButtonText}>Thinking...</Text>
-                    </View>
-                  ) : (
-                    <Text style={styles.aiButtonText}>See what AI thinks</Text>
-                  )}
-                </Pressable>
-              </View>
+              {/* AI response in-place (no big button) */}
+              {aiLoadingId === post.id ? (
+                <View style={styles.aiThinkingBar}>
+                  <ActivityIndicator size="small" color="#ec4899" />
+                  <Text style={styles.aiThinkingText}>Thinking...</Text>
+                </View>
+              ) : null}
+              {aiResponses[post.id] ? (
+                <View style={styles.aiResponseBox}>
+                  <Text style={styles.aiResponseLabel}>AI thinks:</Text>
+                  <Text style={styles.aiResponseText}>{aiResponses[post.id]}</Text>
+                </View>
+              ) : null}
             </View>
           ))
         )}
@@ -1074,6 +1090,29 @@ const styles = StyleSheet.create({
     color: '#f59e0b',
     fontWeight: '600',
   },
+  headerRightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  aiPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: '#f3f4f6',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  aiPillLoading: {
+    opacity: 0.8,
+  },
+  aiPillText: {
+    color: '#ec4899',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   moreButton: {
     padding: 8,
   },
@@ -1200,17 +1239,28 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
   },
-  aiSection: {
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+  aiThinkingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#faf5f7',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fce7ef',
+  },
+  aiThinkingText: {
+    color: '#be185d',
+    fontSize: 13,
+    fontWeight: '600',
   },
   aiResponseBox: {
     backgroundColor: '#f6f7f9',
     borderRadius: 8,
     padding: 12,
-    marginBottom: 8,
+    marginTop: 8,
     borderWidth: 1,
     borderColor: '#e1e5e9',
   },
@@ -1224,22 +1274,6 @@ const styles = StyleSheet.create({
     color: '#333',
     fontSize: 14,
     lineHeight: 20,
-  },
-  aiButton: {
-    backgroundColor: '#ec4899',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  aiButtonLoading: {
-    opacity: 0.7,
-  },
-  aiButtonText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
   },
   fab: {
     position: 'absolute',

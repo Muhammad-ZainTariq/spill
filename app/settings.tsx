@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase';
+import { auth, storage, ref, uploadBytes, getDownloadURL } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
 import { Buffer } from 'buffer';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -8,7 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { cancelPremium, checkPremiumStatus } from './functions';
+import { cancelPremium, checkPremiumStatus, fetchUserProfile, updateUserProfile } from './functions';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -25,6 +25,7 @@ export default function SettingsScreen() {
   const [availableForMatches, setAvailableForMatches] = useState(false);
   const [matchStruggles, setMatchStruggles] = useState<string[]>([]);
   const [showStrugglesModal, setShowStrugglesModal] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const STRUGGLE_OPTIONS = [
     'Anxiety',
@@ -53,26 +54,21 @@ export default function SettingsScreen() {
 
   const loadUserProfile = async () => {
     try {
-      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      const currentUser = auth.currentUser;
       if (!currentUser) {
         router.replace('/login');
         return;
       }
+      setUser({ id: currentUser.uid });
 
-      setUser(currentUser);
-
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', currentUser.id)
-        .single();
-
+      const profile = await fetchUserProfile();
       if (profile) {
         setDisplayName(profile.display_name || '');
         setAnonymousUsername(profile.anonymous_username || '');
         setAvatarUrl(profile.avatar_url || '');
         setAvailableForMatches(profile.available_for_matches || false);
         setMatchStruggles(profile.match_struggles || []);
+        setIsAdmin(!!profile.is_admin);
       }
     } catch (error) {
       console.error('Error loading profile:', error);
@@ -103,29 +99,16 @@ export default function SettingsScreen() {
       const asset = result.assets[0];
       setUploadingAvatar(true);
 
-      // Upload to Supabase Storage
       const base64Data = await FileSystem.readAsStringAsync(asset.uri, { 
         encoding: FileSystem.EncodingType.Base64 
       });
       const byteArray = Buffer.from(base64Data, 'base64');
 
-      const path = `${user.id}/avatar-${Date.now()}.jpg`;
-      const { error: uploadError } = await supabase.storage
-        .from('avatar-bucket')
-        .upload(path, byteArray, {
-          cacheControl: '3600',
-          contentType: 'image/jpeg',
-          upsert: true,
-        });
-
-      if (uploadError) {
-        console.error('Upload error', uploadError);
-        Alert.alert('Upload failed', 'Could not upload avatar.');
-        return;
-      }
-
-      const { data } = supabase.storage.from('avatar-bucket').getPublicUrl(path);
-      setAvatarUrl(data.publicUrl);
+      const path = `avatars/${user?.id || auth.currentUser?.uid}/${Date.now()}.jpg`;
+      const storageRef = ref(storage, path);
+      await uploadBytes(storageRef, byteArray, { contentType: 'image/jpeg' });
+      const publicUrl = await getDownloadURL(storageRef);
+      setAvatarUrl(publicUrl);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
       console.error('Avatar picker error', error);
@@ -167,22 +150,13 @@ export default function SettingsScreen() {
         user_id: user.id
       });
 
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          display_name: displayName.trim() || null,
-          anonymous_username: anonymousUsername.trim() || null,
-          avatar_url: avatarUrl.trim() || null,
-          available_for_matches: availableForMatches,
-          match_struggles: matchStruggles,
-        })
-        .eq('id', user.id);
-
-      if (error) {
-        console.error('Error updating profile:', error);
-        Alert.alert('Error', 'Could not update profile.');
-        return;
-      }
+      await updateUserProfile({
+        display_name: displayName.trim() || null,
+        anonymous_username: anonymousUsername.trim() || null,
+        avatar_url: avatarUrl.trim() || null,
+        available_for_matches: availableForMatches,
+        match_struggles: matchStruggles,
+      });
 
       console.log('Profile updated successfully!');
 
@@ -203,7 +177,8 @@ export default function SettingsScreen() {
 
   const handleLogout = async () => {
     try {
-      await supabase.auth.signOut();
+      const { signOut } = await import('firebase/auth');
+      await signOut(auth);
       router.replace('/login');
     } catch (error) {
       console.error('Error logging out:', error);
@@ -213,35 +188,11 @@ export default function SettingsScreen() {
   const loadBlockedAccounts = async () => {
     try {
       setLoadingBlocked(true);
-      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      const currentUser = auth.currentUser;
       if (!currentUser) return;
 
-      const { data: blockedData, error } = await supabase
-        .from('blocked_users')
-        .select('blocked_id, blocked_at')
-        .eq('blocker_id', currentUser.id)
-        .order('blocked_at', { ascending: false });
-
-      if (error) throw error;
-
-      // Fetch profiles for blocked users
-      const blockedIds = (blockedData || []).map(b => b.blocked_id);
-      if (blockedIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, display_name, anonymous_username, avatar_url')
-          .in('id', blockedIds);
-
-        // Merge blocked data with profiles
-        const blockedWithProfiles = (blockedData || []).map(blocked => ({
-          ...blocked,
-          blocked: profiles?.find(p => p.id === blocked.blocked_id) || null,
-        }));
-
-        setBlockedAccounts(blockedWithProfiles);
-      } else {
-        setBlockedAccounts([]);
-      }
+      // Blocked users: add Firestore blocked_users collection later; for now show empty
+      setBlockedAccounts([]);
     } catch (error) {
       console.error('Error loading blocked accounts:', error);
       Alert.alert('Error', 'Could not load blocked accounts.');
@@ -261,17 +212,8 @@ export default function SettingsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              const { data: { user: currentUser } } = await supabase.auth.getUser();
-              if (!currentUser) return;
-
-              const { error } = await supabase
-                .from('blocked_users')
-                .delete()
-                .eq('blocker_id', currentUser.id)
-                .eq('blocked_id', blockedId);
-
-              if (error) throw error;
-
+              if (!auth.currentUser) return;
+              // TODO: delete from Firestore blocked_users when you add that collection
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               Alert.alert('Success', `${userName} has been unblocked`);
               loadBlockedAccounts();
@@ -366,7 +308,18 @@ export default function SettingsScreen() {
         {/* Account Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
-          
+
+          {isAdmin && (
+            <Pressable
+              style={styles.premiumButton}
+              onPress={() => router.push('/admin' as any)}
+            >
+              <Feather name="shield" size={20} color="#ec4899" />
+              <Text style={styles.premiumButtonText}>Admin</Text>
+              <Feather name="chevron-right" size={20} color="#9ca3af" />
+            </Pressable>
+          )}
+
           {!isPremium ? (
             <Pressable 
               style={styles.premiumButton}
@@ -568,22 +521,9 @@ export default function SettingsScreen() {
                   // Save immediately to database
                   if (user) {
                     try {
-                      const { error } = await supabase
-                        .from('profiles')
-                        .update({
-                          available_for_matches: true,
-                          match_struggles: matchStruggles,
-                        })
-                        .eq('id', user.id);
-
-                      if (error) {
-                        console.error('Error saving match availability:', error);
-                        Alert.alert('Error', 'Failed to save. Please try again.');
-                        setAvailableForMatches(false);
-                      } else {
-                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                        Alert.alert('Success', 'You\'re now available for matches!');
-                      }
+                      await updateUserProfile({ available_for_matches: true, match_struggles: matchStruggles });
+                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                      Alert.alert('Success', 'You\'re now available for matches!');
                     } catch (error) {
                       console.error('Error saving:', error);
                       Alert.alert('Error', 'Failed to save. Please try again.');

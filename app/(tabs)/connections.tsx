@@ -1,4 +1,6 @@
-import { supabase } from '@/lib/supabase';
+import { auth } from '@/lib/firebase';
+import { getDoc, doc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { Image } from 'expo-image';
@@ -145,18 +147,13 @@ export default function ConnectionsScreen() {
 
   const loadSettings = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('message_preference, auto_join_groups')
-        .eq('id', user.id)
-        .single();
-
-      if (profile) {
-        setMessagePreference(profile.message_preference || 'requests');
-        setAutoJoinGroups(profile.auto_join_groups || false);
+      const u = auth.currentUser;
+      if (!u) return;
+      const profile = await getDoc(doc(db, 'users', u.uid));
+      const data = profile.data();
+      if (data) {
+        setMessagePreference(data.message_preference || 'requests');
+        setAutoJoinGroups(data.auto_join_groups || false);
       }
     } catch (error) {
       console.error('Error loading settings:', error);
@@ -166,18 +163,10 @@ export default function ConnectionsScreen() {
   const saveSettings = async () => {
     try {
       setLoadingSettings(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          message_preference: messagePreference,
-          auto_join_groups: autoJoinGroups,
-        })
-        .eq('id', user.id);
-
-      if (error) throw error;
+      const u = auth.currentUser;
+      if (!u) return;
+      const { updateUserProfile } = await import('../functions');
+      await updateUserProfile({ message_preference: messagePreference, auto_join_groups: autoJoinGroups });
       setShowSettings(false);
     } catch (error) {
       console.error('Error saving settings:', error);
@@ -186,27 +175,27 @@ export default function ConnectionsScreen() {
     }
   };
 
-  const searchUsers = async (query: string) => {
-    if (!query.trim()) {
+  const searchUsers = async (searchQ: string) => {
+    if (!searchQ.trim()) {
       setSearchResults([]);
       setIsSearching(false);
       return;
     }
-
     try {
       setIsSearching(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, display_name, anonymous_username, avatar_url')
-        .neq('id', user.id)
-        .or(`display_name.ilike.%${query}%,anonymous_username.ilike.%${query}%`)
-        .limit(20);
-
-      if (error) throw error;
-      setSearchResults(data || []);
+      if (!auth.currentUser) return;
+      const { getDocs, collection, query, where, limit } = await import('firebase/firestore');
+      const q = query(
+        collection(db, 'users'),
+        where('anonymous_username', '>=', searchQ.trim()),
+        where('anonymous_username', '<=', searchQ.trim() + '\uf8ff'),
+        limit(20)
+      );
+      const snap = await getDocs(q);
+      const list = snap.docs
+        .filter((d) => d.id !== auth.currentUser?.uid)
+        .map((d) => ({ id: d.id, ...d.data() }));
+      setSearchResults(list);
     } catch (error) {
       console.error('Error searching users:', error);
       setSearchResults([]);
@@ -218,15 +207,11 @@ export default function ConnectionsScreen() {
   const startConversation = async (userId: string) => {
     try {
       const conv = await getOrCreateConversation(userId);
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
-      
+      const profileSnap = await getDoc(doc(db, 'users', userId));
+      const profile = profileSnap.exists() ? { id: userId, ...profileSnap.data() } : null;
       setSelectedConversation({
         ...conv,
-        otherUser: profile
+        otherUser: profile,
       });
       setSearchQuery('');
       setSearchResults([]);
@@ -245,53 +230,23 @@ export default function ConnectionsScreen() {
   };
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setCurrentUserId(user?.id || null);
-    });
-
+    setCurrentUserId(auth.currentUser?.uid || null);
     loadConversations();
     loadGroups();
     loadRequests();
     loadSettings();
-
-    // simple realtime refresh for conversations list and requests
-    const channel = supabase
-      .channel('connections-conversations')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'messages' },
-        () => {
-          loadConversations();
-          loadRequests();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'conversations' },
-        () => {
-          loadConversations();
-          loadRequests();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    const interval = setInterval(() => {
+      loadConversations();
+      loadRequests();
+    }, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
     if (!selectedConversation) return;
-
     loadMessages();
-    subscribeToMessages();
-
-    return () => {
-      if (messagesChannelRef.current) {
-        supabase.removeChannel(messagesChannelRef.current);
-        messagesChannelRef.current = null;
-      }
-    };
+    const interval = setInterval(loadMessages, 5000);
+    return () => clearInterval(interval);
   }, [selectedConversation]);
 
   useEffect(() => {
@@ -303,47 +258,6 @@ export default function ConnectionsScreen() {
 
     return () => clearTimeout(delayDebounce);
   }, [searchQuery, activeTab]);
-
-  const subscribeToMessages = () => {
-    if (!selectedConversation?.id) return;
-    if (messagesChannelRef.current) {
-      supabase.removeChannel(messagesChannelRef.current);
-      messagesChannelRef.current = null;
-    }
-
-    const channel = supabase
-      .channel(`messages:${selectedConversation.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${selectedConversation.id}`,
-        },
-        (payload) => {
-          const newMessage = payload.new as Message;
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === newMessage.id)) return prev;
-            return [...prev, newMessage];
-          });
-
-          supabase
-            .from('profiles')
-            .select('id, display_name, anonymous_username, avatar_url')
-            .eq('id', newMessage.sender_id)
-            .single()
-            .then(({ data }) => {
-              setMessages((prev) =>
-                prev.map((m) => (m.id === newMessage.id ? { ...m, sender: data || undefined } : m))
-              );
-            });
-        }
-      )
-      .subscribe();
-
-    messagesChannelRef.current = channel;
-  };
 
   const loadMessages = async () => {
     if (!selectedConversation?.id) return;

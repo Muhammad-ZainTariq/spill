@@ -1,4 +1,5 @@
-import { supabase } from '@/lib/supabase';
+import { auth, db, storage, ref, uploadBytes, getDownloadURL } from '@/lib/firebase';
+import { collection, addDoc } from 'firebase/firestore';
 import { Buffer } from 'buffer';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
@@ -66,42 +67,27 @@ export default function CreatePost() {
         const base64Data = await FileSystem.readAsStringAsync(localMedia.uri, { encoding: FileSystem.EncodingType.Base64 });
         byteArray = Buffer.from(base64Data, 'base64');
       } catch (readErr) {
-        // Fallback: use fetch + arrayBuffer if base64 path fails
         const resp = await fetch(localMedia.uri);
         const arrBuf = await resp.arrayBuffer();
         byteArray = new Uint8Array(arrBuf);
       }
-
-      // Build a file path: userId/timestamp.ext
-      const ext = localMedia.mimeType.includes('png') ? 'png' : localMedia.mimeType.includes('gif') ? 'gif' : localMedia.type === 'image' ? 'jpg' : 'mp4';
-      const path = `${userId}/${Date.now()}.${ext}`;
-
-      // Determine bucket based on media type
-      const bucketName = localMedia.mimeType?.startsWith('video/') ? 'video-data' : 'image-data';
-      
-      console.log('Uploading to path:', path);
-      console.log('User ID:', userId);
-      console.log('Bucket:', bucketName);
-
-      const { error: uploadError } = await supabase.storage
-        .from(bucketName)
-        .upload(path, byteArray, {
-          cacheControl: '3600',
-          contentType: localMedia.mimeType,
-          upsert: true,
-        });
-      if (uploadError) {
-        console.error('Upload error', uploadError);
-        Alert.alert('Upload failed', 'Could not upload media.');
+      if (!byteArray?.length) {
+        Alert.alert('Upload failed', 'Could not read the selected file.');
         return null;
       }
 
-      // Use the same bucket for getting public URL
-      const { data } = supabase.storage.from(bucketName).getPublicUrl(path);
-      return data.publicUrl || null;
-    } catch (e) {
+      const mime = localMedia.mimeType?.trim() || (localMedia.type === 'video' ? 'video/mp4' : 'image/jpeg');
+      const ext = mime.includes('png') ? 'png' : mime.includes('gif') ? 'gif' : localMedia.type === 'image' ? 'jpg' : 'mp4';
+      const path = `${userId}/${Date.now()}.${ext}`;
+      const bucketName = mime.startsWith('video/') ? 'video-data' : 'image-data';
+      const storageRef = ref(storage, `${bucketName}/${path}`);
+      await uploadBytes(storageRef, byteArray, { contentType: mime });
+      const url = await getDownloadURL(storageRef);
+      return url || null;
+    } catch (e: any) {
       console.error('Upload exception', e);
-      Alert.alert('Upload failed', 'Something went wrong while uploading.');
+      const msg = e?.message || 'Something went wrong while uploading.';
+      Alert.alert('Upload failed', msg);
       return null;
     }
   };
@@ -118,39 +104,36 @@ export default function CreatePost() {
 
     try {
       setLoading(true);
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = auth.currentUser;
       if (!user) {
         Alert.alert('Not logged in', 'Please log in again.');
         return;
       }
 
-      // If media selected, upload first to storage and get a public URL
-      const uploadedUrl = await uploadMediaIfNeeded(user.id);
-
-      // Calculate expiry time for vent posts (stored in minutes)
-      const expiresAt = isVentMode 
+      const uploadedUrl = await uploadMediaIfNeeded(user.uid);
+      if (localMedia && uploadedUrl == null) {
+        setLoading(false);
+        return;
+      }
+      const expiresAt = isVentMode
         ? new Date(Date.now() + ventDurationMinutes * 60 * 1000).toISOString()
         : null;
 
-      const { error } = await supabase
-        .from('posts')
-        .insert({
-          user_id: user.id,
-          content: content.trim(),
-          category,
-          media_url: uploadedUrl,
-          is_vent: isVentMode,
-          expires_at: expiresAt,
-        });
-
-      if (error) {
-        console.error('Error creating post:', error);
-        Alert.alert('Error', 'Could not create post. Please try again.');
-        return;
-      }
+      await addDoc(collection(db, 'posts'), {
+        user_id: user.uid,
+        content: content.trim(),
+        category,
+        media_url: uploadedUrl || null,
+        is_vent: isVentMode,
+        expires_at: expiresAt,
+        created_at: new Date().toISOString(),
+        upvotes_count: 0,
+        downvotes_count: 0,
+        views_count: 0,
+        comments_count: 0,
+      });
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      // Go back to feed
       router.replace('/(tabs)');
     } catch (e) {
       console.error(e);

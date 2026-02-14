@@ -1,35 +1,32 @@
-import { useRouter, useSegments } from 'expo-router';
+import { useRouter } from 'expo-router';
+import { onAuthStateChanged } from 'firebase/auth';
 import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { supabase } from '../lib/supabase';
+import { auth } from '../lib/firebase';
+import { getCurrentUserRole } from './functions';
 
-  export default function Index() {
-    const router = useRouter();
-    const segments = useSegments();
+export default function Index() {
+  const router = useRouter();
 
-    useEffect(() => {
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session) {
-          router.replace('/(tabs)');
-        } else {
-          router.replace('/signup');
-        }
-      });
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        router.replace('/signup');
+        return;
+      }
+      const role = await getCurrentUserRole();
+      if (role.is_admin) {
+        router.replace('/admin');
+      } else {
+        router.replace('/(tabs)');
+      }
+    });
+    return () => unsubscribe();
+  }, [router]);
 
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-        if (session) {
-          router.replace('/(tabs)');
-        } else {
-          router.replace('/signup');
-        }
-      });
-
-      return () => subscription.unsubscribe();
-    }, []);
-
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#ec4899' }}>
-        <ActivityIndicator size="large" color="#ffffff" />
-      </View>
-    );
-  }
+  return (
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#ec4899' }}>
+      <ActivityIndicator size="large" color="#ffffff" />
+    </View>
+  );
+}

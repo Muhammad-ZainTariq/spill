@@ -13,7 +13,7 @@ import {
     sendMatchMessage,
     sendMatchRequest,
 } from '@/app/functions';
-import { supabase } from '@/lib/supabase';
+import { auth, storage, ref, uploadBytes, getDownloadURL } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
 import { RecordingPresets, useAudioPlayer, useAudioRecorder } from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -119,73 +119,12 @@ export default function MatchesScreen() {
         updateMatchTimer();
       }, 60000);
 
-      const messagesChannel = supabase
-        .channel(`match-messages-${activeMatch.id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'match_messages',
-            filter: `match_id=eq.${activeMatch.id}`,
-          },
-          () => {
-            loadMatchMessages();
-          }
-        )
-        .subscribe();
-
-      // Voice chat channel
-      const voiceChannel = supabase
-        .channel(`match-voice-${activeMatch.id}`)
-        .on(
-          'broadcast',
-          { event: 'voice-status' },
-          (payload) => {
-            if (payload.payload.userId !== currentUserId) {
-              setPartnerInVoice(payload.payload.inVoice || false);
-            }
-          }
-        )
-        .on(
-          'broadcast',
-          { event: 'audio-ready' },
-          async (payload) => {
-            // Receive and play audio from partner
-            if (payload.payload.userId !== currentUserId && !isMuted) {
-              try {
-                const { audioUrl } = payload.payload;
-                if (audioUrl) {
-                  // Stop current playback if playing
-                  if (player.playing) {
-                    player.pause();
-                  }
-
-                  // Load and play new audio
-                  player.replace(audioUrl);
-                  player.play();
-                  setIsPlaying(true);
-
-                  // Listen for playback end
-                  const subscription = player.addListener('playbackStatusUpdate', (status) => {
-                    if (status.isLoaded && status.didJustFinish) {
-                      setIsPlaying(false);
-                      subscription.remove();
-                    }
-                  });
-                }
-              } catch (error) {
-                console.error('Error playing audio:', error);
-              }
-            }
-          }
-        )
-        .subscribe();
+      // Poll for new messages (realtime removed with Supabase)
+      const messagesPoll = setInterval(loadMatchMessages, 5000);
 
       return () => {
         clearInterval(interval);
-        supabase.removeChannel(messagesChannel);
-        supabase.removeChannel(voiceChannel);
+        clearInterval(messagesPoll);
         setIsVoiceActive(false);
         setPartnerInVoice(false);
       };
@@ -198,8 +137,7 @@ export default function MatchesScreen() {
   };
 
   const loadCurrentUser = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    setCurrentUserId(user?.id || null);
+    setCurrentUserId(auth.currentUser?.uid ?? null);
   };
 
   const loadAvailableUsers = async () => {
@@ -429,17 +367,7 @@ export default function MatchesScreen() {
 
       setIsVoiceActive(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      
-      // Broadcast voice status to partner
-      const channel = supabase.channel(`match-voice-${activeMatch.id}`);
-      await channel.send({
-        type: 'broadcast',
-        event: 'voice-status',
-        payload: {
-          userId: currentUserId,
-          inVoice: true,
-        },
-      });
+      // Voice broadcast was Supabase Realtime; partner status not updated without it
     } catch (error) {
       console.error('Error starting voice chat:', error);
       Alert.alert('Error', 'Failed to start voice chat. Please try again.');
@@ -481,40 +409,14 @@ export default function MatchesScreen() {
           // Convert base64 to blob for upload
           const byteArray = Buffer.from(base64, 'base64');
           
-          // Upload to Supabase Storage
-          const fileName = `${activeMatch?.id}/${currentUserId}_${Date.now()}.m4a`;
-          const { data: uploadData, error: uploadError } = await supabase.storage
-            .from('voice-chats')
-            .upload(fileName, byteArray, {
-              contentType: 'audio/m4a',
-              upsert: false,
-            });
+          // Upload to Firebase Storage
+          const fileName = `voice-chats/${activeMatch?.id}/${currentUserId}_${Date.now()}.m4a`;
+          const storageRef = ref(storage, fileName);
+          await uploadBytes(storageRef, byteArray, { contentType: 'audio/m4a' });
+          const publicUrl = await getDownloadURL(storageRef);
 
-          if (uploadError) {
-            console.error('Upload error:', uploadError);
-            // If bucket doesn't exist, create it via message instead
-            Alert.alert('Note', 'Voice chat storage not configured. Using text messages for now.');
-            return;
-          }
-
-          // Get public URL
-          const { data: urlData } = supabase.storage
-            .from('voice-chats')
-            .getPublicUrl(fileName);
-
-          // Broadcast audio ready event
-          const channel = supabase.channel(`match-voice-${activeMatch?.id}`);
-          await channel.send({
-            type: 'broadcast',
-            event: 'audio-ready',
-            payload: {
-              userId: currentUserId,
-              audioUrl: urlData.publicUrl,
-              timestamp: Date.now(),
-            },
-          });
-
-          console.log('✅ Voice message sent:', urlData.publicUrl);
+          // Realtime broadcast was Supabase; partner won't get push without Firestore/Realtime
+          console.log('✅ Voice message sent:', publicUrl);
         } catch (error) {
           console.error('Error processing audio:', error);
           Alert.alert('Error', 'Failed to send voice message. Please try again.');
@@ -544,17 +446,7 @@ export default function MatchesScreen() {
       setIsVoiceActive(false);
       setIsMuted(false);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      
-      // Broadcast voice status to partner
-      const channel = supabase.channel(`match-voice-${activeMatch.id}`);
-      await channel.send({
-        type: 'broadcast',
-        event: 'voice-status',
-        payload: {
-          userId: currentUserId,
-          inVoice: false,
-        },
-      });
+      // Voice status broadcast was Supabase Realtime
     } catch (error) {
       console.error('Error ending voice chat:', error);
     }

@@ -1,7 +1,8 @@
 import { useRouter } from 'expo-router';
+import { signOut } from 'firebase/auth';
 import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { supabase } from '../lib/supabase';
+import { auth } from '../lib/firebase';
 
 export default function Logout() {
   const router = useRouter();
@@ -9,7 +10,7 @@ export default function Logout() {
   useEffect(() => {
     const doLogout = async () => {
       try {
-        await supabase.auth.signOut();
+        await signOut(auth);
       } finally {
         router.replace('/login');
       }
@@ -23,7 +24,3 @@ export default function Logout() {
     </View>
   );
 }
-
-
-
-

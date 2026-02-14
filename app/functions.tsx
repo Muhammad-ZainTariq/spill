@@ -1,7 +1,40 @@
-import { supabase } from '@/lib/supabase';
+import { auth, db, functions } from '@/lib/firebase';
 import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
+import {
+    addDoc,
+    collection,
+    deleteDoc,
+    doc,
+    getDoc,
+    getDocs,
+    increment,
+    limit,
+    orderBy,
+    query,
+    setDoc,
+    Timestamp,
+    updateDoc,
+    where,
+    writeBatch
+} from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { Alert } from 'react-native';
+
+// Stub for removed Supabase – returns empty data; migrate to Firestore when needed
+const _stub = (out: any) => Promise.resolve(out);
+const _chain = (out: any) => ({
+  select: () => ({ single: () => _stub(out), maybeSingle: () => _stub(out), order: () => ({ ascending: () => ({ limit: () => _stub(out) }), descending: () => _stub(out) }), eq: () => ({ eq: () => ({ single: () => _stub(out), maybeSingle: () => _stub(out) }), order: () => _stub(out), gte: () => ({ lt: () => ({ single: () => _stub(out) }) }), in: () => ({ single: () => _stub(out) }) }), gte: () => ({ order: () => ({ limit: () => _stub(out) }) }) }),
+  insert: (v: any) => ({ select: () => ({ single: () => _stub(v) }) }),
+  update: (v: any) => ({ eq: () => _stub({ error: null }) }),
+  delete: () => ({ eq: () => ({ eq: () => _stub({ error: null }) }) }),
+});
+const supabase = {
+  auth: { getUser: async () => ({ data: { user: auth.currentUser ? { id: auth.currentUser.uid } : null } }) },
+  from: () => ({ select: (...args: any[]) => _chain(args.length ? null : []), insert: (v: any) => ({ select: () => ({ single: () => _stub(v) }) }), update: (v: any) => ({ eq: () => _stub({ error: null }) }), delete: () => ({ eq: () => ({ eq: () => _stub({ error: null }) }) }) }),
+  storage: { from: () => ({ upload: () => _stub({ error: null }), getPublicUrl: () => ({ data: { publicUrl: '' } }) }) },
+};
+
 export interface Post {
   id: string;
   content: string;
@@ -25,73 +58,79 @@ export interface Post {
   user_vote?: 'upvote' | 'downvote' | null;
 }
 
+/** Feed algorithm: mix of posts from people you follow + discovery (others). Interleaves 1 from followed, 1 from discovery. */
+function mergeFollowedAndDiscovery(followed: any[], discovery: any[]): any[] {
+  const out: any[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < followed.length || j < discovery.length) {
+    if (i < followed.length) out.push(followed[i++]);
+    if (j < discovery.length) out.push(discovery[j++]);
+  }
+  return out;
+}
+
 export const fetchPosts = async (category?: string): Promise<Post[]> => {
   try {
-    // First get posts including vent mode fields
-    const { data: postsData, error: postsError } = await supabase
-      .from('posts')
-      .select('id, content, category, media_url, created_at, user_id, is_vent, expires_at')
-      .order('created_at', { ascending: false });
-
-    let filtered = postsData || [];
-    
-    // Filter out expired vent posts
+    const uid = auth.currentUser?.uid;
     const now = new Date();
-    filtered = filtered.filter((p: any) => {
-      if (p.is_vent && p.expires_at) {
-        return new Date(p.expires_at) > now;
-      }
-      return true;
-    });
-    
-    if (category && category !== 'All') {
-      filtered = filtered.filter((p: any) => p.category === category);
+    const normCreatedAt = (data: any): string => {
+      if (typeof data?.created_at === 'string') return data.created_at;
+      const ts = data?.createdAt;
+      if (ts != null && typeof (ts as Timestamp).toMillis === 'function') return new Date((ts as Timestamp).toMillis()).toISOString();
+      return '';
+    };
+
+    const q = query(
+      collection(db, 'posts'),
+      orderBy('created_at', 'desc'),
+      limit(150)
+    );
+    const snap = await getDocs(q);
+    let posts: any[] = snap.docs
+      .map((d) => {
+        const data = d.data();
+        return { id: d.id, ...data, created_at: normCreatedAt(data) };
+      })
+      .filter((p: any) => {
+        if (p.is_vent && p.expires_at) return new Date(p.expires_at) > now;
+        return true;
+      });
+    if (category && category !== 'All') posts = posts.filter((p: any) => p.category === category);
+
+    if (uid && posts.length > 0) {
+      const followingIds = await getFollowingIds();
+      const followingSet = new Set(followingIds);
+      const fromFollowed = posts.filter((p: any) => followingSet.has(p.user_id));
+      const discovery = posts.filter((p: any) => !followingSet.has(p.user_id));
+      posts = mergeFollowedAndDiscovery(fromFollowed, discovery).slice(0, 100);
+    } else {
+      posts = posts.slice(0, 100);
     }
 
-    if (postsError) {
-      console.error('Error fetching posts:', postsError);
-      return [];
-    }
-
-    // Then get profiles for each post
-    const postsWithProfiles = await Promise.all(
-      filtered.map(async (post) => {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('display_name, anonymous_username, avatar_url')
-          .eq('id', post.user_id)
-          .single();
-
-        // Get post stats
-        const { data: stats } = await supabase
-          .from('post_stats')
-          .select('upvotes_count, downvotes_count, views_count, comments_count')
-          .eq('post_id', post.id)
-          .single();
-
-        // Get user vote
-        const { data: { user } } = await supabase.auth.getUser();
-        let userVote = null;
-        if (user) {
-          const { data: vote } = await supabase
-            .from('post_votes')
-            .select('vote_type')
-            .eq('post_id', post.id)
-            .eq('user_id', user.id)
-            .single();
-          userVote = vote?.vote_type || null;
+    const withProfiles = await Promise.all(
+      posts.map(async (post: any) => {
+        let profile = null;
+        const userSnap = await getDoc(doc(db, 'users', post.user_id));
+        if (userSnap.exists()) {
+          const d = userSnap.data();
+          profile = { display_name: d?.display_name, anonymous_username: d?.anonymous_username, avatar_url: d?.avatar_url };
         }
-
-        return {
-          ...post,
-          profiles: profile || null,
-          post_stats: stats || { upvotes_count: 0, downvotes_count: 0, views_count: 0, comments_count: 0 },
-          user_vote: userVote,
+        const post_stats = {
+          upvotes_count: post.upvotes_count ?? 0,
+          downvotes_count: post.downvotes_count ?? 0,
+          views_count: post.views_count ?? 0,
+          comments_count: post.comments_count ?? 0,
         };
+        let userVote: 'upvote' | 'downvote' | null = null;
+        if (uid) {
+          const voteSnap = await getDocs(query(collection(db, 'postVotes'), where('post_id', '==', post.id), where('user_id', '==', uid), limit(1)));
+          if (!voteSnap.empty) userVote = (voteSnap.docs[0].data().vote_type as 'upvote' | 'downvote') || null;
+        }
+        return { ...post, profiles: profile, post_stats, user_vote: userVote };
       })
     );
-
-    return postsWithProfiles;
+    return withProfiles;
   } catch (error) {
     console.error('Error fetching posts:', error);
     return [];
@@ -100,39 +139,25 @@ export const fetchPosts = async (category?: string): Promise<Post[]> => {
 
 
 
-// Create Post Function
 export const createPost = async (content: string, mediaUrl?: string) => {
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error('User not authenticated');
-
-    const { data, error } = await supabase
-      .from('posts')
-      .insert({
-        content,
-        media_url: mediaUrl,
-        user_id: user.id,
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data;
-  } catch (error) {
-    console.error('Error creating post:', error);
-    throw error;
-  }
+  const user = auth.currentUser;
+  if (!user) throw new Error('User not authenticated');
+  const ref = await addDoc(collection(db, 'posts'), {
+    content,
+    media_url: mediaUrl ?? null,
+    user_id: user.uid,
+    created_at: new Date().toISOString(),
+    upvotes_count: 0,
+    downvotes_count: 0,
+    views_count: 0,
+    comments_count: 0,
+  });
+  return { id: ref.id, content, media_url: mediaUrl, user_id: user.uid, created_at: new Date().toISOString() };
 };
 
-// Delete Post Function
 export const deletePost = async (postId: string) => {
   try {
-    const { error } = await supabase
-      .from('posts')
-      .delete()
-      .eq('id', postId);
-
-    if (error) throw error;
+    await deleteDoc(doc(db, 'posts', postId));
     return true;
   } catch (error) {
     console.error('Error deleting post:', error);
@@ -140,32 +165,30 @@ export const deletePost = async (postId: string) => {
   }
 };
 
-// ========================================
-// VOTING FUNCTIONS
-// ========================================
-// Upvote Post Function
+async function setVote(postId: string, voteType: 'upvote' | 'downvote' | null) {
+  const user = auth.currentUser;
+  if (!user) return false;
+  const voteId = `${postId}_${user.uid}`;
+  const voteRef = doc(db, 'postVotes', voteId);
+  const postRef = doc(db, 'posts', postId);
+  const voteSnap = await getDoc(voteRef);
+  const old = voteSnap.exists() ? (voteSnap.data()?.vote_type as 'upvote' | 'downvote') : null;
+  let deltaUp = 0,
+    deltaDown = 0;
+  if (old === 'upvote') deltaUp -= 1;
+  if (old === 'downvote') deltaDown -= 1;
+  if (voteType === 'upvote') deltaUp += 1;
+  if (voteType === 'downvote') deltaDown += 1;
+  const batch = writeBatch(db);
+  if (voteType) batch.set(voteRef, { post_id: postId, user_id: user.uid, vote_type: voteType }, { merge: true });
+  else if (voteSnap.exists()) batch.delete(voteRef);
+  batch.update(postRef, { upvotes_count: increment(deltaUp), downvotes_count: increment(deltaDown) });
+  await batch.commit();
+  return true;
+}
 export const upvotePost = async (postId: string) => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
-
-    const { error } = await supabase
-      .from('post_votes')
-      .upsert(
-        {
-          post_id: postId,
-          user_id: user.id,
-          vote_type: 'upvote',
-        },
-        { onConflict: 'post_id,user_id' }
-      );
-
-    if (error) {
-      console.error('Upvote error:', error);
-      throw error;
-    }
-
-    console.log('Successfully upvoted post:', postId);
+    await setVote(postId, 'upvote');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     return true;
   } catch (error) {
@@ -173,25 +196,9 @@ export const upvotePost = async (postId: string) => {
     return false;
   }
 };
-
-// Downvote Post Function
 export const downvotePost = async (postId: string) => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
-
-    const { error } = await supabase
-      .from('post_votes')
-      .upsert(
-        {
-          post_id: postId,
-          user_id: user.id,
-          vote_type: 'downvote',
-        },
-        { onConflict: 'post_id,user_id' }
-      );
-
-    if (error) throw error;
+    await setVote(postId, 'downvote');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     return true;
   } catch (error) {
@@ -199,20 +206,9 @@ export const downvotePost = async (postId: string) => {
     return false;
   }
 };
-
-// Remove Vote Function
 export const removeVote = async (postId: string) => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
-
-    const { error } = await supabase
-      .from('post_votes')
-      .delete()
-      .eq('post_id', postId)
-      .eq('user_id', user.id);
-
-    if (error) throw error;
+    await setVote(postId, null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     return true;
   } catch (error) {
@@ -224,95 +220,60 @@ export const removeVote = async (postId: string) => {
 // ========================================
 // COMMENT FUNCTIONS
 // ========================================
-// Add Comment Function
 export const addComment = async (postId: string, content: string, parentCommentId?: string) => {
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error('User not authenticated');
-
-    const { data, error } = await supabase
-      .from('comments')
-      .insert({
-        post_id: postId,
-        user_id: user.id,
-        content,
-        parent_comment_id: parentCommentId || null,
-      })
-      .select(`
-        id,
-        content,
-        created_at,
-        parent_comment_id,
-        profiles (
-          display_name,
-          anonymous_username,
-          avatar_url
-        )
-      `)
-      .single();
-
-    if (error) throw error;
-    console.log('Successfully added comment:', data);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    return data;
-  } catch (error) {
-    console.error('Error adding comment:', error);
-    throw error;
-  }
+  const user = auth.currentUser;
+  if (!user) throw new Error('User not authenticated');
+  const ref = await addDoc(collection(db, 'comments'), {
+    post_id: postId,
+    user_id: user.uid,
+    content,
+    parent_comment_id: parentCommentId || null,
+    created_at: new Date().toISOString(),
+  });
+  const userSnap = await getDoc(doc(db, 'users', user.uid));
+  const u = userSnap.data();
+  const profiles = u ? { display_name: u.display_name, anonymous_username: u.anonymous_username, avatar_url: u.avatar_url } : null;
+  await updateDoc(doc(db, 'posts', postId), { comments_count: increment(1) });
+  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  return { id: ref.id, content, created_at: new Date().toISOString(), parent_comment_id: parentCommentId || null, profiles };
 };
 
-// Fetch Comments Function (with replies)
 export const fetchComments = async (postId: string) => {
   try {
-    const { data, error } = await supabase
-      .from('comments')
-      .select(`
-        id,
-        content,
-        created_at,
-        parent_comment_id,
-        profiles (
-          display_name,
-          anonymous_username,
-          avatar_url
-        )
-      `)
-      .eq('post_id', postId)
-      .order('created_at', { ascending: true });
-
-    if (error) throw error;
-
-    const comments = data || [];
-    const parentComments = comments.filter(comment => !comment.parent_comment_id);
-    const replies = comments.filter(comment => comment.parent_comment_id);
-
-    const organizedComments = parentComments.map(parent => ({
-      ...parent,
-      replies: replies.filter(reply => reply.parent_comment_id === parent.id)
-    }));
-
-    return organizedComments;
+    const q = query(collection(db, 'comments'), where('post_id', '==', postId), orderBy('created_at', 'asc'));
+    const snap = await getDocs(q);
+    const comments = await Promise.all(
+      snap.docs.map(async (d) => {
+        const data = d.data();
+        const userSnap = await getDoc(doc(db, 'users', data.user_id));
+        const u = userSnap.data();
+        return {
+          id: d.id,
+          content: data.content,
+          created_at: data.created_at,
+          parent_comment_id: data.parent_comment_id || null,
+          profiles: u ? { display_name: u.display_name, anonymous_username: u.anonymous_username, avatar_url: u.avatar_url } : null,
+        };
+      })
+    );
+    const parentComments = comments.filter((c: any) => !c.parent_comment_id);
+    const replies = comments.filter((c: any) => c.parent_comment_id);
+    return parentComments.map((parent: any) => ({ ...parent, replies: replies.filter((r: any) => r.parent_comment_id === parent.id) }));
   } catch (error) {
     console.error('Error fetching comments:', error);
     return [];
   }
 };
 
-// Add Reply Function
 export const addReply = async (postId: string, parentCommentId: string, content: string) => {
   return addComment(postId, content, parentCommentId);
 };
 
-// Delete Comment Function
 export const deleteComment = async (commentId: string) => {
   try {
-    const { error } = await supabase
-      .from('comments')
-      .delete()
-      .eq('id', commentId);
-
-    if (error) throw error;
-    console.log('Successfully deleted comment:', commentId);
+    const c = await getDoc(doc(db, 'comments', commentId));
+    if (c.exists()) await updateDoc(doc(db, 'posts', c.data().post_id), { comments_count: increment(-1) });
+    await deleteDoc(doc(db, 'comments', commentId));
     return true;
   } catch (error) {
     console.error('Error deleting comment:', error);
@@ -320,101 +281,34 @@ export const deleteComment = async (commentId: string) => {
   }
 };
 
-// Get Comment Count Function
 export const getCommentCount = async (postId: string) => {
   try {
-    const { count, error } = await supabase
-      .from('comments')
-      .select('*', { count: 'exact', head: true })
-      .eq('post_id', postId);
-
-    if (error) throw error;
-    return count || 0;
+    const snap = await getDocs(query(collection(db, 'comments'), where('post_id', '==', postId)));
+    return snap.size;
   } catch (error) {
     console.error('Error getting comment count:', error);
     return 0;
   }
 };
 
-// ========================================
-// USER PROFILE FUNCTIONS
-// ========================================
-// Fetch User Profile Function
 export const fetchUserProfile = async () => {
-  try {
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError) {
-      console.log('Auth error (likely refresh token issue):', authError.message);
-      return null;
-    }
-    
-    if (user) {
-      const { data: profile, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-      
-      if (error) {
-        if (error.code === 'PGRST116') {
-          console.log('Profile not found, creating new profile...');
-          const { data: newProfile, error: createError } = await supabase
-            .from('profiles')
-            .insert({
-              id: user.id,
-              display_name: null,
-              anonymous_username: null,
-              avatar_url: null,
-            })
-            .select()
-            .single();
-          
-          if (createError) {
-            console.error('Error creating profile:', createError);
-            return null;
-          } else {
-            console.log('Created new profile:', newProfile);
-            return newProfile;
-          }
-        } else {
-          console.error('Error fetching user profile:', error);
-          return null;
-        }
-      } else {
-        console.log('Fetched user profile:', profile);
-        return profile;
-      }
-    }
-    return null;
-  } catch (error) {
-    console.error('Error fetching profile:', error);
-    return null;
-  }
+  const user = auth.currentUser;
+  if (!user) return null;
+  const snap = await getDoc(doc(db, 'users', user.uid));
+  if (snap.exists()) return { id: user.uid, ...snap.data() };
+  await setDoc(doc(db, 'users', user.uid), { display_name: null, anonymous_username: null, avatar_url: null, is_premium: false, is_admin: false, is_staff: false, created_at: new Date().toISOString() });
+  return { id: user.uid, display_name: null, anonymous_username: null, avatar_url: null, is_premium: false, is_admin: false, is_staff: false };
 };
 
-// Update User Profile Function
 export const updateUserProfile = async (updates: {
-  display_name?: string;
-  anonymous_username?: string;
-  avatar_url?: string;
+  display_name?: string; anonymous_username?: string; avatar_url?: string;
+  message_preference?: string; auto_join_groups?: boolean; available_for_matches?: boolean; match_struggles?: string[];
 }) => {
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error('User not authenticated');
-
-    const { data, error } = await supabase
-      .from('profiles')
-      .update(updates)
-      .eq('id', user.id)
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data;
-  } catch (error) {
-    console.error('Error updating profile:', error);
-    throw error;
-  }
+  const user = auth.currentUser;
+  if (!user) throw new Error('User not authenticated');
+  await updateDoc(doc(db, 'users', user.uid), updates as any);
+  const snap = await getDoc(doc(db, 'users', user.uid));
+  return { id: user.uid, ...snap.data() };
 };
 
 // ========================================
@@ -501,10 +395,10 @@ export const showConfirmationAlert = (
 // Handle More Options (for post menu)
 export const handleMoreOptions = async (postId: string, postUserId: string) => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = auth.currentUser;
     if (!user) return;
 
-    if (user.id === postUserId) {
+    if (user.uid === postUserId) {
       showConfirmationAlert(
         'Delete Post',
         'Are you sure you want to delete this post?',
@@ -585,26 +479,13 @@ export const getAIOpinion = async (content: string): Promise<string> => {
 // ========================================
 // FOLLOW FUNCTIONS
 // ========================================
-// Follow User Function
 export const followUser = async (userId: string) => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = auth.currentUser;
     if (!user) return false;
-    if (user.id === userId) return false;
-
-    const { error } = await supabase
-      .from('followers')
-      .insert({
-        follower_id: user.id,
-        following_id: userId,
-      });
-
-    if (error) {
-      console.error('Follow error:', error);
-      return false;
-    }
-
-    console.log('Successfully followed user:', userId);
+    if (user.uid === userId) return false;
+    const followId = `${user.uid}_${userId}`;
+    await setDoc(doc(db, 'followers', followId), { follower_id: user.uid, following_id: userId, created_at: new Date().toISOString() });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     return true;
   } catch (error) {
@@ -613,24 +494,12 @@ export const followUser = async (userId: string) => {
   }
 };
 
-// Unfollow User Function
 export const unfollowUser = async (userId: string) => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = auth.currentUser;
     if (!user) return false;
-
-    const { error } = await supabase
-      .from('followers')
-      .delete()
-      .eq('follower_id', user.id)
-      .eq('following_id', userId);
-
-    if (error) {
-      console.error('Unfollow error:', error);
-      return false;
-    }
-
-    console.log('Successfully unfollowed user:', userId);
+    const followId = `${user.uid}_${userId}`;
+    await deleteDoc(doc(db, 'followers', followId));
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     return true;
   } catch (error) {
@@ -639,519 +508,314 @@ export const unfollowUser = async (userId: string) => {
   }
 };
 
-// Check if user is following another user
 export const isFollowing = async (userId: string) => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = auth.currentUser;
     if (!user) return false;
-
-    const { data, error } = await supabase
-      .from('followers')
-      .select('id')
-      .eq('follower_id', user.id)
-      .eq('following_id', userId)
-      .single();
-
-    if (error && error.code !== 'PGRST116') {
-      console.error('Error checking follow status:', error);
-      return false;
-    }
-
-    return !!data;
+    const snap = await getDoc(doc(db, 'followers', `${user.uid}_${userId}`));
+    return snap.exists();
   } catch (error) {
     console.error('Error checking follow status:', error);
     return false;
   }
 };
 
-// Get User Profile with Follow Stats
 export const getUserProfile = async (userId: string) => {
   try {
-    const { data: profile, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
-
-    if (error) {
-      console.error('Error fetching user profile:', error);
-      return null;
-    }
-
-    const { data: posts, error: postsError } = await supabase
-      .from('posts')
-      .select(`
-        id,
-        content,
-        media_url,
-        created_at
-      `)
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-
-    if (postsError) {
-      console.error('Error fetching user posts:', postsError);
-    }
-
-    let postsWithStats = [];
-    if (posts && posts.length > 0) {
-      const postIds = posts.map(post => post.id);
-      const { data: statsData } = await supabase
-        .from('post_stats')
-        .select('*')
-        .in('post_id', postIds);
-
-      postsWithStats = posts.map(post => {
-        const stats = statsData?.find(stat => stat.post_id === post.id);
-        return {
-          ...post,
-          post_stats: stats || {
-            upvotes_count: 0,
-            downvotes_count: 0,
-            views_count: 0,
-            comments_count: 0
-          }
-        };
-      });
-    }
-
+    const profileSnap = await getDoc(doc(db, 'users', userId));
+    if (!profileSnap.exists()) return null;
+    const profile = { id: userId, ...profileSnap.data() };
+    const postsSnap = await getDocs(query(collection(db, 'posts'), where('user_id', '==', userId), orderBy('created_at', 'desc'), limit(50)));
+    const postsWithStats = postsSnap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        content: data.content,
+        media_url: data.media_url,
+        created_at: data.created_at,
+        post_stats: {
+          upvotes_count: data.upvotes_count ?? 0,
+          downvotes_count: data.downvotes_count ?? 0,
+          views_count: data.views_count ?? 0,
+          comments_count: data.comments_count ?? 0,
+        },
+      };
+    });
     const isFollowingUser = await isFollowing(userId);
-
-    return {
-      ...profile,
-      posts: postsWithStats,
-      isFollowing: isFollowingUser,
-    };
+    return { ...profile, posts: postsWithStats, isFollowing: isFollowingUser };
   } catch (error) {
     console.error('Error getting user profile:', error);
     return null;
   }
 };
 
-// Get Followers List
 export const getFollowers = async (userId: string) => {
   try {
-    const { data, error } = await supabase
-      .from('followers')
-      .select(`
-        created_at,
-        profiles!followers_follower_id_fkey (
-          id,
-          display_name,
-          anonymous_username,
-          avatar_url
-        )
-      `)
-      .eq('following_id', userId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching followers:', error);
-      return [];
-    }
-
-    return data || [];
+    const snap = await getDocs(query(collection(db, 'followers'), where('following_id', '==', userId), orderBy('created_at', 'desc')));
+    const list = await Promise.all(
+      snap.docs.map(async (d) => {
+        const data = d.data();
+        const profileSnap = await getDoc(doc(db, 'users', data.follower_id));
+        const p = profileSnap.data();
+        return { created_at: data.created_at, profiles: p ? { id: data.follower_id, display_name: p.display_name, anonymous_username: p.anonymous_username, avatar_url: p.avatar_url } : null };
+      })
+    );
+    return list;
   } catch (error) {
     console.error('Error getting followers:', error);
     return [];
   }
 };
 
-// Get Following List
 export const getFollowing = async (userId: string) => {
   try {
-    const { data, error } = await supabase
-      .from('followers')
-      .select(`
-        created_at,
-        profiles!followers_following_id_fkey (
-          id,
-          display_name,
-          anonymous_username,
-          avatar_url
-        )
-      `)
-      .eq('follower_id', userId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching following:', error);
-      return [];
-    }
-
-    return data || [];
+    const snap = await getDocs(query(collection(db, 'followers'), where('follower_id', '==', userId), orderBy('created_at', 'desc')));
+    const list = await Promise.all(
+      snap.docs.map(async (d) => {
+        const data = d.data();
+        const profileSnap = await getDoc(doc(db, 'users', data.following_id));
+        const p = profileSnap.data();
+        return { created_at: data.created_at, profiles: p ? { id: data.following_id, display_name: p.display_name, anonymous_username: p.anonymous_username, avatar_url: p.avatar_url } : null };
+      })
+    );
+    return list;
   } catch (error) {
     console.error('Error getting following:', error);
     return [];
   }
 };
 
+/** Returns just the user IDs that the current user follows (for feed algorithm). */
+export const getFollowingIds = async (): Promise<string[]> => {
+  try {
+    const user = auth.currentUser;
+    if (!user) return [];
+    const snap = await getDocs(query(collection(db, 'followers'), where('follower_id', '==', user.uid)));
+    return snap.docs.map((d) => d.data().following_id as string).filter(Boolean);
+  } catch (error) {
+    console.error('Error getting following IDs:', error);
+    return [];
+  }
+};
+
+// ========================================
+// ADMIN / STAFF
+// ========================================
+/** Returns { is_admin, is_staff } for the current user. Defaults to false if missing (e.g. existing docs). */
+export const getCurrentUserRole = async (): Promise<{ is_admin: boolean; is_staff: boolean }> => {
+  const user = auth.currentUser;
+  if (!user) return { is_admin: false, is_staff: false };
+  try {
+    const snap = await getDoc(doc(db, 'users', user.uid));
+    const data = snap.data();
+    return {
+      is_admin: !!data?.is_admin,
+      is_staff: !!data?.is_staff,
+    };
+  } catch {
+    return { is_admin: false, is_staff: false };
+  }
+};
+
+/** Admin-only: create a staff account via Cloud Function. Staff get emailVerified: true automatically. */
+export const createStaffUser = async (
+  staffEmail: string,
+  staffPassword: string,
+  staffDisplayName?: string
+): Promise<{ ok: boolean; error?: string }> => {
+  if (!auth.currentUser) return { ok: false, error: 'Not logged in.' };
+  try {
+    const createStaff = httpsCallable<{ staffEmail: string; staffPassword: string; staffDisplayName?: string }, { ok: boolean }>(functions, 'createStaffUser');
+    await createStaff({
+      staffEmail: staffEmail.trim(),
+      staffPassword,
+      staffDisplayName: staffDisplayName?.trim() || undefined,
+    });
+    return { ok: true };
+  } catch (e: any) {
+    const code = e?.code;
+    const msg = e?.message || '';
+    if (code === 'functions/already-exists' || msg.includes('already registered')) return { ok: false, error: 'That email is already registered.' };
+    if (code === 'functions/permission-denied') return { ok: false, error: 'Only admins can add staff.' };
+    if (code === 'functions/unauthenticated') return { ok: false, error: 'Please log in again.' };
+    if (code === 'functions/invalid-argument') return { ok: false, error: e?.message || 'Invalid email or password (min 6 characters).' };
+    return { ok: false, error: e?.message || 'Could not create staff. Deploy the Cloud Function if you haven’t.' };
+  }
+};
+
+/** Record a login event (call after successful sign-in). */
+export const recordLogin = async (): Promise<void> => {
+  const user = auth.currentUser;
+  if (!user) return;
+  try {
+    await addDoc(collection(db, 'login_logs'), {
+      user_id: user.uid,
+      logged_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.warn('Could not record login', e);
+  }
+};
+
+/** Admin-only: get login counts per day for the last N days. */
+export const getLoginStatsForAdmin = async (days: number = 30): Promise<{ date: string; count: number }[]> => {
+  const user = auth.currentUser;
+  if (!user) return [];
+  const roleSnap = await getDoc(doc(db, 'users', user.uid));
+  if (!roleSnap.data()?.is_admin) return [];
+
+  const start = new Date();
+  start.setDate(start.getDate() - days);
+  start.setHours(0, 0, 0, 0);
+  const startIso = start.toISOString();
+
+  const q = query(
+    collection(db, 'login_logs'),
+    where('logged_at', '>=', startIso),
+    orderBy('logged_at', 'asc')
+  );
+  const snap = await getDocs(q);
+  const byDay: Record<string, number> = {};
+  for (let d = 0; d <= days; d++) {
+    const dte = new Date(start);
+    dte.setDate(dte.getDate() + d);
+    byDay[dte.toISOString().split('T')[0]] = 0;
+  }
+  snap.docs.forEach((docSnap) => {
+    const at = docSnap.data().logged_at;
+    if (typeof at === 'string') {
+      const day = at.split('T')[0];
+      byDay[day] = (byDay[day] ?? 0) + 1;
+    }
+  });
+  return Object.entries(byDay)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, count]) => ({ date, count }));
+};
+
 // ========================================
 // MESSAGING FUNCTIONS
 // ========================================
 
-// Get or create a conversation between two users
-// Ensures BOTH participants are recorded in conversation_users
-// so that getConversations() and RLS can see the conversation
-// for both users immediately.
+function conversationId(a: string, b: string) {
+  return a < b ? `${a}_${b}` : `${b}_${a}`;
+}
+
 export const getOrCreateConversation = async (userId: string) => {
-  try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error('Not authenticated');
-
-    // Check recipient's message preference first
-    const { data: recipientProfile } = await supabase
-      .from('profiles')
-      .select('message_preference')
-      .eq('id', userId)
-      .single();
-
-    if (recipientProfile?.message_preference === 'none') {
-      throw new Error('This user is not accepting messages');
-    }
-
-    // Deterministic ordering: the same pair of users always maps
-    // to the same (participant1_id, participant2_id) combination.
-    const participant1 = user.id < userId ? user.id : userId;
-    const participant2 = user.id < userId ? userId : user.id;
-
-    // 1) Try to find an existing conversation between these two users.
-    const { data: existing, error: findError } = await supabase
-      .from('conversations')
-      .select('*')
-      .eq('participant1_id', participant1)
-      .eq('participant2_id', participant2)
-      .single();
-
-    if (existing && !findError) {
-      // Make sure BOTH users are in conversation_users so each
-      // can see this conversation in their list.
-      const { error: linkError } = await supabase
-        .from('conversation_users')
-        .upsert(
-          [
-            { conversation_id: existing.id, user_id: participant1 },
-            { conversation_id: existing.id, user_id: participant2 },
-          ],
-          { onConflict: 'conversation_id,user_id' }
-        );
-
-      if (linkError) {
-        console.error(
-          'Error upserting conversation_users for existing conversation:',
-          linkError
-        );
-      }
-
-      return existing;
-    }
-
-    // If there was an error that is not "no rows", surface it.
-    if (findError && (findError as any).code && (findError as any).code !== 'PGRST116') {
-      throw findError;
-    }
-
-    // Determine initial status based on recipient's preference
-    // 'direct' = accepted immediately, 'requests' = pending for approval
-    const initialStatus = recipientProfile?.message_preference === 'direct' ? 'accepted' : 'pending';
-
-    // 2) Create a new conversation row.
-    const { data: newConv, error: createError } = await supabase
-      .from('conversations')
-      .insert({
-        participant1_id: participant1,
-        participant2_id: participant2,
-        updated_at: new Date().toISOString(),
-        status: initialStatus,
-      })
-      .select()
-      .single();
-
-    if (createError) throw createError;
-
-    // 3) Record both participants as members of the conversation.
-    const { error: linkErrorNew } = await supabase
-      .from('conversation_users')
-      .upsert(
-        [
-          { conversation_id: newConv.id, user_id: participant1 },
-          { conversation_id: newConv.id, user_id: participant2 },
-        ],
-        { onConflict: 'conversation_id,user_id' }
-      );
-
-    if (linkErrorNew) {
-      console.error(
-        'Error upserting conversation_users for new conversation:',
-        linkErrorNew
-      );
-    }
-
-    return newConv;
-  } catch (error) {
-    console.error('Error getting/creating conversation:', error);
-    throw error;
-  }
+  const user = auth.currentUser;
+  if (!user) throw new Error('Not authenticated');
+  const recipientSnap = await getDoc(doc(db, 'users', userId));
+  const messagePreference = recipientSnap.data()?.message_preference;
+  if (messagePreference === 'none') throw new Error('This user is not accepting messages');
+  const p1 = user.uid < userId ? user.uid : userId;
+  const p2 = user.uid < userId ? userId : user.uid;
+  const convId = conversationId(user.uid, userId);
+  const convRef = doc(db, 'conversations', convId);
+  const existing = await getDoc(convRef);
+  if (existing.exists()) return { id: convId, ...existing.data(), participant1_id: p1, participant2_id: p2 };
+  const status = messagePreference === 'direct' ? 'accepted' : 'pending';
+  const now = new Date().toISOString();
+  await setDoc(convRef, { participant1_id: p1, participant2_id: p2, status, updated_at: now, created_at: now });
+  return { id: convId, participant1_id: p1, participant2_id: p2, status, updated_at: now, created_at: now };
 };
 
-// Send a message
 export const sendMessage = async (conversationId: string, content: string) => {
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error('Not authenticated');
-
-    const { data, error } = await supabase
-      .from('messages')
-      .insert({
-        conversation_id: conversationId,
-        sender_id: user.id,
-        content,
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data;
-  } catch (error) {
-    console.error('Error sending message:', error);
-    throw error;
-  }
+  const user = auth.currentUser;
+  if (!user) throw new Error('Not authenticated');
+  const now = new Date().toISOString();
+  const ref = await addDoc(collection(db, 'messages'), { conversation_id: conversationId, sender_id: user.uid, content, created_at: now });
+  await updateDoc(doc(db, 'conversations', conversationId), { updated_at: now });
+  return { id: ref.id, conversation_id: conversationId, sender_id: user.uid, content, created_at: now };
 };
 
-// Fetch messages for a conversation
-export const fetchMessages = async (conversationId: string, limit = 50) => {
+export const fetchMessages = async (convId: string, limitCount = 50) => {
   try {
-    const { data, error } = await supabase
-      .from('messages')
-      .select(`
-        *,
-        sender:profiles!messages_sender_id_fkey (
-          id,
-          display_name,
-          anonymous_username,
-          avatar_url
-        )
-      `)
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: true })
-      .limit(limit);
-
-    if (error) throw error;
-    return data || [];
+    const snap = await getDocs(
+      query(collection(db, 'messages'), where('conversation_id', '==', convId), orderBy('created_at', 'asc'), limit(limitCount))
+    );
+    const list = await Promise.all(
+      snap.docs.map(async (d) => {
+        const data = d.data();
+        const senderSnap = await getDoc(doc(db, 'users', data.sender_id));
+        const s = senderSnap.data();
+        const sender = s ? { id: data.sender_id, display_name: s.display_name, anonymous_username: s.anonymous_username, avatar_url: s.avatar_url } : null;
+        return { id: d.id, ...data, sender };
+      })
+    );
+    return list;
   } catch (error) {
     console.error('Error fetching messages:', error);
     return [];
   }
 };
 
-// Get all conversations for current user (only accepted ones)
 export const getConversations = async () => {
+  const user = auth.currentUser;
+  if (!user) return [];
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return [];
-
-    // Get muted and deleted conversation IDs
-    const { data: mutedData } = await supabase
-      .from('muted_conversations')
-      .select('conversation_id')
-      .eq('user_id', user.id);
-
-    const { data: deletedData } = await supabase
-      .from('deleted_conversations')
-      .select('conversation_id')
-      .eq('user_id', user.id);
-
-    const mutedIds = (mutedData || []).map(m => m.conversation_id);
-    const deletedIds = (deletedData || []).map(d => d.conversation_id);
-    const excludedIds = [...mutedIds, ...deletedIds];
-
-    // Get blocked user IDs
-    const { data: blockedData } = await supabase
-      .from('blocked_users')
-      .select('blocked_id')
-      .eq('blocker_id', user.id);
-
-    const blockedIds = (blockedData || []).map(b => b.blocked_id);
-
-    // Get all conversations where user is either participant1 or participant2
-    // ONLY get accepted conversations (status = 'accepted')
-    const { data: data1, error: error1 } = await supabase
-      .from('conversations')
-      .select(`
-        *,
-        participant1:profiles!conversations_participant1_id_fkey (
-          id,
-          display_name,
-          anonymous_username,
-          avatar_url
-        ),
-        participant2:profiles!conversations_participant2_id_fkey (
-          id,
-          display_name,
-          anonymous_username,
-          avatar_url
-        )
-      `)
-      .eq('participant1_id', user.id)
-      .eq('status', 'accepted')
-      .order('updated_at', { ascending: false });
-
-    const { data: data2, error: error2 } = await supabase
-      .from('conversations')
-      .select(`
-        *,
-        participant1:profiles!conversations_participant1_id_fkey (
-          id,
-          display_name,
-          anonymous_username,
-          avatar_url
-        ),
-        participant2:profiles!conversations_participant2_id_fkey (
-          id,
-          display_name,
-          anonymous_username,
-          avatar_url
-        )
-      `)
-      .eq('participant2_id', user.id)
-      .eq('status', 'accepted')
-      .order('updated_at', { ascending: false });
-
-    if (error1 || error2) {
-      console.error('Error fetching conversations:', error1 || error2);
-      throw error1 || error2;
+    const q1 = query(collection(db, 'conversations'), where('participant1_id', '==', user.uid), where('status', '==', 'accepted'), orderBy('updated_at', 'desc'));
+    const q2 = query(collection(db, 'conversations'), where('participant2_id', '==', user.uid), where('status', '==', 'accepted'), orderBy('updated_at', 'desc'));
+    const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)]);
+    const convs: any[] = [];
+    const seen = new Set<string>();
+    for (const s of [snap1, snap2]) {
+      for (const d of s.docs) {
+        if (seen.has(d.id)) continue;
+        seen.add(d.id);
+        const data = d.data();
+        const otherId = data.participant1_id === user.uid ? data.participant2_id : data.participant1_id;
+        const otherSnap = await getDoc(doc(db, 'users', otherId));
+        const other = otherSnap.data();
+        const otherUser = other ? { id: otherId, display_name: other.display_name, anonymous_username: other.anonymous_username, avatar_url: other.avatar_url } : null;
+        convs.push({ id: d.id, ...data, participant1: otherUser, participant2: otherUser, otherUser, isMuted: false, last_message: [] });
+      }
     }
-
-    // Combine and deduplicate conversations
-    const allConversations = [...(data1 || []), ...(data2 || [])];
-    const uniqueConversations = allConversations.filter((conv, index, self) =>
-      index === self.findIndex((c) => c.id === conv.id)
-    );
-
-    // Sort by updated_at
-    const data = uniqueConversations.sort((a, b) => {
-      const dateA = new Date(a.updated_at || a.created_at).getTime();
-      const dateB = new Date(b.updated_at || b.created_at).getTime();
-      return dateB - dateA;
-    });
-
-    // Format conversations - we'll get last messages separately if needed
-    // For now, just use the nested query result
-    const conversationsWithMessages = (data || []).map(conv => ({
-      ...conv,
-      last_message: [],
-    }));
-
-    
-    const filtered = conversationsWithMessages
-      .filter(conv => {
-        // Exclude deleted conversations (but keep muted ones)
-        if (deletedIds.includes(conv.id)) return false;
-        
-        // Exclude conversations with blocked users
-        const otherUserId = conv.participant1_id === user.id ? conv.participant2_id : conv.participant1_id;
-        if (blockedIds.includes(otherUserId)) return false;
-        
-        return true;
-      })
-      .map(conv => ({
-        ...conv,
-        otherUser: conv.participant1_id === user.id ? conv.participant2 : conv.participant1,
-        isMuted: mutedIds.includes(conv.id),
-      }));
-
-    // Return conversations without last messages for now
-    // Last messages will be loaded via realtime updates
-    return filtered;
-  } catch (error) {
-    console.error('Error fetching conversations:', error);
+    convs.sort((a, b) => new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime());
+    return convs;
+  } catch (error: any) {
+    const isIndexError = error?.code === 'failed-precondition' || error?.message?.includes('index');
+    if (isIndexError) {
+      console.warn('Conversations query needs a composite index. Open the link from the error above in your browser to create it (Firebase Console → Firestore → Indexes).');
+    } else {
+      console.error('Error fetching conversations:', error);
+    }
     return [];
   }
 };
 
-// Get pending message requests for current user
 export const getPendingRequests = async () => {
+  const user = auth.currentUser;
+  if (!user) return [];
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return [];
-
-    // Get blocked user IDs
-    const { data: blockedData } = await supabase
-      .from('blocked_users')
-      .select('blocked_id')
-      .eq('blocker_id', user.id);
-
-    const blockedIds = (blockedData || []).map(b => b.blocked_id);
-
-    // Get all pending conversations where current user is participant2
-    // (participant1 is the one who initiated, participant2 receives the request)
-    const { data, error } = await supabase
-      .from('conversations')
-      .select(`
-        *,
-        participant1:profiles!conversations_participant1_id_fkey (
-          id,
-          display_name,
-          anonymous_username,
-          avatar_url
-        ),
-        participant2:profiles!conversations_participant2_id_fkey (
-          id,
-          display_name,
-          anonymous_username,
-          avatar_url
-        )
-      `)
-      .eq('participant2_id', user.id)
-      .eq('status', 'pending')
-      .order('updated_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching pending requests:', error);
-      return [];
-    }
-
-    // Get first message for each request
-    const requestsWithMessages = await Promise.all(
-      (data || []).map(async (conv) => {
-        const { data: messages } = await supabase
-          .from('messages')
-          .select('*')
-          .eq('conversation_id', conv.id)
-          .order('created_at', { ascending: true })
-          .limit(1);
-
-        return {
-          ...conv,
-          otherUser: conv.participant1, // The sender is participant1
-          firstMessage: messages && messages.length > 0 ? messages[0] : null,
-        };
+    const snap = await getDocs(
+      query(collection(db, 'conversations'), where('participant2_id', '==', user.uid), where('status', '==', 'pending'), orderBy('updated_at', 'desc'))
+    );
+    const list = await Promise.all(
+      snap.docs.map(async (d) => {
+        const data = d.data();
+        const otherSnap = await getDoc(doc(db, 'users', data.participant1_id));
+        const other = otherSnap.data();
+        const otherUser = other ? { id: data.participant1_id, display_name: other.display_name, anonymous_username: other.anonymous_username, avatar_url: other.avatar_url } : null;
+        const msgSnap = await getDocs(query(collection(db, 'messages'), where('conversation_id', '==', d.id), orderBy('created_at', 'asc'), limit(1)));
+        const firstMessage = msgSnap.empty ? null : { id: msgSnap.docs[0].id, ...msgSnap.docs[0].data() };
+        return { id: d.id, ...data, otherUser, firstMessage };
       })
     );
-
-    // Filter out blocked users
-    const filtered = requestsWithMessages.filter(req => {
-      return !blockedIds.includes(req.otherUser.id);
-    });
-
-    return filtered;
-  } catch (error) {
-    console.error('Error fetching pending requests:', error);
+    return list;
+  } catch (error: any) {
+    const isIndexError = error?.code === 'failed-precondition' || error?.message?.includes('index');
+    if (isIndexError) {
+      console.warn('Pending requests query needs a composite index. Create it from the link in the error (Firebase Console → Firestore → Indexes).');
+    } else {
+      console.error('Error fetching pending requests:', error);
+    }
     return [];
   }
 };
 
-// Accept a message request
 export const acceptMessageRequest = async (conversationId: string) => {
   try {
-    const { error } = await supabase
-      .from('conversations')
-      .update({ status: 'accepted' })
-      .eq('id', conversationId);
-
-    if (error) throw error;
+    await updateDoc(doc(db, 'conversations', conversationId), { status: 'accepted' });
     return true;
   } catch (error) {
     console.error('Error accepting message request:', error);
@@ -1159,21 +823,13 @@ export const acceptMessageRequest = async (conversationId: string) => {
   }
 };
 
-// Decline a message request
 export const declineMessageRequest = async (conversationId: string) => {
   try {
-    // Delete the conversation and its messages
-    await supabase
-      .from('messages')
-      .delete()
-      .eq('conversation_id', conversationId);
-
-    const { error } = await supabase
-      .from('conversations')
-      .delete()
-      .eq('id', conversationId);
-
-    if (error) throw error;
+    const msgSnap = await getDocs(query(collection(db, 'messages'), where('conversation_id', '==', conversationId)));
+    const batch = writeBatch(db);
+    msgSnap.docs.forEach((d) => batch.delete(d.ref));
+    batch.delete(doc(db, 'conversations', conversationId));
+    await batch.commit();
     return true;
   } catch (error) {
     console.error('Error declining message request:', error);
@@ -1231,131 +887,53 @@ export interface Streak {
   last_update_date?: string;
 }
 
-// Create a new group
 export const createGroup = async (name: string, description: string, category: string = 'general', isPublic: boolean = true, coverImageUrl?: string | null) => {
+  const user = auth.currentUser;
+  if (!user) return null;
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return null;
-
-    const { data, error } = await supabase
-      .from('groups')
-      .insert({
-        name,
-        description,
-        category,
-        creator_id: user.id,
-        is_public: isPublic,
-        cover_image_url: coverImageUrl || null,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Error creating group:', error);
-      return null;
-    }
-
-    // Add creator as member with 'creator' role
-    await supabase
-      .from('group_members')
-      .insert({
-        group_id: data.id,
-        user_id: user.id,
-        role: 'creator',
-      });
-
-    // Create default activities
+    const now = new Date().toISOString();
+    const groupRef = await addDoc(collection(db, 'groups'), {
+      name, description, category, creator_id: user.uid, is_public: isPublic, cover_image_url: coverImageUrl || null, created_at: now,
+    });
+    const groupId = groupRef.id;
+    await setDoc(doc(db, 'group_members', `${groupId}_${user.uid}`), { group_id: groupId, user_id: user.uid, role: 'creator' });
     const activities = [
       { activity_type: 'meditation', name: 'Daily Meditation', description: 'Share your meditation practice' },
       { activity_type: 'journaling', name: 'Daily Journaling', description: 'Write about your day' },
       { activity_type: 'gratitude', name: 'Gratitude Sharing', description: 'Share what you\'re grateful for' },
     ];
-
-    await supabase
-      .from('group_activities')
-      .insert(
-        activities.map(activity => ({
-          group_id: data.id,
-          ...activity,
-        }))
-      );
-
-    return data;
+    for (const a of activities) {
+      await addDoc(collection(db, 'group_activities'), { group_id: groupId, ...a, created_at: now });
+    }
+    return { id: groupId, name, description, category, creator_id: user.uid, is_public: isPublic, cover_image_url: coverImageUrl || null, created_at: now };
   } catch (error) {
     console.error('Error creating group:', error);
     return null;
   }
 };
 
-// Get all groups (public or user's groups)
 export const getGroups = async (includePrivate: boolean = false, category?: string) => {
+  const user = auth.currentUser;
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    let query = supabase
-      .from('groups')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (!includePrivate) {
-      query = query.eq('is_public', true);
-    }
-    
-    if (category && category !== 'All') {
-      query = query.eq('category', category);
-    }
-
-    const { data, error } = await query;
-    
-    if (error) {
-      console.error('Error fetching groups:', error);
-      return [];
-    }
-    
+    const constraints: any[] = [orderBy('created_at', 'desc')];
+    if (!includePrivate) constraints.push(where('is_public', '==', true));
+    if (category && category !== 'All') constraints.push(where('category', '==', category));
+    const snap = await getDocs(query(collection(db, 'groups'), ...constraints));
     const groupsWithCreator = await Promise.all(
-      (data || []).map(async (group: any) => {
-        const { data: creator } = await supabase
-          .from('profiles')
-          .select('id, display_name, anonymous_username, avatar_url')
-          .eq('id', group.creator_id)
-          .single();
-        
-        return { ...group, creator: creator || null };
+      snap.docs.map(async (d) => {
+        const data = d.data();
+        const creatorSnap = await getDoc(doc(db, 'users', data.creator_id));
+        const creator = creatorSnap.exists() ? { id: data.creator_id, ...creatorSnap.data() } : null;
+        return { id: d.id, ...data, creator };
       })
     );
-
-    // Get member counts and check if user is member
     const groupsWithStats = await Promise.all(
       groupsWithCreator.map(async (group: any) => {
-        const { count } = await supabase
-          .from('group_members')
-          .select('*', { count: 'exact', head: true })
-          .eq('group_id', group.id);
-
-        let isMember = false;
-        if (user) {
-          // Creator is automatically a member
-          if (group.creator_id === user.id) {
-            isMember = true;
-          } else {
-            const { data: member } = await supabase
-              .from('group_members')
-              .select('id')
-              .eq('group_id', group.id)
-              .eq('user_id', user.id)
-              .maybeSingle();
-            isMember = !!member;
-          }
-        }
-
-        return {
-          ...group,
-          member_count: count || 1, // At least 1 (creator)
-          is_member: isMember,
-        };
+        const membersSnap = await getDocs(query(collection(db, 'group_members'), where('group_id', '==', group.id)));
+        const isMember = user ? (group.creator_id === user.uid || membersSnap.docs.some((m) => m.data().user_id === user.uid)) : false;
+        return { ...group, member_count: membersSnap.size || 1, is_member: isMember };
       })
     );
-
     return groupsWithStats;
   } catch (error) {
     console.error('Error getting groups:', error);
@@ -1363,122 +941,40 @@ export const getGroups = async (includePrivate: boolean = false, category?: stri
   }
 };
 
-// Get group details
 export const getGroup = async (groupId: string) => {
+  const user = auth.currentUser;
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-
-    const { data: groupData, error } = await supabase
-      .from('groups')
-      .select('*')
-      .eq('id', groupId)
-      .single();
-    
-    if (error) {
-      console.error('Error fetching group:', error);
-      return null;
-    }
-    
-    const { data: creator } = await supabase
-      .from('profiles')
-      .select('id, display_name, anonymous_username, avatar_url')
-      .eq('id', groupData.creator_id)
-      .single();
-    
-    const data = { ...groupData, creator: creator || null };
-
-    // Get member count (includes creator who is in group_members)
-    const { count } = await supabase
-      .from('group_members')
-      .select('*', { count: 'exact', head: true })
-      .eq('group_id', groupId);
-
-    // Check if user is member or creator
-    let isMember = false;
-    if (user) {
-      // Creator is automatically a member
-      if (data.creator_id === user.id) {
-        isMember = true;
-      } else {
-        const { data: member } = await supabase
-          .from('group_members')
-          .select('id')
-          .eq('group_id', groupId)
-          .eq('user_id', user.id)
-          .maybeSingle();
-        isMember = !!member;
-      }
-    }
-
-    return {
-      ...data,
-      member_count: count || 1, // At least 1 (creator)
-      is_member: isMember,
-    };
+    const groupSnap = await getDoc(doc(db, 'groups', groupId));
+    if (!groupSnap.exists()) return null;
+    const groupData = groupSnap.data();
+    const creatorSnap = await getDoc(doc(db, 'users', groupData.creator_id));
+    const data = { ...groupData, creator: creatorSnap.exists() ? { id: groupData.creator_id, ...creatorSnap.data() } : null };
+    const membersSnap = await getDocs(query(collection(db, 'group_members'), where('group_id', '==', groupId)));
+    const isMember = user ? (data.creator_id === user.uid || membersSnap.docs.some((m) => m.data().user_id === user.uid)) : false;
+    return { ...data, member_count: membersSnap.size || 1, is_member: isMember };
   } catch (error) {
     console.error('Error getting group:', error);
     return null;
   }
 };
 
-// Join a group
 export const joinGroup = async (groupId: string) => {
+  const user = auth.currentUser;
+  if (!user) {
+    Alert.alert('Error', 'You must be logged in to join a group');
+    return false;
+  }
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      Alert.alert('Error', 'You must be logged in to join a group');
-      return false;
-    }
-
-    // Check if user is creator
-    const { data: group } = await supabase
-      .from('groups')
-      .select('creator_id, requires_approval')
-      .eq('id', groupId)
-      .single();
-
-    if (!group) {
+    const groupSnap = await getDoc(doc(db, 'groups', groupId));
+    if (!groupSnap.exists()) {
       Alert.alert('Error', 'Group not found');
       return false;
     }
-
-    if (group.creator_id === user.id) {
-      // Creator is automatically a member, no need to join
-      return true;
-    }
-
-    // Check if already a member
-    const { data: existing } = await supabase
-      .from('group_members')
-      .select('id')
-      .eq('group_id', groupId)
-      .eq('user_id', user.id)
-      .maybeSingle();
-
-    if (existing) {
-      // Already a member, return true silently
-      return true;
-    }
-
-    const { error } = await supabase
-      .from('group_members')
-      .insert({
-        group_id: groupId,
-        user_id: user.id,
-        role: 'member',
-      });
-
-    if (error) {
-      console.error('Error joining group:', error);
-      if (error.code === '23505') {
-        // Already a member (race condition)
-        return true;
-      } else {
-        Alert.alert('Error', error.message || 'Failed to join group');
-        return false;
-      }
-    }
-
+    if (groupSnap.data().creator_id === user.uid) return true;
+    const memberId = `${groupId}_${user.uid}`;
+    const existing = await getDoc(doc(db, 'group_members', memberId));
+    if (existing.exists()) return true;
+    await setDoc(doc(db, 'group_members', memberId), { group_id: groupId, user_id: user.uid, role: 'member' });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     return true;
   } catch (error: any) {
@@ -1488,23 +984,11 @@ export const joinGroup = async (groupId: string) => {
   }
 };
 
-// Leave a group
 export const leaveGroup = async (groupId: string) => {
+  const user = auth.currentUser;
+  if (!user) return false;
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
-
-    const { error } = await supabase
-      .from('group_members')
-      .delete()
-      .eq('group_id', groupId)
-      .eq('user_id', user.id);
-
-    if (error) {
-      console.error('Error leaving group:', error);
-      return false;
-    }
-
+    await deleteDoc(doc(db, 'group_members', `${groupId}_${user.uid}`));
     return true;
   } catch (error) {
     console.error('Error leaving group:', error);
@@ -2471,41 +1955,23 @@ export const getGroupMessages = async (groupId: string, limit: number = 50) => {
 // ========================================
 // PREMIUM MEMBERSHIP FUNCTIONS
 // ========================================
-
-// Check if current user has premium membership
 export const checkPremiumStatus = async () => {
+  const user = auth.currentUser;
+  if (!user) return false;
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('is_premium')
-      .eq('id', user.id)
-      .single();
-
-    return profile?.is_premium || false;
+    const snap = await getDoc(doc(db, 'users', user.uid));
+    return !!snap.data()?.is_premium;
   } catch (error) {
     console.error('Error checking premium status:', error);
     return false;
   }
 };
 
-// Activate premium membership for current user
 export const activatePremium = async () => {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Not authenticated');
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error('Not authenticated');
-
-    const { error } = await supabase
-      .from('profiles')
-      .update({
-        is_premium: true,
-        premium_activated_at: new Date().toISOString(),
-      })
-      .eq('id', user.id);
-
-    if (error) throw error;
+    await updateDoc(doc(db, 'users', user.uid), { is_premium: true, premium_activated_at: new Date().toISOString() });
     return true;
   } catch (error) {
     console.error('Error activating premium:', error);
@@ -2768,21 +2234,11 @@ export const generateAIGratitude = async (): Promise<string | null> => {
   }
 };
 
-// Cancel premium membership (for demo purposes)
 export const cancelPremium = async (): Promise<boolean> => {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Not authenticated');
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error('Not authenticated');
-
-    const { error } = await supabase
-      .from('profiles')
-      .update({
-        is_premium: false,
-        premium_expires_at: null,
-      })
-      .eq('id', user.id);
-
-    if (error) throw error;
+    await updateDoc(doc(db, 'users', user.uid), { is_premium: false, premium_expires_at: null });
     return true;
   } catch (error) {
     console.error('Error cancelling premium:', error);

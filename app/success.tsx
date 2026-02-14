@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import { View } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
+import { getCurrentUserRole } from './functions';
 
 export default function Success() {
   const router = useRouter();
@@ -16,8 +17,13 @@ export default function Success() {
       withTiming(1.0, { duration: 400, easing: Easing.inOut(Easing.cubic) })
     );
 
-    const timeout = setTimeout(() => {
-      router.replace('/(tabs)');
+    const timeout = setTimeout(async () => {
+      const role = await getCurrentUserRole();
+      if (role.is_admin) {
+        router.replace('/admin');
+      } else {
+        router.replace('/(tabs)');
+      }
     }, 1800);
 
     return () => clearTimeout(timeout);

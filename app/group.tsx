@@ -22,7 +22,8 @@ import {
     View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { supabase } from '../lib/supabase';
+import { auth, db, storage, ref, uploadBytes, getDownloadURL } from '../lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
 import {
     acceptStreak,
     checkInToStreak,
@@ -133,162 +134,16 @@ import {
 
     useEffect(() => {
         if (!groupId || typeof groupId !== 'string') return;
-        
-        supabase.auth.getUser().then(({ data: { user } }) => {
-        setCurrentUserId(user?.id || null);
-        });
-        
-        // Load group and check membership first
+
+        setCurrentUserId(auth.currentUser?.uid ?? null);
         loadGroup();
         checkAdminStatus();
-        
-        // Load messages after a short delay to ensure group is loaded
-        setTimeout(() => {
-        loadMessages();
-        }, 100);
+        setTimeout(() => loadMessages(), 100);
 
-        // Real-time subscription for new messages
-        const messagesChannel = supabase
-        .channel(`group-messages-${groupId}`, {
-            config: {
-            broadcast: { self: true },
-            presence: { key: 'user_id' }
-            }
-        })
-        .on(
-            'postgres_changes',
-            {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'group_messages',
-            filter: `group_id=eq.${groupId}`
-            },
-            async (payload) => {
-            console.log('📨 Real-time message received:', payload.new);
-            const newMessage = payload.new as any;
-            
-            // Get current user to check if it's their own message
-            const { data: { user } } = await supabase.auth.getUser();
-            const isOwnMessage = newMessage.user_id === user?.id;
-            
-            // Fetch user profile
-            const { data: profile } = await supabase
-                .from('profiles')
-                .select('id, display_name, anonymous_username, avatar_url')
-                .eq('id', newMessage.user_id)
-                .maybeSingle();
-            
-            console.log('👤 Profile fetched:', profile?.display_name || profile?.anonymous_username);
-            
-            // Update state immediately - use functional update to ensure latest state
-            setMessages(prev => {
-                // Remove any temp messages
-                const withoutTemp = prev.filter(m => !m.id.startsWith('temp-'));
-                
-                // Check if message already exists (avoid duplicates)
-                const exists = withoutTemp.some(m => m.id === newMessage.id);
-                if (exists) {
-                console.log('⚠️ Message already exists, updating profile');
-                // Update existing message with profile if missing
-                return withoutTemp.map(m => 
-                    m.id === newMessage.id && !m.user 
-                    ? { ...m, user: profile || null }
-                    : m
-                );
-                }
-                
-                console.log('✅ Adding new message to state');
-                // Add new message immediately
-                const messageWithUser = { ...newMessage, user: profile || null };
-                const updated = [...withoutTemp, messageWithUser];
-                
-                // Sort by created_at to maintain order
-                const sorted = updated.sort((a, b) => 
-                new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-                );
-                
-                console.log('📊 Total messages after update:', sorted.length);
-                return sorted;
-            });
-            
-            // Force FlatList re-render immediately
-            setMessagesKey(prev => prev + 1);
-            
-            // Scroll to bottom after state update
-            requestAnimationFrame(() => {
-                setTimeout(() => {
-                flatListRef.current?.scrollToEnd({ animated: true });
-                }, 100);
-            });
-            
-            // Only haptic if message is from someone else
-            if (!isOwnMessage) {
-                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            }
-            }
-        )
-        .on('broadcast', { event: 'typing' }, async (payload) => {
-            const { userId, userName, isTyping } = payload.payload as any;
-            const { data: { user } } = await supabase.auth.getUser();
-            
-            // Don't show typing indicator for own typing
-            if (userId === user?.id) return;
-            
-            if (isTyping) {
-            setTypingUsers(prev => ({
-                ...prev,
-                [userId]: { name: userName, timestamp: Date.now() }
-            }));
-            
-            // Auto-remove typing indicator after 3 seconds
-            setTimeout(() => {
-                setTypingUsers(prev => {
-                const updated = { ...prev };
-                delete updated[userId];
-                return updated;
-                });
-            }, 3000);
-            } else {
-            setTypingUsers(prev => {
-                const updated = { ...prev };
-                delete updated[userId];
-                return updated;
-            });
-            }
-        })
-        .subscribe((status) => {
-            console.log('🔔 Subscription status:', status);
-            if (status === 'SUBSCRIBED') {
-            // Track presence
-            supabase.auth.getUser().then(({ data: { user } }) => {
-                if (user) {
-                messagesChannel.track({
-                    user_id: user.id,
-                    online_at: new Date().toISOString()
-                });
-                }
-            });
-            console.log('✅ Successfully subscribed to group messages');
-            // Reload messages to ensure we have the latest
-            setTimeout(() => {
-                loadMessages();
-            }, 500);
-            } else if (status === 'CHANNEL_ERROR') {
-            console.error('❌ Channel error:', status);
-            } else if (status === 'TIMED_OUT') {
-            console.error('⏱️ Subscription timed out');
-            } else if (status === 'CLOSED') {
-            console.warn('🔒 Channel closed');
-            }
-        });
-
+        const messagesPoll = setInterval(loadMessages, 5000);
         return () => {
-        if (messagesChannel) {
-            supabase.removeChannel(messagesChannel);
-        }
-        if (typingTimeoutRef.current) {
-            clearTimeout(typingTimeoutRef.current);
-        }
+            clearInterval(messagesPoll);
+            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         };
     }, [groupId]);
 
@@ -346,9 +201,8 @@ import {
         const groupData = await getGroup(groupId);
         setGroup(groupData);
         if (groupData) {
-            // Check if user is creator or member
-            const { data: { user } } = await supabase.auth.getUser();
-            const isCreator = user?.id === groupData.creator_id;
+            const uid = auth.currentUser?.uid;
+            const isCreator = uid === groupData.creator_id;
             const isMemberCheck = groupData.is_member || isCreator;
             setIsMember(isMemberCheck);
             
@@ -516,48 +370,13 @@ import {
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const handleTyping = useCallback(async (isTyping: boolean) => {
         if (!groupId || typeof groupId !== 'string') return;
-        
-        const { data: { user } } = await supabase.auth.getUser();
+        const user = auth.currentUser;
         if (!user) return;
-        
-        const { data: profile } = await supabase
-        .from('profiles')
-        .select('display_name, anonymous_username')
-        .eq('id', user.id)
-        .maybeSingle();
-        
+        const profileSnap = await getDoc(doc(db, 'users', user.uid));
+        const profile = profileSnap.data();
         const userName = profile?.display_name || profile?.anonymous_username || 'Someone';
-        
-        const channel = supabase.channel(`group-messages-${groupId}`);
-        await channel.send({
-        type: 'broadcast',
-        event: 'typing',
-        payload: {
-            userId: user.id,
-            userName: userName,
-            isTyping: isTyping,
-        },
-        });
-        
-        // Clear previous timeout
-        if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-        }
-        
-        // Auto-stop typing indicator after 2 seconds if still typing
-        if (isTyping) {
-        typingTimeoutRef.current = setTimeout(async () => {
-            await channel.send({
-            type: 'broadcast',
-            event: 'typing',
-            payload: {
-                userId: user.id,
-                userName: userName,
-                isTyping: false,
-            },
-            });
-        }, 2000);
-        }
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        if (isTyping) typingTimeoutRef.current = setTimeout(() => {}, 2000);
     }, [groupId]);
 
     const handleCreateStreak = async () => {
@@ -673,8 +492,7 @@ import {
 
         setUploadingImage(true);
         const asset = result.assets[0];
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+        if (!auth.currentUser) return;
 
         const base64Data = await FileSystem.readAsStringAsync(asset.uri, { 
             encoding: FileSystem.EncodingType.Base64 
@@ -682,21 +500,10 @@ import {
         const byteArray = Buffer.from(base64Data, 'base64');
 
         const path = `groups/${groupId}/cover-${Date.now()}.jpg`;
-        const { error: uploadError } = await supabase.storage
-            .from('avatar-bucket')
-            .upload(path, byteArray, {
-            cacheControl: '3600',
-            contentType: 'image/jpeg',
-            upsert: true,
-            });
-
-        if (uploadError) {
-            Alert.alert('Upload failed', 'Could not upload image.');
-            return;
-        }
-
-        const { data } = supabase.storage.from('avatar-bucket').getPublicUrl(path);
-        const success = await updateGroupCoverImage(groupId, data.publicUrl);
+        const storageRef = ref(storage, path);
+        await uploadBytes(storageRef, byteArray, { contentType: 'image/jpeg' });
+        const publicUrl = await getDownloadURL(storageRef);
+        const success = await updateGroupCoverImage(groupId, publicUrl);
         
         if (success) {
             await loadGroup();

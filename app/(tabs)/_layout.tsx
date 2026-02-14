@@ -5,7 +5,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { supabase } from '@/lib/supabase';
+import { auth } from '@/lib/firebase';
+import { getConversations } from '@/app/functions';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
@@ -15,87 +16,19 @@ export default function TabLayout() {
 
   useEffect(() => {
     loadUnreadCounts();
-    setupRealtimeCounts();
-
-    return () => {
-      supabase.removeAllChannels();
-    };
+    const interval = setInterval(loadUnreadCounts, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const loadUnreadCounts = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      // Count unread messages
-      const { data: conversations } = await supabase
-        .from('conversations')
-        .select('id')
-        .or(`participant1_id.eq.${user.id},participant2_id.eq.${user.id}`);
-
-      if (conversations && conversations.length > 0) {
-        const conversationIds = conversations.map(c => c.id);
-        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        
-        const { count } = await supabase
-          .from('messages')
-          .select('*', { count: 'exact', head: true })
-          .in('conversation_id', conversationIds)
-          .neq('sender_id', user.id)
-          .gte('created_at', oneDayAgo);
-
-        setUnreadMessageCount(count || 0);
-      }
-
-      // Count unread notifications (simplified - just count recent notifications)
-      const { count: notificationCount } = await supabase
-        .from('followers')
-        .select('*', { count: 'exact', head: true })
-        .eq('following_id', user.id)
-        .gte('created_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
-
-      setUnreadNotificationCount(notificationCount || 0);
+      if (!auth.currentUser) return;
+      const convs = await getConversations();
+      setUnreadMessageCount(convs.length);
+      setUnreadNotificationCount(0);
     } catch (error) {
       console.error('Error loading unread counts:', error);
     }
-  };
-
-  const setupRealtimeCounts = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    // Subscribe to new messages for count updates
-    const messagesChannel = supabase
-      .channel('messages-count')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages'
-        },
-        () => {
-          loadUnreadCounts();
-        }
-      )
-      .subscribe();
-
-    // Subscribe to new followers for notification count
-    const followersChannel = supabase
-      .channel('followers-count')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'followers',
-          filter: `following_id=eq.${user.id}`
-        },
-        () => {
-          loadUnreadCounts();
-        }
-      )
-      .subscribe();
   };
 
   return (
