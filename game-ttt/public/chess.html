@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chess · Spill</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8fafc; padding: 16px; }
+    h1 { font-size: 1.5rem; color: #0f172a; margin-bottom: 8px; }
+    .status { color: #64748b; margin-bottom: 12px; text-align: center; }
+    .board { display: grid; grid-template-columns: repeat(8, 1fr); gap: 0; border: 2px solid #334155; border-radius: 8px; overflow: hidden; width: min(320px, 90vw); aspect-ratio: 1; }
+    .sq { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: clamp(18px, 5vw, 28px); cursor: pointer; user-select: none; }
+    .sq.light { background: #f1f5f9; }
+    .sq.dark { background: #94a3b8; }
+    .sq.selected { background: #ec4899; color: #fff; }
+    .sq.last { outline: 2px solid #8b5cf6; }
+    .hidden { display: none !important; }
+    .winner { color: #10b981; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>Chess</h1>
+  <p id="status" class="status">Connecting...</p>
+  <div id="board" class="board hidden"></div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const roomCode = params.get('room') || '';
+    const socket = io('/chess');
+    const statusEl = document.getElementById('status');
+    const boardEl = document.getElementById('board');
+    let myColor = null;
+    let state = { fen: '', turn: 'w', result: null };
+    let selected = null;
+    const PIECE = { P: '♙', N: '♘', B: '♗', R: '♖', Q: '♕', K: '♔', p: '♟', n: '♞', b: '♝', r: '♜', q: '♛', k: '♚' };
+
+    function fenToBoard(fen) {
+      const rows = fen.split(' ')[0].split('/');
+      const board = [];
+      for (const row of rows) {
+        const line = [];
+        for (const c of row) {
+          if (/\d/.test(c)) for (let i = 0; i < +c; i++) line.push('');
+          else line.push(c);
+        }
+        board.push(line);
+      }
+      return board;
+    }
+
+    function render() {
+      if (!state.fen) return;
+      const board = fenToBoard(state.fen);
+      const isBlack = myColor === 'b';
+      const order = isBlack ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7];
+      boardEl.innerHTML = '';
+      for (let r of order) {
+        for (let c of (isBlack ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7])) {
+          const cell = document.createElement('div');
+          cell.className = 'sq ' + ((r + c) % 2 === 0 ? 'light' : 'dark');
+          const piece = board[r][c];
+          cell.textContent = piece ? (PIECE[piece] || piece) : '';
+          cell.dataset.from = String.fromCharCode(97 + c) + (8 - r);
+          cell.addEventListener('click', () => onCellClick(cell.dataset.from));
+          boardEl.appendChild(cell);
+        }
+      }
+      if (state.result === 'draw') statusEl.textContent = "It's a draw!";
+      else if (state.result) statusEl.textContent = (state.result === myColor ? 'You win!' : 'You lose.');
+      else statusEl.textContent = (state.turn === myColor ? 'Your turn' : "Opponent's turn");
+    }
+
+    function onCellClick(from) {
+      if (state.result || state.turn !== myColor) return;
+      if (selected === from) { selected = null; render(); return; }
+      if (selected) {
+        socket.emit('move', { roomCode, from: selected, to: from });
+        selected = null;
+      } else selected = from;
+      render();
+      document.querySelectorAll('.sq').forEach(sq => {
+        sq.classList.toggle('selected', sq.dataset.from === selected);
+      });
+    }
+
+    socket.on('connect', () => {
+      if (roomCode) {
+        statusEl.textContent = 'Joining game...';
+        socket.emit('joinOrCreate', { roomCode, name: 'Player' });
+      } else statusEl.textContent = 'Open with ?room= from the Spill app.';
+    });
+
+    socket.on('waiting', () => {
+      boardEl.classList.add('hidden');
+      statusEl.textContent = 'Waiting for opponent...';
+    });
+
+    socket.on('start', (data) => {
+      myColor = data.color;
+      boardEl.classList.remove('hidden');
+    });
+
+    socket.on('state', (data) => {
+      state = data;
+      selected = null;
+      render();
+    });
+
+    socket.on('roomFull', () => statusEl.textContent = 'Room full.');
+    socket.on('opponentLeft', () => statusEl.textContent = 'Opponent left.');
+  </script>
+</body>
+</html>

@@ -763,7 +763,14 @@ export default function MatchesScreen() {
             <View style={styles.matchActions}>
               <Pressable
                 style={styles.matchActionButton}
-                onPress={() => router.push({ pathname: '/game-webview', params: { room: activeMatch.id, gameType: 'tictactoe' } } as any)}
+                onPress={() => {
+                  Alert.alert('Choose game', '', [
+                    { text: 'Tic-Tac-Toe', onPress: () => router.push({ pathname: '/game-webview', params: { room: activeMatch.id, gameType: 'tictactoe' } } as any) },
+                    { text: 'Chess', onPress: () => router.push({ pathname: '/game-webview', params: { room: activeMatch.id, gameType: 'chess' } } as any) },
+                    { text: 'Ludo', onPress: () => router.push({ pathname: '/game-webview', params: { room: activeMatch.id, gameType: 'ludo' } } as any) },
+                    { text: 'Cancel', style: 'cancel' },
+                  ]);
+                }}
               >
                 <Feather name="grid" size={18} color="#ec4899" />
                 <Text style={styles.matchActionText}>Play</Text>

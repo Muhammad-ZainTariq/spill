@@ -35,9 +35,10 @@ export default function GameWebViewScreen() {
   const gameUrl = useMemo(() => {
     if (!gameBaseUrl.trim() || !room?.trim()) return null;
     const base = gameBaseUrl.replace(/\/$/, '');
-    const sep = base.includes('?') ? '&' : '?';
-    return `${base}${sep}room=${encodeURIComponent(room)}`;
-  }, [gameBaseUrl, room]);
+    const path = gameType === 'chess' ? '/chess' : gameType === 'ludo' ? '/ludo' : '';
+    const sep = (base + path).includes('?') ? '&' : '?';
+    return `${base}${path}${sep}room=${encodeURIComponent(room)}`;
+  }, [gameBaseUrl, room, gameType]);
 
   const title = GAME_TITLES[gameType] || 'Play';
 
