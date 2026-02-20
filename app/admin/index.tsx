@@ -32,6 +32,20 @@ export default function AdminDashboard() {
           style={styles.card}
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push('/create-challenge?official=1' as any);
+          }}
+        >
+          <Feather name="zap" size={28} color="#ec4899" />
+          <View style={styles.cardText}>
+            <Text style={styles.cardTitle}>Create challenge</Text>
+            <Text style={styles.cardDesc}>Create an official (admin-managed) challenge. Anyone can join from the app.</Text>
+          </View>
+          <Feather name="chevron-right" size={22} color="#9ca3af" />
+        </Pressable>
+        <Pressable
+          style={styles.card}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             router.push('/admin/login-stats');
           }}
         >

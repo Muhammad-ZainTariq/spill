@@ -44,6 +44,10 @@ export interface Post {
   user_id: string;
   is_vent?: boolean;
   expires_at?: string | null;
+  /** True when auto-flagged for toxicity; content is hidden until admin approves. */
+  flagged_for_toxicity?: boolean;
+  /** When set, post is shown with a "might be dangerous or toxic" badge. */
+  approved_safe_at?: string | null;
   profiles: {
     display_name?: string;
     anonymous_username?: string;
@@ -447,15 +451,16 @@ export const getAIOpinion = async (content: string): Promise<string> => {
         messages: [
           {
             role: 'system',
-            content: 'You are a kind, supportive friend. Keep your reply short (≤ 120 tokens) and always positive.',
+            content: `You're a real friend replying to someone's post in a feed. Reply in 1-3 short sentences max. Sound like a human: use contractions, vary your tone (warm, wry, or just real—match the post). React to what they actually said; don't give advice unless it fits.
+Never use: "That's so valid", "Thank you for sharing", "It's great that you're", "I hear you", "You've got this", "Sending love", "That takes courage", or any list of three generic encouragements. No emojis. No "Remember that..." or "Just remember...". If the post is heavy, one genuine line beats a paragraph of support. If it's light, be brief and natural.`,
           },
           {
             role: 'user',
-            content: `What do you think about this post?\n\n"""${content}"""`,
+            content: `Reply to this post like a friend would (one short response):\n\n"""${content}"""`,
           },
         ],
         max_tokens: 120,
-        temperature: 0.7,
+        temperature: 0.85,
       }),
     });
 
@@ -473,8 +478,61 @@ export const getAIOpinion = async (content: string): Promise<string> => {
   }
 };
 
+/** Generate a playful challenge idea: name, goal, description, duration. Returns null if no API key or parse fails. */
+export const generateChallengeIdeas = async (): Promise<{ name: string; goal: string; description: string; duration: number } | null> => {
+  try {
+    const apiKey =
+      (Constants as any)?.expoConfig?.extra?.openaiApiKey ||
+      (Constants as any)?.manifest?.extra?.openaiApiKey;
+    if (!apiKey) return null;
 
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You're a hype-person for a fun streak app. You ONLY respond with valid JSON. Format: {"name":"...","goal":"...","description":"...","duration":N}
 
+name = short, punchy, memorable (like a band name or a dare). Be playful, weird, catchy—zero corporate speak. Examples: "No Screens Before Beams", "Chaos Mode", "Mismatched Socks Week".
+goal = what people actually do daily, specific and a bit silly or wholesome.
+description = 1-3 sentences that explain what the challenge is and what you do. Keep it direct and neutral—no cutesy stuff like "unleash your inner", "embrace the quirkiness", "giggle", "step into fun", or inspirational fluff. Just the facts with a bit of vibe.
+duration = number of days (between 3 and 21).`,
+          },
+          {
+            role: 'user',
+            content: 'Give me one random challenge idea. JSON only.',
+          },
+        ],
+        max_tokens: 220,
+        temperature: 0.95,
+      }),
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const raw = data?.choices?.[0]?.message?.content?.trim();
+    if (!raw) return null;
+
+    const cleaned = raw.replace(/```json?\s*/g, '').replace(/```\s*$/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+    const name = typeof parsed?.name === 'string' ? parsed.name.trim() : '';
+    const goal = typeof parsed?.goal === 'string' ? parsed.goal.trim() : '';
+    const description = typeof parsed?.description === 'string' ? parsed.description.trim() : '';
+    let duration = typeof parsed?.duration === 'number' ? parsed.duration : 7;
+    if (duration < 1 || duration > 365) duration = 7;
+    if (!name || !goal) return null;
+    return { name, goal, description: description || goal, duration };
+  } catch (e) {
+    console.error('generateChallengeIdeas', e);
+    return null;
+  }
+};
 
 // ========================================
 // FOLLOW FUNCTIONS
@@ -970,11 +1028,18 @@ export const joinGroup = async (groupId: string) => {
       Alert.alert('Error', 'Group not found');
       return false;
     }
-    if (groupSnap.data().creator_id === user.uid) return true;
+    const groupData = groupSnap.data()!;
+    if (groupData.creator_id === user.uid) return true;
     const memberId = `${groupId}_${user.uid}`;
     const existing = await getDoc(doc(db, 'group_members', memberId));
     if (existing.exists()) return true;
-    await setDoc(doc(db, 'group_members', memberId), { group_id: groupId, user_id: user.uid, role: 'member' });
+    const memberData: any = { group_id: groupId, user_id: user.uid, role: 'member' };
+    if (groupData.is_challenge) {
+      memberData.current_streak = 0;
+      memberData.last_proof_date = null;
+      memberData.completed_at = null;
+    }
+    await setDoc(doc(db, 'group_members', memberId), memberData);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     return true;
   } catch (error: any) {
@@ -994,6 +1059,245 @@ export const leaveGroup = async (groupId: string) => {
     console.error('Error leaving group:', error);
     return false;
   }
+};
+
+// ========================================
+// CHALLENGE GROUPS (gamified streak: goal + duration, camera proof, per-member streak, complete then leave)
+// ========================================
+
+/** Fun challenge categories: value for storage, label for UI. Admin picks one when creating; users filter by these. */
+export const CHALLENGE_CATEGORIES = [
+  { value: 'fitness', label: '💪 Fitness' },
+  { value: 'chaos', label: '🎲 Chaos & silly' },
+  { value: 'mindfulness', label: '🧘 Mindfulness' },
+  { value: 'habits', label: '✅ Daily habits' },
+  { value: 'creative', label: '🎨 Creative' },
+  { value: 'social', label: '👋 Social' },
+  { value: 'noscreen', label: '📵 No-screen' },
+  { value: 'food', label: '🍳 Food & drink' },
+  { value: 'other', label: '✨ Other' },
+] as const;
+
+/** Create a challenge group: one goal, N days. Each member has own streak; when streak >= duration they can leave. */
+export const createChallengeGroup = async (
+  name: string,
+  goal: string,
+  durationDays: number,
+  description?: string,
+  managedByAdmin?: boolean,
+  challengeCategory?: string
+): Promise<{ id: string } | null> => {
+  const user = auth.currentUser;
+  if (!user) return null;
+  if (!name.trim() || !goal.trim() || durationDays < 1 || durationDays > 365) return null;
+  let setManagedByAdmin = false;
+  if (managedByAdmin) {
+    const roleSnap = await getDoc(doc(db, 'users', user.uid));
+    if (roleSnap.exists() && roleSnap.data()?.is_admin) setManagedByAdmin = true;
+  }
+  const categoryValue = challengeCategory && CHALLENGE_CATEGORIES.some((c) => c.value === challengeCategory) ? challengeCategory : 'other';
+  try {
+    const now = new Date().toISOString();
+    const groupRef = await addDoc(collection(db, 'groups'), {
+      name: name.trim(),
+      description: (description || '').trim() || goal.trim(),
+      category: 'challenge',
+      creator_id: user.uid,
+      is_public: true,
+      cover_image_url: null,
+      created_at: now,
+      is_challenge: true,
+      challenge_goal: goal.trim(),
+      challenge_duration_days: Math.round(durationDays),
+      managed_by_admin: setManagedByAdmin,
+      challenge_category: categoryValue,
+    });
+    const groupId = groupRef.id;
+    await setDoc(doc(db, 'group_members', `${groupId}_${user.uid}`), {
+      group_id: groupId,
+      user_id: user.uid,
+      role: 'creator',
+      current_streak: 0,
+      last_proof_date: null,
+      completed_at: null,
+    });
+    return { id: groupId };
+  } catch (error) {
+    console.error('Error creating challenge group:', error);
+    return null;
+  }
+};
+
+/** Submit proof for today (image URL after client upload). Updates per-member streak; if streak >= duration, marks completed. */
+export const submitChallengeProof = async (groupId: string, imageUrl: string): Promise<{ current_streak: number; completed: boolean } | null> => {
+  const user = auth.currentUser;
+  if (!user || !imageUrl.trim()) return null;
+  try {
+    const groupSnap = await getDoc(doc(db, 'groups', groupId));
+    if (!groupSnap.exists() || !groupSnap.data()?.is_challenge) return null;
+    const duration = groupSnap.data()?.challenge_duration_days ?? 7;
+    const memberId = `${groupId}_${user.uid}`;
+    const memberSnap = await getDoc(doc(db, 'group_members', memberId));
+    if (!memberSnap.exists()) return null;
+    const today = new Date().toISOString().slice(0, 10);
+    const proofRef = collection(db, 'group_streak_proofs');
+    const existingProof = await getDocs(
+      query(proofRef, where('group_id', '==', groupId), where('user_id', '==', user.uid), where('date', '==', today), limit(1))
+    );
+    if (!existingProof.empty) return null;
+    await addDoc(proofRef, {
+      group_id: groupId,
+      user_id: user.uid,
+      date: today,
+      image_url: imageUrl.trim(),
+      created_at: new Date().toISOString(),
+    });
+    const data = memberSnap.data()!;
+    const last = data.last_proof_date || null;
+    const prevStreak = data.current_streak ?? 0;
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+    const newStreak = last === yesterdayStr ? prevStreak + 1 : 1;
+    const completed = newStreak >= duration;
+    await updateDoc(doc(db, 'group_members', memberId), {
+      current_streak: newStreak,
+      last_proof_date: today,
+      ...(completed ? { completed_at: new Date().toISOString() } : {}),
+    });
+    return { current_streak: newStreak, completed };
+  } catch (error) {
+    console.error('Error submitting challenge proof:', error);
+    return null;
+  }
+};
+
+/** Get challenge progress: group + members with streak/completed + who posted today. */
+export const getChallengeProgress = async (groupId: string): Promise<{
+  group: any;
+  members: { user_id: string; display_name?: string; anonymous_username?: string; current_streak: number; completed_at: string | null; has_proof_today: boolean }[];
+  myMember: { current_streak: number; completed_at: string | null; last_proof_date: string | null } | null;
+} | null> => {
+  const user = auth.currentUser;
+  if (!user) return null;
+  try {
+    const groupSnap = await getDoc(doc(db, 'groups', groupId));
+    if (!groupSnap.exists()) return null;
+    const group = { id: groupSnap.id, ...groupSnap.data() };
+    const membersSnap = await getDocs(query(collection(db, 'group_members'), where('group_id', '==', groupId)));
+    const today = new Date().toISOString().slice(0, 10);
+    const proofsSnap = await getDocs(
+      query(collection(db, 'group_streak_proofs'), where('group_id', '==', groupId), where('date', '==', today))
+    );
+    const proofUserIds = new Set(proofsSnap.docs.map((d) => d.data().user_id));
+    const members: { user_id: string; display_name?: string; anonymous_username?: string; current_streak: number; completed_at: string | null; has_proof_today: boolean }[] = [];
+    for (const d of membersSnap.docs) {
+      const m = d.data();
+      const profileSnap = await getDoc(doc(db, 'users', m.user_id));
+      const p = profileSnap.data() || {};
+      members.push({
+        user_id: m.user_id,
+        display_name: p.display_name ?? undefined,
+        anonymous_username: p.anonymous_username ?? undefined,
+        current_streak: m.current_streak ?? 0,
+        completed_at: m.completed_at ?? null,
+        has_proof_today: proofUserIds.has(m.user_id),
+      });
+    }
+    const myDoc = membersSnap.docs.find((d) => d.data().user_id === user.uid);
+    const myMember = myDoc
+      ? {
+          current_streak: myDoc.data().current_streak ?? 0,
+          completed_at: myDoc.data().completed_at ?? null,
+          last_proof_date: myDoc.data().last_proof_date ?? null,
+        }
+      : null;
+    return { group, members, myMember };
+  } catch (error) {
+    console.error('Error getting challenge progress:', error);
+    return null;
+  }
+};
+
+/** Leave a challenge: allowed if completed, or if forfeit is true. */
+export const leaveChallengeGroup = async (groupId: string, forfeit: boolean = false): Promise<boolean> => {
+  const user = auth.currentUser;
+  if (!user) return false;
+  try {
+    const memberId = `${groupId}_${user.uid}`;
+    const memberSnap = await getDoc(doc(db, 'group_members', memberId));
+    if (!memberSnap.exists()) return false;
+    const data = memberSnap.data()!;
+    if (data.completed_at) {
+      await deleteDoc(doc(db, 'group_members', memberId));
+      return true;
+    }
+    if (forfeit) {
+      await deleteDoc(doc(db, 'group_members', memberId));
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('Error leaving challenge group:', error);
+    return false;
+  }
+};
+
+/** List official (admin-managed) challenge groups anyone can join. Optional category filter (value from CHALLENGE_CATEGORIES). */
+export const getOfficialChallenges = async (category?: string): Promise<any[]> => {
+  try {
+    const q = query(
+      collection(db, 'groups'),
+      where('is_challenge', '==', true),
+      where('managed_by_admin', '==', true),
+      orderBy('created_at', 'desc'),
+      limit(50)
+    );
+    const snap = await getDocs(q);
+    let list = await Promise.all(
+      snap.docs.map(async (d) => {
+        const data = d.data();
+        const creatorSnap = await getDoc(doc(db, 'users', data.creator_id));
+        const creator = creatorSnap.exists() ? { id: data.creator_id, ...creatorSnap.data() } : null;
+        const membersSnap = await getDocs(query(collection(db, 'group_members'), where('group_id', '==', d.id)));
+        const isMember = auth.currentUser
+          ? membersSnap.docs.some((m) => m.data().user_id === auth.currentUser?.uid)
+          : false;
+        return {
+          id: d.id,
+          ...data,
+          challenge_category: data.challenge_category || 'other',
+          creator,
+          member_count: membersSnap.size,
+          is_member: isMember,
+        };
+      })
+    );
+    if (category && category !== 'All') {
+      list = list.filter((c) => (c.challenge_category || 'other') === category);
+    }
+    return list;
+  } catch (error) {
+    console.error('Error getting official challenges:', error);
+    return [];
+  }
+};
+
+/** Check if user already posted proof today for this challenge. */
+export const hasProofToday = async (groupId: string): Promise<boolean> => {
+  const user = auth.currentUser;
+  if (!user) return false;
+  const today = new Date().toISOString().slice(0, 10);
+  const snap = await getDocs(
+    query(
+      collection(db, 'group_streak_proofs'),
+      where('group_id', '==', groupId),
+      where('user_id', '==', user.uid),
+      where('date', '==', today),
+      limit(1)
+    )
+  );
+  return !snap.empty;
 };
 
 // Create a new streak (activity) in a group
@@ -2184,9 +2488,9 @@ export const generateAIGratitude = async (): Promise<string | null> => {
     }
 
     const prompts = [
-      "Generate a short, personal gratitude message (1-2 sentences) that feels genuine and uplifting. Focus on simple, everyday things people might be grateful for.",
-      "Create a brief gratitude reflection (1-2 sentences) that's warm and authentic. Think about small joys, relationships, or moments of peace.",
-      "Write a concise gratitude note (1-2 sentences) that feels personal and positive. Consider health, nature, learning, or connections with others.",
+      "One thing you're grateful for today—one short sentence, like a note to yourself. Specific and ordinary (e.g. coffee, a text back, quiet morning). No 'I am grateful for' if you can say it more naturally.",
+      "A single sentence about something small that felt good recently. No inspirational quotes or 'blessed'. Just a real moment.",
+      "One line: something or someone that made your week a bit easier. Plain language.",
     ];
 
     const randomPrompt = prompts[Math.floor(Math.random() * prompts.length)];
@@ -2198,19 +2502,19 @@ export const generateAIGratitude = async (): Promise<string | null> => {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
-            content: 'You are a helpful assistant that generates thoughtful, genuine gratitude messages. Keep responses short (1-2 sentences), warm, and personal.',
+            content: `Write one short gratitude line (1 sentence, maybe 2). Sound like a real person jotting it down—concrete and specific, not a greeting card. No "I'm grateful for", "blessed", "truly", or "reminder that". No emojis.`,
           },
           {
             role: 'user',
             content: randomPrompt,
           },
         ],
-        max_tokens: 100,
-        temperature: 0.8,
+        max_tokens: 80,
+        temperature: 0.9,
       }),
     });
 
@@ -2310,15 +2614,15 @@ export const generateAITherapyPrompt = async (): Promise<string | null> => {
         messages: [
           {
             role: 'system',
-            content: 'You are a supportive, empathetic therapist. Generate personalized reflection questions based on the user\'s recent activity and mood. Keep questions thoughtful, non-judgmental, and encouraging. Format as a single question (1-2 sentences).',
+            content: `You write one reflection question (1-2 sentences) based on someone's recent posts and mood. Sound like a curious, grounded person—not a textbook therapist. Ask one specific question that ties to what they actually shared. Never use: "How does that make you feel?", "What might you take away?", "What would it mean to...?", or "Where do you think that comes from?" Be direct and concrete. No "It can be helpful to..." or "Consider...".`,
           },
           {
             role: 'user',
-            content: `Based on this user's activity:\n\n${context || 'No recent activity available.'}\n\nGenerate a personalized reflection question that might help them gain insight or process their feelings.`,
+            content: `Their recent activity:\n\n${context || 'No recent activity available.'}\n\nWrite one reflection question that feels tailored to this person.`,
           },
         ],
-        max_tokens: 150,
-        temperature: 0.8,
+        max_tokens: 120,
+        temperature: 0.85,
       }),
     });
 
@@ -2406,15 +2710,15 @@ export const getWeeklySummary = async (): Promise<{
         messages: [
           {
             role: 'system',
-            content: 'You are a supportive mental health assistant. Generate a brief weekly summary (2-3 sentences) and 2-3 actionable insights based on the user\'s activity. Be positive, encouraging, and specific.',
+            content: `Summarize their week in 1-2 plain sentences, then give 2-3 short insights (each one line). Write like a person, not a report: varied phrasing, no "Great job!", "Keep it up!", "You're doing great!", or "Remember to be kind to yourself." Be specific to the numbers and trend. Insights can be direct ("You logged mood most days—see if mornings vs evenings differ") or gentle; avoid generic self-care lists.`,
           },
           {
             role: 'user',
-            content: `User's week:\n- Posts: ${posts.length}\n- Mood entries: ${moods.length}\n- Mood trend: ${moodTrend}\n- Average mood: ${moods.length > 0 ? (moods.reduce((sum, m) => sum + m.mood_value, 0) / moods.length).toFixed(1) : 'N/A'}\n\nGenerate a weekly summary and insights.`,
+            content: `Their week: ${posts.length} posts, ${moods.length} mood entries, trend: ${moodTrend}, average mood: ${moods.length > 0 ? (moods.reduce((s: number, m: any) => s + m.mood_value, 0) / moods.length).toFixed(1) : 'N/A'}. Write a short summary and 2-3 one-line insights.`,
           },
         ],
-        max_tokens: 300,
-        temperature: 0.7,
+        max_tokens: 280,
+        temperature: 0.8,
       }),
     });
 
@@ -2444,49 +2748,41 @@ export const getWeeklySummary = async (): Promise<{
 };
 
 // ========================================
-// ANONYMOUS MATCHING FUNCTIONS
+// ANONYMOUS MATCHING FUNCTIONS (Firestore)
 // ========================================
 
 // Get available users for matching (those who opted in)
 export const getAvailableUsers = async (category?: string): Promise<any[]> => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      console.log('❌ No user found');
-      return [];
-    }
+    const uid = auth.currentUser?.uid;
+    if (!uid) return [];
 
-    console.log('🔍 Fetching available users, category:', category || 'All');
-
-    // First, get all available users
-    let query = supabase
-      .from('profiles')
-      .select('id, display_name, anonymous_username, avatar_url, match_struggles')
-      .eq('available_for_matches', true)
-      .neq('id', user.id);
-
-    const { data, error } = await query.order('created_at', { ascending: false }).limit(50);
-
-    if (error) {
-      console.error('❌ Error querying available users:', error);
-      throw error;
-    }
-
-    console.log('✅ Found', data?.length || 0, 'available users (before category filter)');
-
-    // Filter by category in JavaScript if needed (more reliable than SQL array filter)
-    let filteredData = data || [];
-    if (category && category !== 'All' && filteredData.length > 0) {
-      filteredData = filteredData.filter((user: any) => {
-        const struggles = user.match_struggles || [];
-        return struggles.includes(category);
+    const usersRef = collection(db, 'users');
+    let q = query(
+      usersRef,
+      where('available_for_matches', '==', true),
+      limit(50)
+    );
+    const snap = await getDocs(q);
+    let list: any[] = [];
+    snap.docs.forEach((d) => {
+      if (d.id === uid) return;
+      const data = d.data();
+      list.push({
+        id: d.id,
+        display_name: data.display_name ?? null,
+        anonymous_username: data.anonymous_username ?? null,
+        avatar_url: data.avatar_url ?? null,
+        match_struggles: data.match_struggles ?? [],
       });
-      console.log('✅ After category filter:', filteredData.length, 'users');
-    }
+    });
 
-    return filteredData;
+    if (category && category !== 'All' && list.length > 0) {
+      list = list.filter((u: any) => (u.match_struggles || []).includes(category));
+    }
+    return list;
   } catch (error) {
-    console.error('❌ Error getting available users:', error);
+    console.error('Error getting available users:', error);
     return [];
   }
 };
@@ -2494,35 +2790,30 @@ export const getAvailableUsers = async (category?: string): Promise<any[]> => {
 // Send a match request to a specific user
 export const sendMatchRequest = async (targetUserId: string): Promise<string | null> => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return null;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return null;
 
-    // Check if request already exists
-    const { data: existing } = await supabase
-      .from('match_requests')
-      .select('id')
-      .eq('sender_id', user.id)
-      .eq('receiver_id', targetUserId)
-      .in('status', ['pending', 'accepted'])
-      .single();
-
-    if (existing) {
-      return null; // Request already exists
+    const requestsRef = collection(db, 'match_requests');
+    const existingSnap = await getDocs(
+      query(
+        requestsRef,
+        where('sender_id', '==', uid),
+        where('receiver_id', '==', targetUserId),
+        limit(1)
+      )
+    );
+    if (!existingSnap.empty) {
+      const status = existingSnap.docs[0].data().status;
+      if (status === 'pending' || status === 'accepted') return null;
     }
 
-    // Create match request
-    const { data, error } = await supabase
-      .from('match_requests')
-      .insert({
-        sender_id: user.id,
-        receiver_id: targetUserId,
-        status: 'pending',
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data?.id || null;
+    const ref = await addDoc(requestsRef, {
+      sender_id: uid,
+      receiver_id: targetUserId,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    });
+    return ref.id;
   } catch (error) {
     console.error('Error sending match request:', error);
     return null;
@@ -2532,36 +2823,41 @@ export const sendMatchRequest = async (targetUserId: string): Promise<string | n
 // Get pending match requests (requests sent to current user)
 export const getPendingMatchRequests = async (): Promise<any[]> => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return [];
+    const uid = auth.currentUser?.uid;
+    if (!uid) return [];
 
-    // Get match requests
-    const { data: requests, error: requestsError } = await supabase
-      .from('match_requests')
-      .select('id, sender_id, status, created_at')
-      .eq('receiver_id', user.id)
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false });
+    const requestsRef = collection(db, 'match_requests');
+    const snap = await getDocs(
+      query(
+        requestsRef,
+        where('receiver_id', '==', uid),
+        where('status', '==', 'pending'),
+        orderBy('created_at', 'desc'),
+        limit(50)
+      )
+    );
+    if (snap.empty) return [];
 
-    if (requestsError) throw requestsError;
-    if (!requests || requests.length === 0) return [];
-
-    // Get sender profiles
-    const senderIds = requests.map(r => r.sender_id);
-    const { data: profiles, error: profilesError } = await supabase
-      .from('profiles')
-      .select('id, display_name, anonymous_username, avatar_url, match_struggles')
-      .in('id', senderIds);
-
-    if (profilesError) throw profilesError;
-
-    // Combine requests with profiles
-    const requestsWithProfiles = requests.map(request => ({
-      ...request,
-      profiles: profiles?.find(p => p.id === request.sender_id) || null,
+    const requests = snap.docs.map((d) => ({ id: d.id, ...d.data(), created_at: d.data().created_at || '' }));
+    const senderIds = [...new Set(requests.map((r: any) => r.sender_id))];
+    const profiles: Record<string, any> = {};
+    for (const sid of senderIds) {
+      const userSnap = await getDoc(doc(db, 'users', sid));
+      if (userSnap.exists()) {
+        const d = userSnap.data();
+        profiles[sid] = {
+          id: sid,
+          display_name: d?.display_name ?? null,
+          anonymous_username: d?.anonymous_username ?? null,
+          avatar_url: d?.avatar_url ?? null,
+          match_struggles: d?.match_struggles ?? [],
+        };
+      }
+    }
+    return requests.map((r: any) => ({
+      ...r,
+      profiles: profiles[r.sender_id] || null,
     }));
-
-    return requestsWithProfiles;
   } catch (error) {
     console.error('Error getting pending match requests:', error);
     return [];
@@ -2571,44 +2867,25 @@ export const getPendingMatchRequests = async (): Promise<any[]> => {
 // Accept a match request
 export const acceptMatchRequest = async (requestId: string): Promise<boolean> => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return false;
 
-    // Get the request
-    const { data: request } = await supabase
-      .from('match_requests')
-      .select('sender_id, receiver_id')
-      .eq('id', requestId)
-      .eq('receiver_id', user.id)
-      .eq('status', 'pending')
-      .single();
+    const requestRef = doc(db, 'match_requests', requestId);
+    const requestSnap = await getDoc(requestRef);
+    if (!requestSnap.exists()) return false;
+    const data = requestSnap.data()!;
+    if (data.receiver_id !== uid || data.status !== 'pending') return false;
 
-    if (!request) return false;
-
-    // Create match (30 minutes)
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + 30);
 
-    const { data: match, error: matchError } = await supabase
-      .from('anonymous_matches')
-      .insert({
-        user1_id: request.sender_id,
-        user2_id: request.receiver_id,
-        status: 'active',
-        expires_at: expiresAt.toISOString(),
-      })
-      .select()
-      .single();
-
-    if (matchError) throw matchError;
-
-    // Update request status
-    const { error: updateError } = await supabase
-      .from('match_requests')
-      .update({ status: 'accepted' })
-      .eq('id', requestId);
-
-    if (updateError) throw updateError;
+    const matchRef = await addDoc(collection(db, 'anonymous_matches'), {
+      user1_id: data.sender_id,
+      user2_id: data.receiver_id,
+      status: 'active',
+      expires_at: expiresAt.toISOString(),
+    });
+    await updateDoc(requestRef, { status: 'accepted' });
     return true;
   } catch (error) {
     console.error('Error accepting match request:', error);
@@ -2619,16 +2896,14 @@ export const acceptMatchRequest = async (requestId: string): Promise<boolean> =>
 // Decline a match request
 export const declineMatchRequest = async (requestId: string): Promise<boolean> => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return false;
 
-    const { error } = await supabase
-      .from('match_requests')
-      .update({ status: 'declined' })
-      .eq('id', requestId)
-      .eq('receiver_id', user.id);
-
-    if (error) throw error;
+    const requestRef = doc(db, 'match_requests', requestId);
+    const requestSnap = await getDoc(requestRef);
+    if (!requestSnap.exists()) return false;
+    if (requestSnap.data()!.receiver_id !== uid) return false;
+    await updateDoc(requestRef, { status: 'declined' });
     return true;
   } catch (error) {
     console.error('Error declining match request:', error);
@@ -2636,8 +2911,7 @@ export const declineMatchRequest = async (requestId: string): Promise<boolean> =
   }
 };
 
-
-// Get active match
+// Get active match (query by user1_id or user2_id)
 export const getActiveMatch = async (): Promise<{
   id: string;
   partnerId: string;
@@ -2645,29 +2919,27 @@ export const getActiveMatch = async (): Promise<{
   timeRemaining: number;
 } | null> => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return null;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return null;
 
-    const { data: match } = await supabase
-      .from('anonymous_matches')
-      .select('id, user1_id, user2_id, expires_at')
-      .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
-      .eq('status', 'active')
-      .single();
-
+    const matchesRef = collection(db, 'anonymous_matches');
+    const [snap1, snap2] = await Promise.all([
+      getDocs(query(matchesRef, where('user1_id', '==', uid), where('status', '==', 'active'), limit(5))),
+      getDocs(query(matchesRef, where('user2_id', '==', uid), where('status', '==', 'active'), limit(5))),
+    ]);
+    const asMatch = (d: any) => ({ id: d.id, ...d.data() });
+    const from1 = snap1.docs.map((d) => asMatch(d));
+    const from2 = snap2.docs.map((d) => asMatch(d));
+    const match = [...from1, ...from2].find((m) => m.status === 'active');
     if (!match) return null;
 
-    const partnerId = match.user1_id === user.id ? match.user2_id : match.user1_id;
+    const partnerId = match.user1_id === uid ? match.user2_id : match.user1_id;
     const expiresAt = new Date(match.expires_at);
     const now = new Date();
     const timeRemaining = Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / 1000 / 60));
 
     if (timeRemaining <= 0) {
-      // Match expired
-      await supabase
-        .from('anonymous_matches')
-        .update({ status: 'expired' })
-        .eq('id', match.id);
+      await updateDoc(doc(db, 'anonymous_matches', match.id), { status: 'expired' });
       return null;
     }
 
@@ -2686,27 +2958,18 @@ export const getActiveMatch = async (): Promise<{
 // Extend match time (add 15 more minutes)
 export const extendMatch = async (matchId: string): Promise<boolean> => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return false;
 
-    const { data: match } = await supabase
-      .from('anonymous_matches')
-      .select('expires_at')
-      .eq('id', matchId)
-      .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
-      .single();
+    const matchRef = doc(db, 'anonymous_matches', matchId);
+    const matchSnap = await getDoc(matchRef);
+    if (!matchSnap.exists()) return false;
+    const d = matchSnap.data()!;
+    if (d.user1_id !== uid && d.user2_id !== uid) return false;
 
-    if (!match) return false;
-
-    const currentExpiry = new Date(match.expires_at);
+    const currentExpiry = new Date(d.expires_at);
     currentExpiry.setMinutes(currentExpiry.getMinutes() + 15);
-
-    const { error } = await supabase
-      .from('anonymous_matches')
-      .update({ expires_at: currentExpiry.toISOString() })
-      .eq('id', matchId);
-
-    if (error) throw error;
+    await updateDoc(matchRef, { expires_at: currentExpiry.toISOString() });
     return true;
   } catch (error) {
     console.error('Error extending match:', error);
@@ -2717,16 +2980,15 @@ export const extendMatch = async (matchId: string): Promise<boolean> => {
 // End match gracefully
 export const endMatch = async (matchId: string): Promise<boolean> => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return false;
 
-    const { error } = await supabase
-      .from('anonymous_matches')
-      .update({ status: 'ended' })
-      .eq('id', matchId)
-      .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`);
-
-    if (error) throw error;
+    const matchRef = doc(db, 'anonymous_matches', matchId);
+    const matchSnap = await getDoc(matchRef);
+    if (!matchSnap.exists()) return false;
+    const d = matchSnap.data()!;
+    if (d.user1_id !== uid && d.user2_id !== uid) return false;
+    await updateDoc(matchRef, { status: 'ended' });
     return true;
   } catch (error) {
     console.error('Error ending match:', error);
@@ -2737,16 +2999,19 @@ export const endMatch = async (matchId: string): Promise<boolean> => {
 // Get match conversation (messages between matched users)
 export const getMatchMessages = async (matchId: string): Promise<any[]> => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return [];
+    const uid = auth.currentUser?.uid;
+    if (!uid) return [];
 
-    const { data: messages } = await supabase
-      .from('match_messages')
-      .select('*')
-      .eq('match_id', matchId)
-      .order('created_at', { ascending: true });
-
-    return messages || [];
+    const messagesRef = collection(db, 'match_messages');
+    const snap = await getDocs(
+      query(
+        messagesRef,
+        where('match_id', '==', matchId),
+        orderBy('created_at', 'asc'),
+        limit(200)
+      )
+    );
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch (error) {
     console.error('Error getting match messages:', error);
     return [];
@@ -2756,22 +3021,17 @@ export const getMatchMessages = async (matchId: string): Promise<any[]> => {
 // Send message in match
 export const sendMatchMessage = async (matchId: string, content: string): Promise<any | null> => {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return null;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return null;
 
-    const { data, error } = await supabase
-      .from('match_messages')
-      .insert({
-        match_id: matchId,
-        sender_id: user.id,
-        content,
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data;
+    const ref = await addDoc(collection(db, 'match_messages'), {
+      match_id: matchId,
+      sender_id: uid,
+      content,
+      created_at: new Date().toISOString(),
+    });
+    const snap = await getDoc(ref);
+    return snap.exists() ? { id: snap.id, ...snap.data() } : null;
   } catch (error) {
     console.error('Error sending match message:', error);
     return null;

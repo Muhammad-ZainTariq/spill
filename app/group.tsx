@@ -5,6 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { doc, getDoc } from 'firebase/firestore';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -22,14 +23,14 @@ import {
     View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { auth, db, storage, ref, uploadBytes, getDownloadURL } from '../lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { auth, db, getDownloadURL, ref, storage, uploadBytes } from '../lib/firebase';
 import {
     acceptStreak,
     checkInToStreak,
     createStreak,
     formatTimeAgo,
     getAvailableStreaks,
+    getCurrentUserRole,
     getGroup,
     getGroupMembers,
     getGroupMessages,
@@ -85,6 +86,11 @@ import {
     const [newStreakName, setNewStreakName] = useState('');
     const [newStreakDescription, setNewStreakDescription] = useState('');
     const [creatingStreak, setCreatingStreak] = useState(false);
+    // Challenge (gamified streak) state
+    const [challengeProgress, setChallengeProgress] = useState<Awaited<ReturnType<typeof getChallengeProgress>>(null);
+    const [loadingChallenge, setLoadingChallenge] = useState(false);
+    const [showChallengeModal, setShowChallengeModal] = useState(false);
+    const [isAppAdmin, setIsAppAdmin] = useState(false);
 
     // Keyboard listeners for smooth input bar animation
     useEffect(() => {
@@ -165,6 +171,16 @@ import {
         }, [groupId, isMember])
     );
 
+    useFocusEffect(
+        useCallback(() => {
+            if (group?.is_challenge && groupId && typeof groupId === 'string') loadChallengeProgress();
+        }, [group?.is_challenge, groupId, loadChallengeProgress])
+    );
+
+    useEffect(() => {
+        getCurrentUserRole().then((r) => setIsAppAdmin(r.is_admin));
+    }, []);
+
     // Load streaks
     const loadStreaks = async () => {
         if (!groupId || typeof groupId !== 'string') return;
@@ -182,6 +198,14 @@ import {
         setLoadingStreaks(false);
         }
     };
+
+    const loadChallengeProgress = useCallback(async () => {
+        if (!groupId || typeof groupId !== 'string') return;
+        setLoadingChallenge(true);
+        const progress = await getChallengeProgress(groupId);
+        setChallengeProgress(progress);
+        setLoadingChallenge(false);
+    }, [groupId]);
 
     // Polling fallback for messages (in case Realtime isn't working)
     useEffect(() => {
@@ -596,6 +620,50 @@ import {
             <Image source={{ uri: group.cover_image_url }} style={styles.coverImage} />
         )}
 
+        {/* Challenge summary (when this is a challenge group) */}
+        {group.is_challenge && (
+            <View style={styles.challengeCard}>
+                {group.managed_by_admin && isAppAdmin && (
+                    <Text style={styles.challengeManagedBy}>Managed by administration</Text>
+                )}
+                <Text style={styles.challengeGoal}>Goal: {group.challenge_goal}</Text>
+                <Text style={styles.challengeDuration}>{group.challenge_duration_days} days in a row to complete</Text>
+                {loadingChallenge ? (
+                    <ActivityIndicator size="small" color="#ec4899" style={{ marginVertical: 8 }} />
+                ) : challengeProgress?.myMember ? (
+                    <View style={styles.challengeMyProgress}>
+                        <Text style={styles.challengeMyStreak}>
+                            Your streak: {challengeProgress.myMember.current_streak} / {group.challenge_duration_days}
+                        </Text>
+                        {challengeProgress.myMember.completed_at ? (
+                            <Text style={styles.challengeCompleted}>Completed! You can leave.</Text>
+                        ) : null}
+                    </View>
+                ) : null}
+                {(isMember || group.creator_id === currentUserId) ? (
+                    <View style={styles.challengeActions}>
+                        <Pressable
+                            style={styles.challengePostProofBtn}
+                            onPress={() => {
+                                if (!groupId || typeof groupId !== 'string') return;
+                                router.push(`/challenge-proof?groupId=${groupId}` as any);
+                            }}
+                        >
+                            <Feather name="camera" size={18} color="#fff" />
+                            <Text style={styles.challengePostProofText}>Post proof</Text>
+                        </Pressable>
+                        <Pressable
+                            style={styles.challengeViewAllBtn}
+                            onPress={() => setShowChallengeModal(true)}
+                        >
+                            <Text style={styles.challengeViewAllText}>Challenge details</Text>
+                            <Feather name="chevron-right" size={18} color="#ec4899" />
+                        </Pressable>
+                    </View>
+                ) : null}
+            </View>
+        )}
+
         {!isMember && group.creator_id !== currentUserId ? (
             <View style={styles.joinPrompt}>
             <Text style={styles.joinPromptText}>Join this group to see messages and participate</Text>
@@ -922,6 +990,94 @@ import {
                 <Text style={styles.deleteButtonText}>Delete Group</Text>
                 </Pressable>
             </ScrollView>
+            </View>
+        )}
+
+        {/* Challenge modal (goal, members, leave) */}
+        {showChallengeModal && group.is_challenge && (
+            <View style={styles.modalOverlay}>
+                <View style={styles.challengeModal}>
+                    <View style={styles.challengeModalHeader}>
+                        <Text style={styles.challengeModalTitle}>Challenge</Text>
+                        <Pressable onPress={() => setShowChallengeModal(false)}>
+                            <Feather name="x" size={24} color="#333" />
+                        </Pressable>
+                    </View>
+                    <ScrollView style={styles.challengeModalScroll} contentContainerStyle={styles.challengeModalContent}>
+                        <Text style={styles.challengeModalGoal}>{group.challenge_goal}</Text>
+                        <Text style={styles.challengeModalDuration}>{group.challenge_duration_days} days in a row • Post camera proof each day</Text>
+                        {loadingChallenge ? (
+                            <ActivityIndicator size="small" color="#ec4899" style={{ marginVertical: 16 }} />
+                        ) : (
+                            <>
+                                <Text style={styles.challengeMembersTitle}>Members</Text>
+                                {challengeProgress?.members.map((m) => (
+                                    <View key={m.user_id} style={styles.challengeMemberRow}>
+                                        <Text style={styles.challengeMemberName}>
+                                            {m.display_name || m.anonymous_username || 'Anonymous'}
+                                        </Text>
+                                        <View style={styles.challengeMemberMeta}>
+                                            {m.completed_at ? (
+                                                <Text style={styles.challengeMemberDone}>Done</Text>
+                                            ) : (
+                                                <Text style={styles.challengeMemberStreak}>{m.current_streak} / {group.challenge_duration_days}</Text>
+                                            )}
+                                            {m.has_proof_today && <Text style={styles.challengeMemberToday}>Today ✓</Text>}
+                                        </View>
+                                    </View>
+                                ))}
+                                <Pressable
+                                    style={styles.challengePostProofBtnModal}
+                                    onPress={() => {
+                                        setShowChallengeModal(false);
+                                        if (groupId && typeof groupId === 'string') router.push(`/challenge-proof?groupId=${groupId}` as any);
+                                    }}
+                                >
+                                    <Feather name="camera" size={18} color="#fff" />
+                                    <Text style={styles.challengePostProofText}>Post proof</Text>
+                                </Pressable>
+                                {challengeProgress?.myMember && (
+                                    <Pressable
+                                        style={challengeProgress.myMember.completed_at ? styles.challengeLeaveBtn : styles.challengeLeaveBtnForfeit}
+                                        onPress={async () => {
+                                            if (!groupId || typeof groupId !== 'string') return;
+                                            if (challengeProgress.myMember?.completed_at) {
+                                                const ok = await leaveChallengeGroup(groupId, false);
+                                                if (ok) {
+                                                    setShowChallengeModal(false);
+                                                    router.back();
+                                                }
+                                            } else {
+                                                Alert.alert(
+                                                    'Leave challenge?',
+                                                    'You haven\'t completed the challenge. Leave anyway? (Your progress will be lost.)',
+                                                    [
+                                                        { text: 'Cancel', style: 'cancel' },
+                                                        {
+                                                            text: 'Leave',
+                                                            style: 'destructive',
+                                                            onPress: async () => {
+                                                                const ok = await leaveChallengeGroup(groupId, true);
+                                                                if (ok) {
+                                                                    setShowChallengeModal(false);
+                                                                    router.back();
+                                                                }
+                                                            },
+                                                        },
+                                                    ]
+                                                );
+                                            }
+                                        }}
+                                    >
+                                        <Text style={challengeProgress.myMember.completed_at ? styles.challengeLeaveText : styles.challengeLeaveTextForfeit}>
+                                            {challengeProgress.myMember.completed_at ? 'Leave challenge' : 'Leave anyway (forfeit)'}
+                                        </Text>
+                                    </Pressable>
+                                )}
+                            </>
+                        )}
+                    </ScrollView>
+                </View>
             </View>
         )}
 
@@ -1620,6 +1776,88 @@ import {
         fontWeight: '700',
         letterSpacing: 0.3,
     },
+    challengeCard: {
+        backgroundColor: '#fef3c7',
+        marginHorizontal: 16,
+        marginTop: 12,
+        padding: 16,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: '#fcd34d',
+    },
+    challengeManagedBy: { fontSize: 11, fontWeight: '700', color: '#b45309', marginBottom: 6 },
+    challengeGoal: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
+    challengeDuration: { fontSize: 13, color: '#64748b', marginTop: 4 },
+    challengeMyProgress: { marginTop: 10 },
+    challengeMyStreak: { fontSize: 15, fontWeight: '700', color: '#0f172a' },
+    challengeCompleted: { fontSize: 13, color: '#10b981', marginTop: 4, fontWeight: '600' },
+    challengeActions: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12 },
+    challengePostProofBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#ec4899',
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 12,
+    },
+    challengePostProofText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+    challengeViewAllBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    challengeViewAllText: { fontSize: 14, fontWeight: '600', color: '#ec4899' },
+    challengeModal: { backgroundColor: '#fff', borderRadius: 24, maxHeight: '85%', marginHorizontal: 20 },
+    challengeModalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: 20,
+        borderBottomWidth: 1,
+        borderBottomColor: '#e2e8f0',
+    },
+    challengeModalTitle: { fontSize: 20, fontWeight: '800', color: '#0f172a' },
+    challengeModalScroll: { maxHeight: 400 },
+    challengeModalContent: { padding: 20, paddingBottom: 32 },
+    challengeModalGoal: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
+    challengeModalDuration: { fontSize: 14, color: '#64748b', marginTop: 4, marginBottom: 16 },
+    challengeMembersTitle: { fontSize: 14, fontWeight: '700', color: '#64748b', marginBottom: 10 },
+    challengeMemberRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#f1f5f9',
+    },
+    challengeMemberName: { fontSize: 15, fontWeight: '600', color: '#0f172a' },
+    challengeMemberMeta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    challengeMemberDone: { fontSize: 13, color: '#10b981', fontWeight: '600' },
+    challengeMemberStreak: { fontSize: 13, color: '#64748b', fontWeight: '600' },
+    challengeMemberToday: { fontSize: 12, color: '#10b981' },
+    challengePostProofBtnModal: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: '#ec4899',
+        paddingVertical: 14,
+        borderRadius: 12,
+        marginTop: 20,
+    },
+    challengeLeaveBtn: {
+        marginTop: 12,
+        paddingVertical: 14,
+        borderRadius: 12,
+        backgroundColor: '#f1f5f9',
+        alignItems: 'center',
+    },
+    challengeLeaveBtnForfeit: {
+        marginTop: 12,
+        paddingVertical: 14,
+        borderRadius: 12,
+        backgroundColor: '#fef2f2',
+        alignItems: 'center',
+    },
+    challengeLeaveText: { fontSize: 16, fontWeight: '700', color: '#64748b' },
+    challengeLeaveTextForfeit: { fontSize: 16, fontWeight: '700', color: '#dc2626' },
     streaksHeaderEmoji: {
         fontSize: 16,
         marginRight: 4,

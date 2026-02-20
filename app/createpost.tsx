@@ -1,6 +1,6 @@
-import { auth, db, storage, ref, uploadBytes, getDownloadURL } from '@/lib/firebase';
+import { auth, db, storage, ref, getDownloadURL, functions } from '@/lib/firebase';
 import { collection, addDoc } from 'firebase/firestore';
-import { Buffer } from 'buffer';
+import { httpsCallable } from 'firebase/functions';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -61,32 +61,30 @@ export default function CreatePost() {
   const uploadMediaIfNeeded = async (userId: string): Promise<string | null> => {
     if (!localMedia) return mediaUrl.trim() ? mediaUrl.trim() : null;
     try {
-      // Read file as base64 and convert to Uint8Array for upload (no Blob in RN)
-      let byteArray: Uint8Array | Buffer;
-      try {
-        const base64Data = await FileSystem.readAsStringAsync(localMedia.uri, { encoding: FileSystem.EncodingType.Base64 });
-        byteArray = Buffer.from(base64Data, 'base64');
-      } catch (readErr) {
-        const resp = await fetch(localMedia.uri);
-        const arrBuf = await resp.arrayBuffer();
-        byteArray = new Uint8Array(arrBuf);
-      }
-      if (!byteArray?.length) {
+      // Upload via Cloud Function (React Native SDK fails on Blob/ArrayBuffer; server has full Buffer support)
+      const base64Data = await FileSystem.readAsStringAsync(localMedia.uri, { encoding: FileSystem.EncodingType.Base64 });
+      if (!base64Data?.length) {
         Alert.alert('Upload failed', 'Could not read the selected file.');
         return null;
       }
 
       const mime = localMedia.mimeType?.trim() || (localMedia.type === 'video' ? 'video/mp4' : 'image/jpeg');
       const ext = mime.includes('png') ? 'png' : mime.includes('gif') ? 'gif' : localMedia.type === 'image' ? 'jpg' : 'mp4';
-      const path = `${userId}/${Date.now()}.${ext}`;
+      const filePath = `${userId}/${Date.now()}.${ext}`;
       const bucketName = mime.startsWith('video/') ? 'video-data' : 'image-data';
-      const storageRef = ref(storage, `${bucketName}/${path}`);
-      await uploadBytes(storageRef, byteArray, { contentType: mime });
-      const url = await getDownloadURL(storageRef);
+      const fullPath = `${bucketName}/${filePath}`;
+
+      const uploadMedia = httpsCallable<{ base64: string; contentType: string; path: string }, { path: string }>(functions, 'uploadMedia');
+      const { data } = await uploadMedia({ base64: base64Data, contentType: mime, path: fullPath });
+      if (!data?.path?.trim()) return null;
+      const url = await getDownloadURL(ref(storage, data.path.trim()));
       return url || null;
     } catch (e: any) {
       console.error('Upload exception', e);
-      const msg = e?.message || 'Something went wrong while uploading.';
+      const isNotFound = e?.code === 'functions/not-found' || e?.message?.includes('not-found');
+      const msg = isNotFound
+        ? 'Upload server not deployed. Run: cd functions && npx firebase deploy --only functions'
+        : (e?.message || 'Something went wrong while uploading.');
       Alert.alert('Upload failed', msg);
       return null;
     }

@@ -1,36 +1,39 @@
-import { auth } from '@/lib/firebase';
-import { getDoc, doc } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
+import { doc, getDoc } from 'firebase/firestore';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View
+    ActivityIndicator,
+    Alert,
+    FlatList,
+    KeyboardAvoidingView,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  acceptMessageRequest,
-  declineMessageRequest,
-  fetchMessages,
-  formatTimeAgo,
-  getConversations,
-  getGroups,
-  getOrCreateConversation,
-  getPendingRequests,
-  Group,
-  sendMessage
+    acceptMessageRequest,
+    CHALLENGE_CATEGORIES,
+    declineMessageRequest,
+    fetchMessages,
+    formatTimeAgo,
+    getConversations,
+    getCurrentUserRole,
+    getGroups,
+    getOfficialChallenges,
+    getOrCreateConversation,
+    getPendingRequests,
+    Group,
+    sendMessage
 } from '../functions';
 
 interface Message {
@@ -63,6 +66,10 @@ export default function ConnectionsScreen() {
 
   const [groups, setGroups] = useState<Group[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(true);
+  const [officialChallenges, setOfficialChallenges] = useState<any[]>([]);
+  const [loadingOfficial, setLoadingOfficial] = useState(false);
+  const [isAppAdmin, setIsAppAdmin] = useState(false);
+  const [challengeCategoryFilter, setChallengeCategoryFilter] = useState<string>('All');
 
   const [requests, setRequests] = useState<any[]>([]);
   const [loadingRequests, setLoadingRequests] = useState(true);
@@ -114,6 +121,20 @@ export default function ConnectionsScreen() {
       setGroups([]);
     } finally {
       setLoadingGroups(false);
+    }
+  };
+
+  const loadOfficialChallenges = async () => {
+    try {
+      const role = await getCurrentUserRole();
+      setIsAppAdmin(role.is_admin);
+      setLoadingOfficial(true);
+      const list = await getOfficialChallenges(); // all users can browse and join; we filter by challengeCategoryFilter in UI
+      setOfficialChallenges(list);
+    } catch (e) {
+      setOfficialChallenges([]);
+    } finally {
+      setLoadingOfficial(false);
     }
   };
 
@@ -233,6 +254,7 @@ export default function ConnectionsScreen() {
     setCurrentUserId(auth.currentUser?.uid || null);
     loadConversations();
     loadGroups();
+    loadOfficialChallenges();
     loadRequests();
     loadSettings();
     const interval = setInterval(() => {
@@ -386,6 +408,7 @@ export default function ConnectionsScreen() {
       item.creator?.display_name ||
       item.creator?.anonymous_username ||
       'Anonymous';
+    const isChallenge = (item as any).is_challenge === true;
 
     return (
       <Pressable
@@ -393,19 +416,30 @@ export default function ConnectionsScreen() {
         onPress={() => router.push(`/group?groupId=${item.id}` as any)}
       >
         <View style={styles.groupInfo}>
-          <Text style={styles.groupName} numberOfLines={1}>
-            {item.name}
-          </Text>
+          <View style={styles.groupNameRow}>
+            <Text style={styles.groupName} numberOfLines={1}>
+              {item.name}
+            </Text>
+            {isChallenge && (
+              <View style={styles.challengeBadge}>
+                <Text style={styles.challengeBadgeText}>Challenge</Text>
+              </View>
+            )}
+          </View>
           <Text style={styles.groupCreator} numberOfLines={1}>
             by {creatorName}
           </Text>
-          {item.description ? (
+          {isChallenge && (item as any).challenge_goal ? (
+            <Text style={styles.groupDescription} numberOfLines={1}>
+              {(item as any).challenge_goal} • {(item as any).challenge_duration_days} days
+            </Text>
+          ) : item.description ? (
             <Text style={styles.groupDescription} numberOfLines={2}>
               {item.description}
             </Text>
           ) : null}
         </View>
-        {item.category && (
+        {item.category && !isChallenge && (
           <View style={styles.groupCategoryBadge}>
             <Text style={styles.groupCategoryText}>
               {item.category.replace('_', ' ')}
@@ -732,16 +766,81 @@ export default function ConnectionsScreen() {
             keyExtractor={(item) => item.id}
             renderItem={renderGroupItem}
             contentContainerStyle={styles.listContent}
+            ListHeaderComponent={
+              <View style={styles.groupsListHeader}>
+                <Pressable
+                  style={styles.createChallengeButton}
+                  onPress={() => router.push('/create-challenge' as any)}
+                >
+                  <Feather name="zap" size={20} color="#fff" />
+                  <Text style={styles.createChallengeButtonText}>Create challenge</Text>
+                </Pressable>
+                {(loadingOfficial ? (
+                  <ActivityIndicator size="small" color="#ec4899" style={{ marginVertical: 12 }} />
+                ) : officialChallenges.length > 0 ? (
+                  <View style={styles.officialSection}>
+                    <Text style={styles.officialSectionTitle}>Official challenges (admin)</Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      style={styles.challengeCategoryScroll}
+                      contentContainerStyle={styles.challengeCategoryContent}
+                    >
+                      <Pressable
+                        style={[styles.challengeCategoryChip, challengeCategoryFilter === 'All' && styles.challengeCategoryChipActive]}
+                        onPress={() => setChallengeCategoryFilter('All')}
+                      >
+                        <Text style={[styles.challengeCategoryChipText, challengeCategoryFilter === 'All' && styles.challengeCategoryChipTextActive]}>All</Text>
+                      </Pressable>
+                      {CHALLENGE_CATEGORIES.map((c) => (
+                        <Pressable
+                          key={c.value}
+                          style={[styles.challengeCategoryChip, challengeCategoryFilter === c.value && styles.challengeCategoryChipActive]}
+                          onPress={() => setChallengeCategoryFilter(c.value)}
+                        >
+                          <Text style={[styles.challengeCategoryChipText, challengeCategoryFilter === c.value && styles.challengeCategoryChipTextActive]}>{c.label}</Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                    {(challengeCategoryFilter === 'All'
+                      ? officialChallenges
+                      : officialChallenges.filter((c) => (c.challenge_category || 'other') === challengeCategoryFilter)
+                    ).map((item) => (
+                      <Pressable
+                        key={item.id}
+                        style={styles.officialChallengeItem}
+                        onPress={() => router.push(`/group?groupId=${item.id}` as any)}
+                      >
+                        <View style={styles.groupInfo}>
+                          <Text style={styles.groupName} numberOfLines={1}>{item.name}</Text>
+                          <Text style={styles.officialCategoryTag}>
+                            {CHALLENGE_CATEGORIES.find((x) => x.value === (item.challenge_category || 'other'))?.label ?? '✨ Other'}
+                          </Text>
+                          <Text style={styles.officialManagedBy}>Managed by administration</Text>
+                          {item.challenge_goal ? (
+                            <Text style={styles.groupDescription} numberOfLines={1}>
+                              {item.challenge_goal} • {item.challenge_duration_days} days
+                            </Text>
+                          ) : null}
+                        </View>
+                        <Feather name="chevron-right" size={20} color="#9ca3af" />
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null)}
+                <Text style={styles.allGroupsTitle}>All groups</Text>
+              </View>
+            }
             ListEmptyComponent={
               <View style={styles.emptyState}>
                 <Text style={styles.emptyTitle}>No groups yet</Text>
                 <Text style={styles.emptySubtitle}>
-                  Create a group to start a new space.
+                  Create a group or start a challenge.
                 </Text>
               </View>
             }
             refreshing={loadingGroups}
-            onRefresh={loadGroups}
+            onRefresh={() => { loadGroups(); loadOfficialChallenges(); }}
           />
         )
       ) : showRequests ? (
@@ -1060,11 +1159,28 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: 12,
   },
+  groupNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 2,
+  },
   groupName: {
+    flex: 1,
     fontSize: 16,
     fontWeight: '700',
     color: '#111827',
-    marginBottom: 2,
+  },
+  challengeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: '#fef3c7',
+  },
+  challengeBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#b45309',
   },
   groupCreator: {
     fontSize: 12,
@@ -1085,6 +1201,76 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#6b7280',
+  },
+  groupsListHeader: {
+    paddingBottom: 16,
+  },
+  createChallengeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#ec4899',
+    paddingVertical: 14,
+    borderRadius: 16,
+    marginBottom: 16,
+  },
+  createChallengeButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  officialSection: {
+    marginBottom: 16,
+  },
+  officialSectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#6b7280',
+    marginBottom: 10,
+    textTransform: 'uppercase',
+  },
+  challengeCategoryScroll: { marginBottom: 10 },
+  challengeCategoryContent: { flexDirection: 'row', gap: 8, paddingVertical: 4 },
+  challengeCategoryChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  challengeCategoryChipActive: { backgroundColor: '#ec4899', borderColor: '#ec4899' },
+  challengeCategoryChipText: { fontSize: 12, fontWeight: '600', color: '#475569' },
+  challengeCategoryChipTextActive: { color: '#fff' },
+  officialCategoryTag: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+    marginTop: 2,
+  },
+  officialChallengeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fef3c7',
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+  },
+  officialManagedBy: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#b45309',
+    marginTop: 2,
+  },
+  allGroupsTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#6b7280',
+    marginBottom: 10,
+    textTransform: 'uppercase',
   },
   requestBadge: {
     position: 'absolute',

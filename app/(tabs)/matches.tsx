@@ -761,6 +761,13 @@ export default function MatchesScreen() {
               </Text>
             </View>
             <View style={styles.matchActions}>
+              <Pressable
+                style={styles.matchActionButton}
+                onPress={() => router.push({ pathname: '/game-webview', params: { room: activeMatch.id, gameType: 'tictactoe' } } as any)}
+              >
+                <Feather name="grid" size={18} color="#ec4899" />
+                <Text style={styles.matchActionText}>Play</Text>
+              </Pressable>
               <Pressable style={styles.matchActionButton} onPress={handleExtendMatch}>
                 <Feather name="clock" size={18} color="#ec4899" />
                 <Text style={styles.matchActionText}>+15m</Text>

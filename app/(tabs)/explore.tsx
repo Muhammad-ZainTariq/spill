@@ -604,18 +604,24 @@ export default function MoodGratitudeScreen() {
         {/* Quick Actions */}
         <View style={styles.quickActions}>
           <Pressable
-            style={[styles.quickActionButton, styles.moodButton]}
-            onPress={() => setShowMoodModal(true)}
+            style={({ pressed }) => [styles.quickActionButton, styles.moodButton, pressed && styles.quickActionPressed]}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowMoodModal(true); }}
           >
-            <Text style={styles.quickActionEmoji}>😊</Text>
+            <View style={styles.quickActionIconWrap}>
+              <Feather name="smile" size={28} color="#ec4899" strokeWidth={2} />
+            </View>
             <Text style={styles.quickActionText}>Check In</Text>
+            <Text style={styles.quickActionHint}>Log how you feel</Text>
           </Pressable>
           <Pressable
-            style={[styles.quickActionButton, styles.gratitudeButton]}
-            onPress={() => setShowGratitudeModal(true)}
+            style={({ pressed }) => [styles.quickActionButton, styles.gratitudeButton, pressed && styles.quickActionPressed]}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowGratitudeModal(true); }}
           >
-            <Text style={styles.quickActionEmoji}>✨</Text>
+            <View style={styles.quickActionIconWrap}>
+              <Feather name="plus-circle" size={28} color="#ec4899" strokeWidth={2} />
+            </View>
             <Text style={styles.quickActionText}>Add Gratitude</Text>
+            <Text style={styles.quickActionHint}>Capture a positive moment</Text>
           </Pressable>
         </View>
 
@@ -649,36 +655,27 @@ export default function MoodGratitudeScreen() {
         {/* Gratitude Jar */}
         <View style={styles.jarCard}>
           <View style={styles.jarHeader}>
-            <Text style={styles.jarTitle}>✨ Gratitude Jar</Text>
+            <View style={styles.jarTitleRow}>
+              <Feather name="gift" size={22} color="#ec4899" strokeWidth={2} />
+              <Text style={styles.jarTitle}>Gratitude Jar</Text>
+            </View>
             <View style={styles.jarBadge}>
               <Text style={styles.jarBadgeText}>{gratitudeCount}</Text>
             </View>
           </View>
-          <Text style={styles.jarSubtitle}>Shake your phone or tap the button to see a random gratitude!</Text>
+          <Text style={styles.jarSubtitle}>Shake your phone or tap below to see a random gratitude</Text>
           <View style={styles.jarContainer}>
             <View style={styles.jarOuter}>
               <View style={styles.jar}>
-                {/* Animated fill with gradient effect */}
                 <View
                   style={[
                     styles.jarFill,
-                    {
-                      height: `${Math.max(jarFillPercentage, 5)}%`,
-                    },
+                    { height: `${Math.max(jarFillPercentage, 5)}%` },
                   ]}
                 >
                   <View style={styles.jarFillGradient} />
-                  {jarFillPercentage > 20 && (
-                    <View style={styles.jarSparkles}>
-                      <Text style={styles.jarSparkle}>✨</Text>
-                      <Text style={[styles.jarSparkle, styles.jarSparkle2]}>✨</Text>
-                      <Text style={[styles.jarSparkle, styles.jarSparkle3]}>✨</Text>
-                    </View>
-                  )}
                 </View>
-                {/* Jar lid */}
                 <View style={styles.jarLid} />
-                {/* Count text */}
                 <View style={styles.jarCountContainer}>
                   <Text style={styles.jarCount}>{gratitudeCount}</Text>
                   <Text style={styles.jarCountLabel}>gratitudes</Text>
@@ -687,11 +684,8 @@ export default function MoodGratitudeScreen() {
             </View>
           </View>
           {gratitudeCount > 0 && (
-            <Pressable
-              style={styles.randomButton}
-              onPress={handleShake}
-            >
-              <Feather name="shuffle" size={18} color="#fff" />
+            <Pressable style={({ pressed }) => [styles.randomButton, pressed && styles.quickActionPressed]} onPress={handleShake}>
+              <Feather name="shuffle" size={18} color="#fff" strokeWidth={2} />
               <Text style={styles.randomButtonText}>Random Gratitude</Text>
             </Pressable>
           )}
@@ -723,8 +717,11 @@ export default function MoodGratitudeScreen() {
 
         {gratitudeEntries.length === 0 && (
           <View style={styles.emptyState}>
+            <View style={styles.emptyIconWrap}>
+              <Feather name="gift" size={40} color="#e2e8f0" strokeWidth={1.5} />
+            </View>
             <Text style={styles.emptyText}>No gratitudes yet</Text>
-            <Text style={styles.emptySubtext}>Start adding positive moments to fill your jar!</Text>
+            <Text style={styles.emptySubtext}>Tap “Add Gratitude” above to capture positive moments and fill your jar.</Text>
           </View>
         )}
       </ScrollView>
@@ -872,7 +869,7 @@ export default function MoodGratitudeScreen() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.randomGratitudeContent}>
-            <Text style={styles.randomGratitudeTitle}>✨ Random Gratitude ✨</Text>
+            <Text style={styles.randomGratitudeTitle}>Random Gratitude</Text>
             {randomGratitude && (
               <>
                 <Text style={styles.randomGratitudeText}>{randomGratitude.content}</Text>
@@ -901,7 +898,7 @@ export default function MoodGratitudeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: '#f8fafc',
   },
   loadingContainer: {
     justifyContent: 'center',
@@ -919,65 +916,77 @@ const styles = StyleSheet.create({
     paddingBottom: 100,
   },
   header: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
+    paddingHorizontal: 24,
+    paddingBottom: 24,
   },
   headerTitle: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: '800',
-    color: '#111827',
-    marginBottom: 4,
+    color: '#0f172a',
+    marginBottom: 6,
+    letterSpacing: -0.5,
   },
   headerSubtitle: {
-    fontSize: 16,
-    color: '#6b7280',
+    fontSize: 15,
+    color: '#64748b',
   },
   quickActions: {
     flexDirection: 'row',
-    paddingHorizontal: 20,
-    gap: 12,
-    marginBottom: 20,
+    paddingHorizontal: 24,
+    gap: 14,
+    marginBottom: 24,
   },
   quickActionButton: {
     flex: 1,
     backgroundColor: '#fff',
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 20,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
     elevation: 3,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
   },
-  moodButton: {
-    borderLeftWidth: 4,
-    borderLeftColor: '#ec4899',
+  quickActionPressed: {
+    opacity: 0.85,
   },
-  gratitudeButton: {
-    borderLeftWidth: 4,
-    borderLeftColor: '#fbbf24',
-  },
-  quickActionEmoji: {
-    fontSize: 32,
-    marginBottom: 8,
+  moodButton: {},
+  gratitudeButton: {},
+  quickActionIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#fdf2f8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
   },
   quickActionText: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#111827',
+    color: '#0f172a',
+  },
+  quickActionHint: {
+    fontSize: 12,
+    color: '#94a3b8',
+    marginTop: 4,
   },
   statsCard: {
     backgroundColor: '#fff',
-    marginHorizontal: 20,
+    marginHorizontal: 24,
     marginBottom: 20,
-    borderRadius: 16,
-    padding: 20,
+    borderRadius: 20,
+    padding: 24,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
     elevation: 3,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
   },
   statsTitle: {
     fontSize: 18,
@@ -1004,15 +1013,17 @@ const styles = StyleSheet.create({
   },
   chartCard: {
     backgroundColor: '#fff',
-    marginHorizontal: 20,
+    marginHorizontal: 24,
     marginBottom: 20,
-    borderRadius: 16,
-    padding: 20,
+    borderRadius: 20,
+    padding: 24,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
     elevation: 3,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
   },
   chartTitle: {
     fontSize: 18,
@@ -1077,63 +1088,68 @@ const styles = StyleSheet.create({
   },
   jarCard: {
     backgroundColor: '#fff',
-    marginHorizontal: 20,
-    marginBottom: 20,
-    borderRadius: 20,
-    padding: 24,
-    shadowColor: '#fbbf24',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
+    marginHorizontal: 24,
+    marginBottom: 24,
+    borderRadius: 24,
+    padding: 28,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
     shadowRadius: 12,
-    elevation: 5,
+    elevation: 3,
     borderWidth: 1,
-    borderColor: '#fef3c7',
+    borderColor: '#fce7f3',
   },
   jarHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 10,
+  },
+  jarTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   jarTitle: {
     fontSize: 20,
     fontWeight: '800',
-    color: '#111827',
+    color: '#0f172a',
   },
   jarBadge: {
-    backgroundColor: '#fef3c7',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    backgroundColor: '#fdf2f8',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#fbbf24',
+    borderWidth: 1,
+    borderColor: '#fbcfe8',
   },
   jarBadgeText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '800',
-    color: '#92400e',
+    color: '#ec4899',
   },
   jarSubtitle: {
     fontSize: 14,
-    color: '#6b7280',
-    marginBottom: 24,
+    color: '#64748b',
+    marginBottom: 28,
     textAlign: 'center',
   },
   randomButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fbbf24',
-    paddingVertical: 14,
+    backgroundColor: '#ec4899',
+    paddingVertical: 16,
     paddingHorizontal: 28,
     borderRadius: 16,
-    marginTop: 24,
+    marginTop: 28,
     gap: 10,
-    shadowColor: '#fbbf24',
+    shadowColor: '#ec4899',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
+    shadowOpacity: 0.25,
     shadowRadius: 8,
-    elevation: 5,
+    elevation: 4,
   },
   randomButtonText: {
     color: '#fff',
@@ -1143,32 +1159,32 @@ const styles = StyleSheet.create({
   jarContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 20,
+    paddingVertical: 24,
   },
   jarOuter: {
-    shadowColor: '#fbbf24',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
+    shadowColor: '#ec4899',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
     shadowRadius: 16,
-    elevation: 8,
+    elevation: 6,
   },
   jar: {
     width: 140,
     height: 200,
     borderRadius: 70,
-    borderWidth: 5,
-    borderColor: '#fbbf24',
-    backgroundColor: '#fef9e7',
+    borderWidth: 4,
+    borderColor: '#fbcfe8',
+    backgroundColor: '#fdf2f8',
     overflow: 'hidden',
     position: 'relative',
     justifyContent: 'flex-end',
   },
   jarFill: {
     width: '100%',
-    borderBottomLeftRadius: 65,
-    borderBottomRightRadius: 65,
+    borderBottomLeftRadius: 66,
+    borderBottomRightRadius: 66,
     position: 'relative',
-    backgroundColor: '#fcd34d',
+    backgroundColor: '#f9a8d4',
     minHeight: 10,
   },
   jarFillGradient: {
@@ -1176,38 +1192,20 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: '30%',
-    backgroundColor: '#fbbf24',
-    opacity: 0.6,
-  },
-  jarSparkles: {
-    position: 'absolute',
-    top: '20%',
-    left: '50%',
-    transform: [{ translateX: -20 }],
-  },
-  jarSparkle: {
-    fontSize: 16,
-    position: 'absolute',
-  },
-  jarSparkle2: {
-    left: -30,
-    top: 10,
-  },
-  jarSparkle3: {
-    left: 10,
-    top: 15,
+    height: '40%',
+    backgroundColor: '#ec4899',
+    opacity: 0.4,
   },
   jarLid: {
     position: 'absolute',
-    top: -8,
-    left: -5,
-    right: -5,
-    height: 20,
-    backgroundColor: '#fbbf24',
+    top: -6,
+    left: -4,
+    right: -4,
+    height: 18,
+    backgroundColor: '#fbcfe8',
     borderRadius: 10,
-    borderWidth: 3,
-    borderColor: '#f59e0b',
+    borderWidth: 2,
+    borderColor: '#f9a8d4',
     zIndex: 10,
   },
   jarCountContainer: {
@@ -1221,15 +1219,12 @@ const styles = StyleSheet.create({
   jarCount: {
     fontSize: 32,
     fontWeight: '900',
-    color: '#92400e',
-    textShadowColor: 'rgba(255, 255, 255, 0.8)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
+    color: '#be185d',
   },
   jarCountLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#b45309',
+    color: '#9d174d',
     marginTop: 2,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -1260,15 +1255,17 @@ const styles = StyleSheet.create({
   },
   gratitudesCard: {
     backgroundColor: '#fff',
-    marginHorizontal: 20,
-    marginBottom: 20,
-    borderRadius: 16,
-    padding: 20,
+    marginHorizontal: 24,
+    marginBottom: 24,
+    borderRadius: 20,
+    padding: 24,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
     elevation: 3,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
   },
   gratitudesTitle: {
     fontSize: 18,
@@ -1299,19 +1296,31 @@ const styles = StyleSheet.create({
   },
   emptyState: {
     alignItems: 'center',
-    paddingVertical: 40,
-    paddingHorizontal: 20,
+    paddingVertical: 48,
+    paddingHorizontal: 32,
+  },
+  emptyIconWrap: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
   },
   emptyText: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#6b7280',
+    fontWeight: '700',
+    color: '#334155',
     marginBottom: 8,
   },
   emptySubtext: {
-    fontSize: 14,
-    color: '#9ca3af',
+    fontSize: 15,
+    color: '#64748b',
     textAlign: 'center',
+    lineHeight: 22,
   },
   modalOverlay: {
     flex: 1,
@@ -1320,15 +1329,15 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: '#fff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
-    paddingBottom: 40,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 28,
+    paddingBottom: 48,
   },
   modalTitle: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '800',
-    color: '#111827',
+    color: '#0f172a',
     marginBottom: 24,
     textAlign: 'center',
   },
@@ -1409,15 +1418,17 @@ const styles = StyleSheet.create({
   },
   randomGratitudeContent: {
     backgroundColor: '#fff',
-    margin: 20,
-    borderRadius: 24,
-    padding: 32,
+    margin: 24,
+    borderRadius: 28,
+    padding: 36,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
   },
   randomGratitudeTitle: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '800',
-    color: '#111827',
+    color: '#0f172a',
     marginBottom: 24,
   },
   randomGratitudeText: {

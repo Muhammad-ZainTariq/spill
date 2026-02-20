@@ -8,12 +8,16 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
-  View
+  TextInput,
+  View,
 } from 'react-native';
 import Reanimated, {
   useAnimatedStyle,
@@ -23,21 +27,31 @@ import Reanimated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  addComment,
   cancelPremium,
   checkPremiumStatus,
   deletePost,
   downvotePost,
+  fetchComments,
   fetchPosts,
   fetchUserProfile,
   formatTimeAgo,
   getAIOpinion,
-  handleComment,
   handleMoreOptions,
   handleScroll,
   Post,
   removeVote,
   upvotePost
 } from '../functions';
+
+type SheetComment = {
+  id: string;
+  content: string;
+  created_at: string;
+  parent_comment_id?: string | null;
+  profiles: { display_name?: string; anonymous_username?: string; avatar_url?: string } | null;
+  replies?: SheetComment[];
+};
 
 // Animated Hamburger Menu Component
 function HamburgerMenu({ isOpen }: { isOpen: boolean }) {
@@ -108,49 +122,33 @@ function VoteButton({
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const iconName = type === 'upvote' ? 'heart' : 'thumbs-down';
-  const activeColor = type === 'upvote' ? '#ef4444' : '#6366f1';
-  
+  const activeColor = type === 'upvote' ? '#ec4899' : '#64748b';
+
   const handlePress = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    
-    // Scale animation
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Animated.sequence([
-      Animated.spring(scaleAnim, {
-        toValue: 1.3,
-        useNativeDriver: true,
-        tension: 300,
-        friction: 7,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        useNativeDriver: true,
-        tension: 300,
-        friction: 7,
-      }),
+      Animated.timing(scaleAnim, { toValue: 1.2, useNativeDriver: true, duration: 80 }),
+      Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, tension: 400, friction: 12 }),
     ]).start();
-    
     onPress(postId);
   };
 
   return (
-    <View style={styles.voteButtonContainer}>
-      <Pressable
-        style={styles.voteButton}
-        onPress={handlePress}
-      >
-        <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-          <Feather 
-            name={iconName} 
-            size={22} 
-            color={isActive ? activeColor : '#666'}
-            fill={isActive ? activeColor : 'none'}
-          />
-        </Animated.View>
-      </Pressable>
-      <Text style={[styles.voteCount, isActive && styles.voteCountActive]}>
-        {count}
-      </Text>
-    </View>
+    <Pressable
+      onPress={handlePress}
+      style={({ pressed }) => [styles.actionItem, pressed && styles.actionItemPressed]}
+    >
+      <Animated.View style={[styles.actionIconWrap, { transform: [{ scale: scaleAnim }] }]}>
+        <Feather
+          name={iconName}
+          size={22}
+          color={isActive ? activeColor : '#94a3b8'}
+          fill={isActive ? activeColor : 'none'}
+          strokeWidth={2.2}
+        />
+      </Animated.View>
+      <Text style={[styles.actionCount, isActive && { color: activeColor }]}>{count}</Text>
+    </Pressable>
   );
 }
 
@@ -285,6 +283,11 @@ export default function HomeScreen() {
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
   const [aiResponses, setAiResponses] = useState<Record<string, string>>({});
   const [isPremium, setIsPremium] = useState(false);
+  const [commentSheetPostId, setCommentSheetPostId] = useState<string | null>(null);
+  const [sheetComments, setSheetComments] = useState<SheetComment[]>([]);
+  const [sheetCommentsLoading, setSheetCommentsLoading] = useState(false);
+  const [newCommentText, setNewCommentText] = useState('');
+  const [submittingComment, setSubmittingComment] = useState(false);
   const menuTranslateX = useSharedValue(-320);
   
   // Animated style for side menu - must be called unconditionally
@@ -332,13 +335,65 @@ export default function HomeScreen() {
         damping: 20, 
         stiffness: 90,
       }, (finished) => {
-        // Ensure menu is completely off-screen when animation finishes
         if (finished && !menuVisible) {
           menuTranslateX.value = -320;
         }
       });
     }
   }, [menuVisible]);
+
+  useEffect(() => {
+    if (!commentSheetPostId) {
+      setSheetComments([]);
+      setNewCommentText('');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setSheetCommentsLoading(true);
+      try {
+        const list = await fetchComments(commentSheetPostId);
+        if (!cancelled) setSheetComments(Array.isArray(list) ? list : []);
+      } catch (e) {
+        if (!cancelled) setSheetComments([]);
+      } finally {
+        if (!cancelled) setSheetCommentsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [commentSheetPostId]);
+
+  const handleAddCommentSheet = async () => {
+    if (!commentSheetPostId || !newCommentText.trim() || submittingComment) return;
+    setSubmittingComment(true);
+    try {
+      const comment = await addComment(commentSheetPostId, newCommentText.trim());
+      const newC: SheetComment = {
+        id: comment.id,
+        content: comment.content,
+        created_at: comment.created_at,
+        parent_comment_id: comment.parent_comment_id ?? null,
+        profiles: comment.profiles ?? null,
+        replies: [],
+      };
+      setSheetComments(prev => [newC, ...prev]);
+      setNewCommentText('');
+      setPosts(prev => prev.map(p => p.id === commentSheetPostId ? {
+        ...p,
+        post_stats: {
+          ...p.post_stats,
+          comments_count: (p.post_stats?.comments_count || 0) + 1,
+          upvotes_count: p.post_stats?.upvotes_count ?? 0,
+          downvotes_count: p.post_stats?.downvotes_count ?? 0,
+          views_count: p.post_stats?.views_count ?? 0,
+        }
+      } as Post : p));
+    } catch (e) {
+      Alert.alert('Error', 'Could not add comment.');
+    } finally {
+      setSubmittingComment(false);
+    }
+  };
 
   const onUpvote = async (postId: string) => {
     try {
@@ -726,50 +781,41 @@ export default function HomeScreen() {
                 )}
               </View>
 
-              {/* Modern Post Actions */}
+              {/* Post actions: minimal, fast */}
               <View style={styles.postActions}>
-                {/* Upvote/Downvote Section */}
-                <View style={styles.voteSection}>
-                  <VoteButton
-                    postId={post.id}
-                    type="upvote"
-                    isActive={post.user_vote === 'upvote'}
-                    count={post.post_stats?.upvotes_count || 0}
-                    onPress={onUpvote}
-                  />
-                  <View style={{ width: 16 }} />
-                  <VoteButton
-                    postId={post.id}
-                    type="downvote"
-                    isActive={post.user_vote === 'downvote'}
-                    count={post.post_stats?.downvotes_count || 0}
-                    onPress={onDownvote}
-                  />
-                </View>
-
-                {/* Other Actions */}
-                <View style={styles.otherActions}>
-                  <Pressable
-                    style={styles.actionButton}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      handleComment(post.id, router);
-                    }}
-                  >
-                    <Feather name="message-circle" size={20} color="#666" />
-                    <Text style={styles.actionText}>{post.post_stats?.comments_count || 0}</Text>
-                  </Pressable>
-
-                  <Pressable
-                    style={styles.actionButton}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      router.push('/message' as any);
-                    }}
-                  >
-                    <Feather name="send" size={20} color="#666" />
-                  </Pressable>
-                </View>
+                <VoteButton
+                  postId={post.id}
+                  type="upvote"
+                  isActive={post.user_vote === 'upvote'}
+                  count={post.post_stats?.upvotes_count || 0}
+                  onPress={onUpvote}
+                />
+                <VoteButton
+                  postId={post.id}
+                  type="downvote"
+                  isActive={post.user_vote === 'downvote'}
+                  count={post.post_stats?.downvotes_count || 0}
+                  onPress={onDownvote}
+                />
+                <Pressable
+                  style={({ pressed }) => [styles.actionItem, pressed && styles.actionItemPressed]}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setCommentSheetPostId(post.id);
+                  }}
+                >
+                  <Feather name="message-circle" size={22} color="#94a3b8" strokeWidth={2.2} />
+                  <Text style={styles.actionCount}>{post.post_stats?.comments_count || 0}</Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.actionItem, pressed && styles.actionItemPressed]}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    router.push('/message' as any);
+                  }}
+                >
+                  <Feather name="send" size={22} color="#94a3b8" strokeWidth={2.2} />
+                </Pressable>
               </View>
 
               {/* AI response in-place (no big button) */}
@@ -789,6 +835,88 @@ export default function HomeScreen() {
           ))
         )}
       </ScrollView>
+
+      {/* Comments bottom sheet */}
+      <Modal
+        visible={commentSheetPostId !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setCommentSheetPostId(null)}
+      >
+        <Pressable style={styles.sheetOverlay} onPress={() => setCommentSheetPostId(null)}>
+          <Pressable style={[styles.sheet, { maxHeight: '85%', paddingBottom: insets.bottom + 16 }]} onPress={e => e.stopPropagation()}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>Comments</Text>
+              <Pressable onPress={() => setCommentSheetPostId(null)} hitSlop={12} style={styles.sheetClose}>
+                <Feather name="x" size={24} color="#64748b" />
+              </Pressable>
+            </View>
+            {sheetCommentsLoading ? (
+              <View style={styles.sheetLoading}>
+                <ActivityIndicator size="small" color="#ec4899" />
+                <Text style={styles.sheetLoadingText}>Loading comments...</Text>
+              </View>
+            ) : (
+              <KeyboardAvoidingView
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                style={styles.sheetKeyboard}
+                keyboardVerticalOffset={0}
+              >
+                <ScrollView
+                  style={styles.sheetScroll}
+                  contentContainerStyle={styles.sheetScrollContent}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                >
+                  {sheetComments.length === 0 && !sheetCommentsLoading && (
+                    <Text style={styles.sheetEmpty}>No comments yet. Be the first!</Text>
+                  )}
+                  {sheetComments.map((c) => (
+                    <View key={c.id} style={styles.sheetCommentRow}>
+                      <View style={styles.sheetCommentAvatar}>
+                        <Text style={styles.sheetCommentAvatarText}>
+                          {(c.profiles?.display_name || c.profiles?.anonymous_username || '?').charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                      <View style={styles.sheetCommentBody}>
+                        <Text style={styles.sheetCommentAuthor}>
+                          {c.profiles?.display_name || c.profiles?.anonymous_username || 'Anonymous'}
+                        </Text>
+                        <Text style={styles.sheetCommentText}>{c.content}</Text>
+                        <Text style={styles.sheetCommentTime}>{formatTimeAgo(c.created_at)}</Text>
+                      </View>
+                    </View>
+                  ))}
+                </ScrollView>
+                <View style={styles.sheetInputRow}>
+                  <TextInput
+                    style={styles.sheetInput}
+                    placeholder="Add a comment..."
+                    placeholderTextColor="#94a3b8"
+                    value={newCommentText}
+                    onChangeText={setNewCommentText}
+                    multiline
+                    maxLength={500}
+                    editable={!submittingComment}
+                  />
+                  <Pressable
+                    style={[styles.sheetSendBtn, (!newCommentText.trim() || submittingComment) && styles.sheetSendBtnDisabled]}
+                    onPress={handleAddCommentSheet}
+                    disabled={!newCommentText.trim() || submittingComment}
+                  >
+                    {submittingComment ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Feather name="send" size={20} color="#fff" strokeWidth={2} />
+                    )}
+                  </Pressable>
+                </View>
+              </KeyboardAvoidingView>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Floating Action Button */}
       <Pressable
@@ -1135,6 +1263,43 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     position: 'relative',
   },
+  reviewCover: {
+    backgroundColor: '#f1f5f9',
+    borderRadius: 12,
+    paddingVertical: 28,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  reviewCoverTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#475569',
+    marginTop: 10,
+  },
+  reviewCoverSub: {
+    fontSize: 14,
+    color: '#94a3b8',
+    marginTop: 4,
+  },
+  approvedSafeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    backgroundColor: '#fef3c7',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    marginBottom: 10,
+  },
+  approvedSafeBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#b45309',
+  },
   videoContainer: {
     width: '100%',
     height: 300,
@@ -1190,54 +1355,35 @@ const styles = StyleSheet.create({
   },
   postActions: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 8,
-    marginTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+    paddingTop: 12,
+    marginTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e2e8f0',
   },
-  voteSection: {
+  actionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  voteButtonContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  voteButton: {
-    padding: 8,
-    borderRadius: 20,
-    marginRight: 6,
-  },
-  voteCount: {
-    color: '#666',
-    fontSize: 15,
-    fontWeight: '600',
-    minWidth: 20,
-    textAlign: 'left',
-  },
-  voteCountActive: {
-    color: '#333',
-    fontWeight: '700',
-  },
-  otherActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  actionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 8,
-    paddingHorizontal: 10,
-    borderRadius: 20,
     gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    borderRadius: 12,
   },
-  actionText: {
-    color: '#666',
-    fontSize: 15,
-    fontWeight: '600',
+  actionItemPressed: {
+    opacity: 0.5,
+  },
+  actionIconWrap: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionCount: {
+    color: '#94a3b8',
+    fontSize: 14,
+    fontWeight: '700',
+    minWidth: 18,
   },
   aiThinkingBar: {
     flexDirection: 'row',
@@ -1274,6 +1420,142 @@ const styles = StyleSheet.create({
     color: '#333',
     fontSize: 14,
     lineHeight: 20,
+  },
+  sheetOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: 'hidden',
+    minHeight: 280,
+  },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#e2e8f0',
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e2e8f0',
+  },
+  sheetTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  sheetClose: {
+    padding: 4,
+  },
+  sheetLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 40,
+  },
+  sheetLoadingText: {
+    fontSize: 15,
+    color: '#64748b',
+  },
+  sheetKeyboard: {
+    flex: 1,
+  },
+  sheetScroll: {
+    flexGrow: 1,
+  },
+  sheetScrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 24,
+  },
+  sheetEmpty: {
+    fontSize: 15,
+    color: '#94a3b8',
+    textAlign: 'center',
+    paddingVertical: 32,
+  },
+  sheetCommentRow: {
+    flexDirection: 'row',
+    marginBottom: 16,
+    gap: 12,
+  },
+  sheetCommentAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetCommentAvatarText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#ec4899',
+  },
+  sheetCommentBody: {
+    flex: 1,
+  },
+  sheetCommentAuthor: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 2,
+  },
+  sheetCommentText: {
+    fontSize: 15,
+    color: '#334155',
+    lineHeight: 22,
+    marginBottom: 4,
+  },
+  sheetCommentTime: {
+    fontSize: 12,
+    color: '#94a3b8',
+  },
+  sheetInputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  sheetInput: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#0f172a',
+    maxHeight: 100,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  sheetSendBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#ec4899',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetSendBtnDisabled: {
+    opacity: 0.5,
   },
   fab: {
     position: 'absolute',

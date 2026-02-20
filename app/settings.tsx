@@ -390,19 +390,8 @@ export default function SettingsScreen() {
                 setAvailableForMatches(false);
                 if (user) {
                   try {
-                    const { error } = await supabase
-                      .from('profiles')
-                      .update({
-                        available_for_matches: false,
-                      })
-                      .eq('id', user.id);
-
-                    if (error) {
-                      console.error('Error disabling matches:', error);
-                      setAvailableForMatches(true); // Revert on error
-                    } else {
-                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                    }
+                    await updateUserProfile({ available_for_matches: false });
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                   } catch (error) {
                     console.error('Error saving:', error);
                     setAvailableForMatches(true); // Revert on error
