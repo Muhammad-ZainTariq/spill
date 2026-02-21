@@ -58,11 +58,12 @@
     const socket = io();
     const params = new URLSearchParams(window.location.search);
     const roomCode = params.get('room') || '';
+    const opponentFromUrl = (params.get('opponent') || params.get('opponentName') || '').trim().slice(0, 30);
     const statusEl = document.getElementById('status');
     const boardEl = document.getElementById('board');
     const gameOverActionsEl = document.getElementById('gameOverActions');
     let myRole = null;
-    let opponentName = 'Opponent';
+    let opponentName = opponentFromUrl || 'Opponent';
     let state = { board: [], turn: 'X', winner: null };
 
     function setStatus(text, className = '') {
@@ -115,7 +116,9 @@
 
     socket.on('start', (data) => {
       myRole = data.role;
-      opponentName = (data.opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
+      if (!opponentName || opponentName === 'Opponent') {
+        opponentName = (data.opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
+      }
       state = { board: Array(9).fill(''), turn: 'X', winner: null };
       boardEl.classList.remove('hidden');
       setStatus(state.turn === myRole ? 'Your turn' : opponentName + "'s turn");

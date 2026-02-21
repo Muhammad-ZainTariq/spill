@@ -183,6 +183,7 @@
   <script>
     const params = new URLSearchParams(window.location.search);
     const roomCode = params.get('room') || '';
+    const opponentFromUrl = (params.get('opponent') || params.get('opponentName') || '').trim().slice(0, 30);
     const socket = io('/chess');
     const statusCard = document.getElementById('statusCard');
     const statusText = document.getElementById('statusText');
@@ -190,7 +191,7 @@
     const boardWrap = document.getElementById('boardWrap');
     const boardEl = document.getElementById('board');
     let myColor = null;
-    let opponentName = 'Opponent';
+    let opponentName = opponentFromUrl || 'Opponent';
     let state = { fen: '', turn: 'w', result: null, lastMove: null };
     let selected = null;
     let validMoves = [];
@@ -372,7 +373,9 @@
 
     socket.on('start', (data) => {
       myColor = data.color;
-      opponentName = (data.opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
+      if (!opponentName || opponentName === 'Opponent') {
+        opponentName = (data.opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
+      }
       boardWrap.classList.remove('hidden');
     });
 

@@ -1,7 +1,8 @@
+import { subscribeToMatchGameInviteStatus } from '@/app/functions';
 import Constants from 'expo-constants';
 import { Feather } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -22,10 +23,18 @@ const GAME_TITLES: Record<string, string> = {
 export default function GameWebViewScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { room, gameType = 'tictactoe' } = useLocalSearchParams<{
+  const { room, gameType = 'tictactoe', opponentName: opponentNameParam } = useLocalSearchParams<{
     room?: string;
     gameType?: string;
+    opponentName?: string;
   }>();
+  const [inviteDeclined, setInviteDeclined] = useState(false);
+
+  useEffect(() => {
+    if (!room?.trim() || !gameType) return;
+    const unsub = subscribeToMatchGameInviteStatus(room, gameType, () => setInviteDeclined(true));
+    return () => unsub();
+  }, [room, gameType]);
 
   const gameBaseUrl =
     (Constants as any)?.expoConfig?.extra?.gameBaseUrl ||
@@ -37,17 +46,21 @@ export default function GameWebViewScreen() {
     const base = gameBaseUrl.replace(/\/$/, '');
     const path = gameType === 'chess' ? '/chess' : gameType === 'ludo' ? '/ludo' : '';
     const sep = (base + path).includes('?') ? '&' : '?';
-    return `${base}${path}${sep}room=${encodeURIComponent(room)}`;
-  }, [gameBaseUrl, room, gameType]);
+    let url = `${base}${path}${sep}room=${encodeURIComponent(room)}`;
+    if (opponentNameParam?.trim()) {
+      url += '&opponent=' + encodeURIComponent(opponentNameParam.trim());
+    }
+    return url;
+  }, [gameBaseUrl, room, gameType, opponentNameParam]);
 
   const title = GAME_TITLES[gameType] || 'Play';
 
   if (!gameBaseUrl.trim()) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top + 16 }]}>
-        <View style={styles.header}>
+      <View style={styles.container}>
+        <View style={[styles.header, { paddingTop: insets.top + 6, paddingBottom: 10 }]}>
           <Pressable onPress={() => router.back()} style={styles.backBtn}>
-            <Feather name="arrow-left" size={24} color="#333" />
+            <Feather name="arrow-left" size={22} color="#0f172a" />
           </Pressable>
           <Text style={styles.headerTitle}>Play game</Text>
           <View style={styles.backBtn} />
@@ -66,10 +79,10 @@ export default function GameWebViewScreen() {
 
   if (!room?.trim()) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top + 16 }]}>
-        <View style={styles.header}>
+      <View style={styles.container}>
+        <View style={[styles.header, { paddingTop: insets.top + 6, paddingBottom: 10 }]}>
           <Pressable onPress={() => router.back()} style={styles.backBtn}>
-            <Feather name="arrow-left" size={24} color="#333" />
+            <Feather name="arrow-left" size={22} color="#0f172a" />
           </Pressable>
           <Text style={styles.headerTitle}>{title}</Text>
           <View style={styles.backBtn} />
@@ -82,44 +95,103 @@ export default function GameWebViewScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
-          <Feather name="arrow-left" size={24} color="#333" />
+    <View style={styles.container}>
+      <View style={[styles.header, { paddingTop: insets.top + 6, paddingBottom: 10 }]}>
+        <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={12}>
+          <Feather name="arrow-left" size={22} color="#0f172a" />
         </Pressable>
-        <Text style={styles.headerTitle}>{title}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
         <View style={styles.backBtn} />
       </View>
       <WebView
         source={{ uri: gameUrl! }}
-        style={styles.webview}
+        style={[styles.webview, gameType === 'chess' && { backgroundColor: '#0f172a' }]}
         startInLoadingState
+        scrollEnabled={false}
+        bounces={false}
+        overScrollMode="never"
+        setSupportMultipleWindows={false}
+        scalesPageToFit={false}
+        setBuiltInZoomControls={false}
+        setDisplayZoomControls={false}
+        injectedJavaScriptBeforeContentLoaded={`
+          (function() {
+            var c = 'width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no';
+            var meta = document.querySelector('meta[name=viewport]');
+            if (meta) meta.setAttribute('content', c);
+            else {
+              meta = document.createElement('meta');
+              meta.name = 'viewport';
+              meta.content = c;
+              (document.head || document.documentElement).appendChild(meta);
+            }
+            document.documentElement.style.touchAction = 'manipulation';
+            document.documentElement.style.webkitTextSizeAdjust = '100%';
+          })();
+          true;
+        `}
+        injectedJavaScript={`
+          (function() {
+            var c = 'width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no';
+            var meta = document.querySelector('meta[name=viewport]');
+            if (meta) meta.setAttribute('content', c);
+            else {
+              meta = document.createElement('meta');
+              meta.name = 'viewport';
+              meta.content = c;
+              document.head.appendChild(meta);
+            }
+            document.documentElement.style.touchAction = 'manipulation';
+            document.body.style.touchAction = 'manipulation';
+            document.addEventListener('gesturestart', function(e) { e.preventDefault(); }, { passive: false });
+            document.addEventListener('gesturechange', function(e) { e.preventDefault(); }, { passive: false });
+            document.addEventListener('gestureend', function(e) { e.preventDefault(); }, { passive: false });
+          })();
+          true;
+        `}
+        onMessage={(e) => {
+          try {
+            const data = JSON.parse(e.nativeEvent.data);
+            if (data?.type === 'leave') router.back();
+          } catch (_) {}
+        }}
         renderLoading={() => (
-          <View style={styles.loading}>
+          <View style={[styles.loading, gameType === 'chess' && styles.loadingDark]}>
             <ActivityIndicator size="large" color="#ec4899" />
-            <Text style={styles.loadingText}>Loading game...</Text>
+            <Text style={[styles.loadingText, gameType === 'chess' && styles.loadingTextDark]}>Loading game...</Text>
           </View>
         )}
       />
+      {inviteDeclined && (
+        <View style={styles.declinedOverlay}>
+          <View style={styles.declinedCard}>
+            <Feather name="info" size={40} color="#f59e0b" />
+            <Text style={styles.declinedTitle}>Invite declined</Text>
+            <Text style={styles.declinedText}>Your match chose "Later" and isn't joining right now.</Text>
+            <Pressable style={styles.declinedBtn} onPress={() => router.back()}>
+              <Text style={styles.declinedBtnText}>Back to match</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc' },
+  container: { flex: 1, backgroundColor: '#fff' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e2e8f0',
     backgroundColor: '#fff',
   },
-  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '800', color: '#0f172a' },
-  webview: { flex: 1 },
+  backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { flex: 1, fontSize: 17, fontWeight: '700', color: '#0f172a', textAlign: 'center', marginHorizontal: 8 },
+  webview: { flex: 1, backgroundColor: '#f8fafc' },
   loading: {
     position: 'absolute',
     top: 0,
@@ -130,7 +202,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#f8fafc',
   },
+  loadingDark: { backgroundColor: '#0f172a' },
   loadingText: { marginTop: 12, fontSize: 14, color: '#64748b' },
+  loadingTextDark: { color: '#94a3b8' },
   placeholder: {
     flex: 1,
     justifyContent: 'center',
@@ -139,4 +213,28 @@ const styles = StyleSheet.create({
   },
   placeholderTitle: { fontSize: 18, fontWeight: '700', color: '#334155', marginTop: 12 },
   placeholderText: { fontSize: 14, color: '#64748b', textAlign: 'center', marginTop: 8, lineHeight: 22 },
+  declinedOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  declinedCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+    maxWidth: 320,
+  },
+  declinedTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a', marginTop: 12 },
+  declinedText: { fontSize: 14, color: '#64748b', textAlign: 'center', marginTop: 8, lineHeight: 22 },
+  declinedBtn: {
+    marginTop: 20,
+    backgroundColor: '#ec4899',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+  },
+  declinedBtnText: { fontSize: 16, fontWeight: '600', color: '#fff' },
 });
