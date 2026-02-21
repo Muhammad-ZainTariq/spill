@@ -2,39 +2,182 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no" />
   <title>Chess · Spill</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&display=swap" rel="stylesheet" />
   <script src="/socket.io/socket.io.js"></script>
+  <script type="module">
+    import { Chess } from 'https://cdn.jsdelivr.net/npm/chess.js@1.0.0-beta.8/+esm';
+    window.Chess = Chess;
+  </script>
   <style>
     * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8fafc; padding: 16px; }
-    h1 { font-size: 1.5rem; color: #0f172a; margin-bottom: 8px; }
-    .status { color: #64748b; margin-bottom: 12px; text-align: center; }
-    .board { display: grid; grid-template-columns: repeat(8, 1fr); gap: 0; border: 2px solid #334155; border-radius: 8px; overflow: hidden; width: min(320px, 90vw); aspect-ratio: 1; }
-    .sq { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: clamp(18px, 5vw, 28px); cursor: pointer; user-select: none; }
-    .sq.light { background: #f1f5f9; }
-    .sq.dark { background: #94a3b8; }
-    .sq.selected { background: #ec4899; color: #fff; }
-    .sq.last { outline: 2px solid #8b5cf6; }
+    html { -webkit-text-size-adjust: 100%; touch-action: manipulation; height: 100%; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      margin: 0;
+      height: 100%;
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      background: linear-gradient(160deg, #1e293b 0%, #0f172a 100%);
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+    }
+
+    .status-card {
+      flex-shrink: 0;
+      background: rgba(255,255,255,0.08);
+      border-bottom: 1px solid rgba(255,255,255,0.12);
+      border-radius: 0;
+      padding: 8px 12px;
+      text-align: center;
+    }
+    .status-card .status-text {
+      color: #e2e8f0;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+    .status-card .status-sub {
+      color: #94a3b8;
+      font-size: 0.8rem;
+      margin-top: 2px;
+    }
+    .status-card.you-turn .status-text { color: #34d399; }
+    .status-card.game-over .status-text { color: #fbbf24; font-weight: 700; }
+    .status-card.game-over.win .status-text { color: #34d399; }
+    .status-card.game-over.lose .status-text { color: #f87171; }
+
+    .board-wrap {
+      flex: 1;
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    .board {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 0;
+      border-radius: 0;
+      overflow: hidden;
+      width: min(100vw, calc(100vh - 48px));
+      height: min(100vw, calc(100vh - 48px));
+      max-width: 100%;
+      max-height: 100%;
+      aspect-ratio: 1;
+      box-shadow: none;
+    }
+    .sq {
+      aspect-ratio: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      user-select: none;
+      position: relative;
+      transition: background-color 0.12s ease;
+    }
+    .sq.light { background: #f0d9b5; }
+    .sq.dark { background: #b58863; }
+    .sq.light.selected,
+    .sq.dark.selected { background: #ec4899; }
+    .sq.light.selected .piece-svg,
+    .sq.dark.selected .piece-svg { filter: brightness(0) invert(1); }
+    .sq.last { box-shadow: inset 0 0 0 3px rgba(139, 92, 246, 0.9); }
+    .sq.highlight::after {
+      content: '';
+      position: absolute;
+      inset: 28%;
+      border-radius: 50%;
+      background: rgba(52, 211, 153, 0.45);
+      pointer-events: none;
+    }
+    .sq.highlight-capture::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 4px solid rgba(52, 211, 153, 0.85);
+      background: transparent;
+      pointer-events: none;
+    }
+    .piece-svg {
+      width: 78%;
+      height: 78%;
+      object-fit: contain;
+      pointer-events: none;
+    }
+    .piece-fallback {
+      font-size: clamp(22px, 6vw, 36px);
+      line-height: 1;
+      pointer-events: none;
+      color: inherit;
+    }
+    .sq.dark .piece-fallback { color: #1e293b; }
+    .sq.light .piece-fallback { color: #1e293b; }
+    .sq.dark.selected .piece-fallback,
+    .sq.light.selected .piece-fallback { color: #fff; }
     .hidden { display: none !important; }
-    .winner { color: #10b981; font-weight: 700; }
+
+    .coord {
+      position: absolute;
+      font-size: 10px;
+      font-weight: 600;
+      color: rgba(0,0,0,0.35);
+      pointer-events: none;
+    }
+    .sq.dark .coord { color: rgba(255,255,255,0.4); }
+    .coord.file { bottom: 2px; right: 4px; }
+    .coord.rank { top: 2px; left: 4px; }
   </style>
 </head>
 <body>
-  <h1>Chess</h1>
-  <p id="status" class="status">Connecting...</p>
-  <div id="board" class="board hidden"></div>
+  <div id="statusCard" class="status-card">
+    <div id="statusText" class="status-text">Connecting...</div>
+    <div id="statusSub" class="status-sub"></div>
+  </div>
+  <div id="boardWrap" class="board-wrap hidden">
+    <div id="board" class="board"></div>
+  </div>
 
   <script>
     const params = new URLSearchParams(window.location.search);
     const roomCode = params.get('room') || '';
     const socket = io('/chess');
-    const statusEl = document.getElementById('status');
+    const statusCard = document.getElementById('statusCard');
+    const statusText = document.getElementById('statusText');
+    const statusSub = document.getElementById('statusSub');
+    const boardWrap = document.getElementById('boardWrap');
     const boardEl = document.getElementById('board');
     let myColor = null;
-    let state = { fen: '', turn: 'w', result: null };
+    let state = { fen: '', turn: 'w', result: null, lastMove: null };
     let selected = null;
-    const PIECE = { P: '♙', N: '♘', B: '♗', R: '♖', Q: '♕', K: '♔', p: '♟', n: '♞', b: '♝', r: '♜', q: '♛', k: '♚' };
+    let validMoves = [];
+
+    // Professional chess piece images (Cburnett, Wikimedia Commons, CC BY-SA 3.0)
+    const WIKI = 'https://commons.wikimedia.org/wiki/Special:FilePath';
+    const PIECE_UNICODE = { K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙', k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+    const PIECE_IMG = {
+      K: WIKI + '/Chess_klt45.svg',
+      Q: WIKI + '/Chess_qlt45.svg',
+      R: WIKI + '/Chess_rlt45.svg',
+      B: WIKI + '/Chess_blt45.svg',
+      N: WIKI + '/Chess_nlt45.svg',
+      P: WIKI + '/Chess_plt45.svg',
+      k: WIKI + '/Chess_kdt45.svg',
+      q: WIKI + '/Chess_qdt45.svg',
+      r: WIKI + '/Chess_rdt45.svg',
+      b: WIKI + '/Chess_bdt45.svg',
+      n: WIKI + '/Chess_ndt45.svg',
+      p: WIKI + '/Chess_pdt45.svg',
+    };
 
     function fenToBoard(fen) {
       const rows = fen.split(' ')[0].split('/');
@@ -50,66 +193,166 @@
       return board;
     }
 
+    function setStatus(text, sub, classes) {
+      statusText.textContent = text;
+      statusSub.textContent = sub || '';
+      statusCard.className = 'status-card ' + (classes || '');
+    }
+
     function render() {
       if (!state.fen) return;
       const board = fenToBoard(state.fen);
       const isBlack = myColor === 'b';
       const order = isBlack ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7];
       boardEl.innerHTML = '';
-      for (let r of order) {
-        for (let c of (isBlack ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7])) {
+      const files = isBlack ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7];
+      const ranks = order;
+      for (let ri = 0; ri < 8; ri++) {
+        const r = ranks[ri];
+        for (let ci = 0; ci < 8; ci++) {
+          const c = files[ci];
           const cell = document.createElement('div');
           cell.className = 'sq ' + ((r + c) % 2 === 0 ? 'light' : 'dark');
           const piece = board[r][c];
-          cell.textContent = piece ? (PIECE[piece] || piece) : '';
-          cell.dataset.from = String.fromCharCode(97 + c) + (8 - r);
-          cell.addEventListener('click', () => onCellClick(cell.dataset.from));
+          const sq = String.fromCharCode(97 + c) + (8 - r);
+          cell.dataset.from = sq;
+          if (piece) {
+            const img = document.createElement('img');
+            img.className = 'piece-svg';
+            img.src = PIECE_IMG[piece] || '';
+            img.alt = piece;
+            img.draggable = false;
+            img.onerror = function () {
+              this.style.display = 'none';
+              const fallback = document.createElement('span');
+              fallback.className = 'piece-fallback';
+              fallback.textContent = PIECE_UNICODE[piece] || piece;
+              this.parentNode.appendChild(fallback);
+            };
+            cell.appendChild(img);
+          }
+          if (state.lastMove && (state.lastMove.from === sq || state.lastMove.to === sq)) cell.classList.add('last');
+          if (selected === sq) cell.classList.add('selected');
+          const moveTo = validMoves.find(m => m.to === sq);
+          if (moveTo) cell.classList.add(moveTo.capture ? 'highlight-capture' : 'highlight');
+          if (ri === 7) {
+            const coord = document.createElement('span');
+            coord.className = 'coord file';
+            coord.textContent = String.fromCharCode(97 + c);
+            cell.appendChild(coord);
+          }
+          if (ci === 0) {
+            const coord = document.createElement('span');
+            coord.className = 'coord rank';
+            coord.textContent = String(8 - r);
+            cell.appendChild(coord);
+          }
+          cell.addEventListener('click', () => onCellClick(sq));
           boardEl.appendChild(cell);
         }
       }
-      if (state.result === 'draw') statusEl.textContent = "It's a draw!";
-      else if (state.result) statusEl.textContent = (state.result === myColor ? 'You win!' : 'You lose.');
-      else statusEl.textContent = (state.turn === myColor ? 'Your turn' : "Opponent's turn");
+      if (state.result === 'draw') {
+        setStatus("It's a draw!", '', 'game-over');
+      } else if (state.result) {
+        if (state.result === myColor) setStatus('You win!', 'Well played.', 'game-over win');
+        else setStatus('You lose', "Opponent won.", 'game-over lose');
+      } else {
+        if (state.turn === myColor) {
+          if (selected && validMoves.length) setStatus('Your turn', 'Tap a green square to move.', 'you-turn');
+          else if (selected) setStatus('Your turn', 'Loading moves…', 'you-turn');
+          else setStatus('Your turn', 'Tap a piece to see where it can move.', 'you-turn');
+        } else setStatus("Opponent's turn", 'Waiting for their move...', '');
+      }
+    }
+
+    function isOurPiece(piece) {
+      if (!piece) return false;
+      return myColor === 'w' ? piece === piece.toUpperCase() : piece === piece.toLowerCase();
+    }
+
+    function computeValidMoves(square) {
+      if (!window.Chess || !state.fen) return [];
+      try {
+        const chess = new window.Chess(state.fen);
+        const moves = chess.moves({ square: square, verbose: true });
+        return (moves || []).map(function (m) { return { to: m.to, capture: !!m.captured }; });
+      } catch (e) {
+        return [];
+      }
     }
 
     function onCellClick(from) {
-      if (state.result || state.turn !== myColor) return;
-      if (selected === from) { selected = null; render(); return; }
-      if (selected) {
-        socket.emit('move', { roomCode, from: selected, to: from });
+      if (state.result) return;
+      if (state.turn !== myColor) return;
+      const board = state.fen ? fenToBoard(state.fen) : [];
+      const r = 8 - parseInt(from[1], 10);
+      const c = from.charCodeAt(0) - 97;
+      const piece = board[r] && board[r][c];
+      if (selected === from) {
         selected = null;
-      } else selected = from;
+        validMoves = [];
+        render();
+        return;
+      }
+      if (selected) {
+        const toMove = validMoves.find(m => m.to === from);
+        if (toMove) {
+          socket.emit('move', { roomCode, from: selected, to: from });
+          selected = null;
+          validMoves = [];
+        } else {
+          if (isOurPiece(piece)) {
+            selected = from;
+            validMoves = computeValidMoves(from);
+            if (validMoves.length === 0) socket.emit('getMoves', { roomCode, square: from });
+          } else {
+            selected = null;
+            validMoves = [];
+          }
+        }
+      } else {
+        if (isOurPiece(piece)) {
+          selected = from;
+          validMoves = computeValidMoves(from);
+          if (validMoves.length === 0) socket.emit('getMoves', { roomCode, square: from });
+        }
+      }
       render();
-      document.querySelectorAll('.sq').forEach(sq => {
-        sq.classList.toggle('selected', sq.dataset.from === selected);
-      });
     }
 
     socket.on('connect', () => {
       if (roomCode) {
-        statusEl.textContent = 'Joining game...';
+        setStatus('Joining game...', '', '');
         socket.emit('joinOrCreate', { roomCode, name: 'Player' });
-      } else statusEl.textContent = 'Open with ?room= from the Spill app.';
+      } else setStatus('Open with ?room= from the Spill app.', '', '');
     });
 
     socket.on('waiting', () => {
-      boardEl.classList.add('hidden');
-      statusEl.textContent = 'Waiting for opponent...';
+      boardWrap.classList.add('hidden');
+      setStatus('Waiting for opponent...', 'Share the game link or wait.', '');
     });
 
     socket.on('start', (data) => {
       myColor = data.color;
-      boardEl.classList.remove('hidden');
+      boardWrap.classList.remove('hidden');
     });
 
     socket.on('state', (data) => {
       state = data;
       selected = null;
+      validMoves = [];
       render();
     });
 
-    socket.on('roomFull', () => statusEl.textContent = 'Room full.');
-    socket.on('opponentLeft', () => statusEl.textContent = 'Opponent left.');
+    socket.on('validMoves', (data) => {
+      if (data.square === selected && validMoves.length === 0) {
+        validMoves = data.moves || [];
+        render();
+      }
+    });
+
+    socket.on('roomFull', () => setStatus('Room full.', '', ''));
+    socket.on('opponentLeft', () => setStatus('Opponent left.', 'You can go back.', ''));
   </script>
 </body>
 </html>

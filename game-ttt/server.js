@@ -110,6 +110,19 @@ chessIo.on('connection', (socket) => {
     socket.emit('waiting', { roomCode });
   });
 
+  socket.on('getMoves', (data) => {
+    const { roomCode, square } = data;
+    if (!roomCode || !square) return;
+    const g = chessGames.get(roomCode);
+    if (!g || g.result) return;
+    try {
+      const moves = g.chess.moves({ square, verbose: true });
+      socket.emit('validMoves', { square, moves: moves.map(m => ({ to: m.to, capture: !!m.captured })) });
+    } catch (_) {
+      socket.emit('validMoves', { square, moves: [] });
+    }
+  });
+
   socket.on('move', (data) => {
     const { roomCode, from, to, promotion } = data;
     const g = chessGames.get(roomCode);
@@ -120,7 +133,7 @@ chessIo.on('connection', (socket) => {
         g.fen = g.chess.fen();
         g.turn = g.chess.turn();
         if (g.chess.isGameOver()) g.result = g.chess.isCheckmate() ? (g.turn === 'w' ? 'b' : 'w') : 'draw';
-        chessIo.to(roomCode).emit('state', { fen: g.fen, turn: g.turn, result: g.result });
+        chessIo.to(roomCode).emit('state', { fen: g.fen, turn: g.turn, result: g.result, lastMove: { from: move.from, to: move.to } });
       }
     } catch (_) {}
   });
