@@ -7,6 +7,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Text, TouchableOpacity } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import 'react-native-reanimated';
 
 export default function RootLayout() {
@@ -14,8 +15,9 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
+      <KeyboardProvider statusBarTranslucent navigationBarTranslucent>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Stack>
         <Stack.Screen 
           name="index" 
           options={{ 
@@ -190,10 +192,25 @@ export default function RootLayout() {
             gestureEnabled: false,
           }} 
         />
+        <Stack.Screen 
+          name="game-webview" 
+          options={{ 
+            headerShown: false,
+            gestureEnabled: true,
+          }} 
+        />
+        <Stack.Screen 
+          name="match-chat" 
+          options={{ 
+            headerShown: false,
+            gestureEnabled: true,
+          }} 
+        />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
         <StatusBar style="auto" />
       </ThemeProvider>
+      </KeyboardProvider>
     </GestureHandlerRootView>
   );
 }

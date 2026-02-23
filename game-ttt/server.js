@@ -173,7 +173,7 @@ ludoIo.on('connection', (socket) => {
       socket.join(roomCode);
       ludoSocketToRoom.set(socket.id, roomCode);
       ludoGames.set(roomCode, {
-        positions: [0, 0],
+        positions: [-1, -1],
         turn: 0,
         lastDice: 0,
         winner: null,
@@ -200,10 +200,17 @@ ludoIo.on('connection', (socket) => {
     const dice = rollDice();
     g.lastDice = dice;
     const pos = g.positions[g.turn];
-    const newPos = Math.min(LUDO_TRACK, pos + dice);
-    g.positions[g.turn] = newPos;
-    if (newPos >= LUDO_TRACK) g.winner = g.turn;
-    else g.turn = 1 - g.turn;
+    if (pos === -1) {
+      if (dice === 6) {
+        g.positions[g.turn] = 0;
+      }
+      g.turn = 1 - g.turn;
+    } else {
+      const newPos = Math.min(LUDO_TRACK, pos + dice);
+      g.positions[g.turn] = newPos;
+      if (newPos >= LUDO_TRACK) g.winner = g.turn;
+      else g.turn = 1 - g.turn;
+    }
     ludoIo.to(roomCode).emit('state', { ...g });
   });
 

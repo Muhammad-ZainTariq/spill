@@ -3,15 +3,18 @@ import {
     checkPremiumStatus,
     declineMatchRequest,
     endMatch,
-    extendMatch,
     generateAITherapyPrompt,
     getActiveMatch,
     getAvailableUsers,
     getMatchMessages,
+    getPartnerProfile,
     getPendingMatchRequests,
     getWeeklySummary,
+    sendGameInvite,
     sendMatchMessage,
     sendMatchRequest,
+    subscribeToActiveMatch,
+    subscribeToMatchRequests,
 } from '@/app/functions';
 import { auth, storage, ref, uploadBytes, getDownloadURL } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
@@ -56,7 +59,7 @@ const STRUGGLE_CATEGORIES = [
 export default function MatchesScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [activeTab, setActiveTab] = useState<'therapy' | 'matching'>('therapy');
+  const [activeTab, setActiveTab] = useState<'therapy' | 'your_match' | 'find_match'>('therapy');
   const [loading, setLoading] = useState(false);
   const [isPremium, setIsPremium] = useState(false);
 
@@ -82,6 +85,7 @@ export default function MatchesScreen() {
     expiresAt: string;
     timeRemaining: number;
   } | null>(null);
+  const [partnerProfile, setPartnerProfile] = useState<{ display_name?: string; anonymous_username?: string } | null>(null);
   const [matchMessages, setMatchMessages] = useState<any[]>([]);
   const [messageText, setMessageText] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
@@ -106,30 +110,51 @@ export default function MatchesScreen() {
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'matching') {
+    if (activeTab === 'find_match') {
       loadAvailableUsers();
       loadPendingRequests();
     }
   }, [activeTab, selectedCategory]);
 
   useEffect(() => {
+    const unsub = subscribeToMatchRequests((requests) => {
+      setPendingRequests(requests);
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = subscribeToActiveMatch((match) => {
+      setActiveMatch(match);
+      setPartnerProfile(null);
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!activeMatch?.partnerId) {
+      setPartnerProfile(null);
+      return;
+    }
+    let cancelled = false;
+    getPartnerProfile(activeMatch.partnerId).then((profile) => {
+      if (!cancelled) setPartnerProfile(profile);
+    });
+    return () => { cancelled = true; };
+  }, [activeMatch?.partnerId]);
+
+  useEffect(() => {
     if (activeMatch) {
       loadMatchMessages();
-      const interval = setInterval(() => {
-        updateMatchTimer();
-      }, 60000);
-
-      // Poll for new messages (realtime removed with Supabase)
-      const messagesPoll = setInterval(loadMatchMessages, 5000);
-
+      const interval = setInterval(updateMatchTimer, 60000);
       return () => {
         clearInterval(interval);
-        clearInterval(messagesPoll);
         setIsVoiceActive(false);
         setPartnerInVoice(false);
       };
     }
   }, [activeMatch, currentUserId]);
+
 
   const loadPremiumStatus = async () => {
     const premium = await checkPremiumStatus();
@@ -298,27 +323,15 @@ export default function MatchesScreen() {
     }
   };
 
-  const handleExtendMatch = async () => {
-    if (!activeMatch) return;
-    const success = await extendMatch(activeMatch.id);
-    if (success) {
-      await loadActiveMatch();
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert('Time Extended', 'Your conversation has been extended by 15 minutes.');
-    } else {
-      Alert.alert('Error', 'Failed to extend match.');
-    }
-  };
-
-  const handleEndMatch = async () => {
+  const handleUnfriend = async () => {
     if (!activeMatch) return;
     Alert.alert(
-      'End Match',
-      'Are you sure you want to end this conversation?',
+      'Unfriend',
+      'End this match and remove the connection?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'End',
+          text: 'Unfriend',
           style: 'destructive',
           onPress: async () => {
             const success = await endMatch(activeMatch.id);
@@ -528,40 +541,48 @@ export default function MatchesScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Matches & Therapy</Text>
       </View>
-
-      {/* Tab Selector */}
       <View style={styles.tabContainer}>
-        <Pressable
-          style={[styles.tab, activeTab === 'therapy' && styles.tabActive]}
-          onPress={() => {
-            setActiveTab('therapy');
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          }}
-        >
-          <Text style={[styles.tabText, activeTab === 'therapy' && styles.tabTextActive]}>
-            AI Therapy
-          </Text>
-        </Pressable>
-        <Pressable
-          style={[styles.tab, activeTab === 'matching' && styles.tabActive]}
-          onPress={() => {
-            setActiveTab('matching');
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          }}
-        >
-          <Text style={[styles.tabText, activeTab === 'matching' && styles.tabTextActive]}>
-            Find Match
-          </Text>
-        </Pressable>
+            <Pressable
+              style={[styles.tab, activeTab === 'therapy' && styles.tabActive]}
+              onPress={() => {
+                setActiveTab('therapy');
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              }}
+            >
+              <Text style={[styles.tabText, activeTab === 'therapy' && styles.tabTextActive]}>
+                AI Therapy
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.tab, activeTab === 'your_match' && styles.tabActive]}
+              onPress={() => {
+                setActiveTab('your_match');
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              }}
+            >
+              <Text style={[styles.tabText, activeTab === 'your_match' && styles.tabTextActive]}>
+                Your match
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.tab, activeTab === 'find_match' && styles.tabActive]}
+              onPress={() => {
+                setActiveTab('find_match');
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              }}
+            >
+              <Text style={[styles.tabText, activeTab === 'find_match' && styles.tabTextActive]}>
+                Find Match
+              </Text>
+            </Pressable>
       </View>
 
       {activeTab === 'therapy' ? (
         // AI Therapy Prompts Section
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView style={styles.content} showsVerticalScrollIndicator={false} key="therapy">
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>AI Therapy Prompts</Text>
             <Text style={styles.sectionSubtitle}>
@@ -643,8 +664,8 @@ export default function MatchesScreen() {
             </View>
           </View>
         </ScrollView>
-      ) : !activeMatch ? (
-        // Matching Section - Browse Users
+      ) : activeTab === 'find_match' ? (
+        // Find Match - Browse Users (always visible as its own tab)
         <View style={styles.matchingContainer}>
           {/* Pending Requests Section */}
           {pendingRequests.length > 0 && (
@@ -751,233 +772,43 @@ export default function MatchesScreen() {
           )}
         </View>
       ) : (
-        // Active Match Chat
-        <View style={styles.matchChatContainer}>
-          <View style={styles.matchHeader}>
-            <View>
-              <Text style={styles.matchTitle}>Anonymous Match</Text>
-              <Text style={styles.matchTimer}>
-                Time remaining: {formatTimeRemaining(activeMatch.timeRemaining)}
-              </Text>
-            </View>
-            <View style={styles.matchActions}>
-              <Pressable
-                style={styles.matchActionButton}
-                onPress={() => {
-                  Alert.alert('Choose game', '', [
-                    { text: 'Tic-Tac-Toe', onPress: () => router.push({ pathname: '/game-webview', params: { room: activeMatch.id, gameType: 'tictactoe' } } as any) },
-                    { text: 'Chess', onPress: () => router.push({ pathname: '/game-webview', params: { room: activeMatch.id, gameType: 'chess' } } as any) },
-                    { text: 'Ludo', onPress: () => router.push({ pathname: '/game-webview', params: { room: activeMatch.id, gameType: 'ludo' } } as any) },
-                    { text: 'Cancel', style: 'cancel' },
-                  ]);
-                }}
-              >
-                <Feather name="grid" size={18} color="#ec4899" />
-                <Text style={styles.matchActionText}>Play</Text>
-              </Pressable>
-              <Pressable style={styles.matchActionButton} onPress={handleExtendMatch}>
-                <Feather name="clock" size={18} color="#ec4899" />
-                <Text style={styles.matchActionText}>+15m</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.matchActionButton, styles.endButton]}
-                onPress={handleEndMatch}
-              >
-                <Feather name="x" size={18} color="#ef4444" />
-                <Text style={[styles.matchActionText, styles.endButtonText]}>End</Text>
-              </Pressable>
-            </View>
-          </View>
-
-          {/* Voice Chat Section */}
-          {!isVoiceActive ? (
-            <Pressable
-              style={styles.startVoiceButton}
-              onPress={handleStartVoiceChat}
-            >
-              <Feather name="mic" size={20} color="#fff" />
-              <Text style={styles.startVoiceButtonText}>Start Voice Chat</Text>
-            </Pressable>
-          ) : (
-            <View style={styles.voiceChatContainer}>
-              <View style={styles.voiceChatHeader}>
-                <View style={styles.voiceChatStatus}>
-                  <View style={[styles.voiceIndicator, partnerInVoice && styles.voiceIndicatorActive]} />
-                  <Text style={styles.voiceChatStatusText}>
-                    {partnerInVoice ? 'Connected' : 'Waiting for partner...'}
-                  </Text>
-                </View>
-                <Pressable
-                  style={[styles.voiceControlButton, isMuted && styles.voiceControlButtonMuted]}
-                  onPress={handleToggleMute}
-                >
-                  <Feather name={isMuted ? "mic-off" : "mic"} size={18} color="#fff" />
-                </Pressable>
-              </View>
-              
-              {/* Push to Talk Button */}
-              <Pressable
-                style={[
-                  styles.pushToTalkButton,
-                  isRecording && styles.pushToTalkButtonActive,
-                ]}
-                onPressIn={handlePushToTalk}
-                onPressOut={stopRecordingAndSend}
-                disabled={isMuted}
-              >
-                {isRecording ? (
-                  <>
-                    <View style={styles.recordingIndicator} />
-                    <Text style={styles.pushToTalkButtonText}>Recording... Release to send</Text>
-                  </>
-                ) : (
-                  <>
-                    <Feather name="mic" size={24} color="#fff" />
-                    <Text style={styles.pushToTalkButtonText}>Hold to Talk</Text>
-                  </>
-                )}
-              </Pressable>
-
-              {isPlaying && (
-                <View style={styles.playingIndicator}>
-                  <ActivityIndicator size="small" color="#10b981" />
-                  <Text style={styles.playingText}>Playing message...</Text>
-                </View>
-              )}
-
-              <Pressable
-                style={styles.endVoiceButton}
-                onPress={handleEndVoiceChat}
-              >
-                <Feather name="phone-off" size={18} color="#fff" />
-                <Text style={styles.endVoiceButtonText}>End Voice Chat</Text>
-              </Pressable>
-            </View>
-          )}
-
-          {/* Messages Section - Hide when voice is active */}
-          {!isVoiceActive && (
-            <>
-              <FlatList
-                ref={messagesEndRef}
-                data={matchMessages}
-                keyExtractor={(item) => item.id}
-                renderItem={({ item }) => {
-                  const isMe = item.sender_id === currentUserId;
-                  return (
-                    <View
-                      style={[
-                        styles.messageBubble,
-                        isMe ? styles.messageBubbleMe : styles.messageBubbleThem,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.messageText,
-                          isMe ? styles.messageTextMe : styles.messageTextThem,
-                        ]}
-                      >
-                        {item.content}
-                      </Text>
-                      <Text style={styles.messageTime}>
-                        {new Date(item.created_at).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </Text>
-                    </View>
-                  );
-                }}
-                style={styles.messagesList}
-                contentContainerStyle={styles.messagesContent}
-                onContentSizeChange={() => {
-                  messagesEndRef.current?.scrollToEnd({ animated: true });
-                }}
-              />
-
-              <View style={styles.messageInputContainer}>
-                <TextInput
-                  style={styles.messageInput}
-                  placeholder="Type a message..."
-                  value={messageText}
-                  onChangeText={setMessageText}
-                  multiline
-                  maxLength={500}
-                />
-                <Pressable
-                  style={[styles.sendButton, !messageText.trim() && styles.sendButtonDisabled]}
-                  onPress={handleSendMessage}
-                  disabled={!messageText.trim() || sendingMessage}
-                >
-                  {sendingMessage ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Feather name="send" size={20} color="#fff" />
-                  )}
-                </Pressable>
-              </View>
-            </>
-          )}
-
-          <FlatList
-            ref={messagesEndRef}
-            data={matchMessages}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => {
-              const isMe = item.sender_id === currentUserId;
-              return (
-                <View
-                  style={[
-                    styles.messageBubble,
-                    isMe ? styles.messageBubbleMe : styles.messageBubbleThem,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.messageText,
-                      isMe ? styles.messageTextMe : styles.messageTextThem,
-                    ]}
-                  >
-                    {item.content}
-                  </Text>
-                  <Text style={styles.messageTime}>
-                    {new Date(item.created_at).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </Text>
-                </View>
-              );
-            }}
-            style={styles.messagesList}
-            contentContainerStyle={styles.messagesContent}
-            onContentSizeChange={() => {
-              messagesEndRef.current?.scrollToEnd({ animated: true });
-            }}
-          />
-
-          <View style={styles.messageInputContainer}>
-            <TextInput
-              style={styles.messageInput}
-              placeholder="Type a message..."
-              value={messageText}
-              onChangeText={setMessageText}
-              multiline
-              maxLength={500}
-            />
-            <Pressable
-              style={[styles.sendButton, !messageText.trim() && styles.sendButtonDisabled]}
-              onPress={handleSendMessage}
-              disabled={!messageText.trim() || sendingMessage}
-            >
-              {sendingMessage ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Feather name="send" size={20} color="#fff" />
-              )}
+        // Your match tab: list of matches → tap to open chat (with message box, Play, Unfriend)
+        !activeMatch ? (
+          <View style={[styles.emptyContainer, { flex: 1, justifyContent: 'center' }]}>
+            <Feather name="heart" size={48} color="#d1d5db" />
+            <Text style={styles.emptyText}>No matches yet</Text>
+            <Text style={styles.emptySubtext}>Go to Find Match to get matched with someone.</Text>
+            <Pressable style={styles.refreshButton} onPress={() => setActiveTab('find_match')}>
+              <Feather name="users" size={16} color="#ec4899" />
+              <Text style={styles.refreshButtonText}>Find Match</Text>
             </Pressable>
           </View>
-        </View>
+        ) : (
+          // List of people you're matched with — tap to open chat (full screen, no tab bar)
+          <View style={styles.matchListContainer}>
+            <Text style={styles.matchListTitle}>Your matches</Text>
+            <Text style={styles.matchListSubtitle}>Tap to chat or play games</Text>
+            <Pressable
+              style={styles.matchListCard}
+              onPress={() => router.push({ pathname: '/match-chat', params: { matchId: activeMatch.id, partnerId: activeMatch.partnerId } } as any)}
+            >
+              <View style={styles.matchListCardAvatar}>
+                <Text style={styles.matchListCardAvatarText}>
+                  {(partnerProfile?.display_name || partnerProfile?.anonymous_username || '?').charAt(0).toUpperCase()}
+                </Text>
+              </View>
+              <View style={styles.matchListCardBody}>
+                <Text style={styles.matchListCardName} numberOfLines={1}>
+                  {partnerProfile
+                    ? (partnerProfile.display_name || partnerProfile.anonymous_username || 'Anonymous')
+                    : 'Loading...'}
+                </Text>
+                <Text style={styles.matchListCardMeta}>Chat · Play games</Text>
+              </View>
+              <Feather name="chevron-right" size={22} color="#9ca3af" />
+            </Pressable>
+          </View>
+        )
       )}
     </View>
   );
@@ -1389,20 +1220,87 @@ const styles = StyleSheet.create({
   matchChatContainer: {
     flex: 1,
     backgroundColor: '#fff',
+    minHeight: 0,
   },
   matchHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
+    padding: 12,
+    paddingHorizontal: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#e1e5e9',
-    backgroundColor: '#f9fafb',
+    borderBottomColor: '#e5e7eb',
+    backgroundColor: '#fff',
+  },
+  matchHeaderLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    minWidth: 0,
+  },
+  matchBackButton: {
+    padding: 8,
+    marginRight: 4,
   },
   matchTitle: {
+    flex: 1,
     fontSize: 18,
     fontWeight: '700',
     color: '#111827',
+  },
+  matchListContainer: {
+    flex: 1,
+    backgroundColor: '#f9fafb',
+    padding: 20,
+  },
+  matchListTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  matchListSubtitle: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginBottom: 20,
+  },
+  matchListCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    gap: 14,
+  },
+  matchListCardAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#ec4899',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  matchListCardAvatarText: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  matchListCardBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  matchListCardName: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  matchListCardMeta: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginTop: 2,
   },
   matchTimer: {
     fontSize: 12,
@@ -1437,6 +1335,7 @@ const styles = StyleSheet.create({
   },
   messagesList: {
     flex: 1,
+    minHeight: 0,
   },
   messagesContent: {
     padding: 16,
@@ -1472,36 +1371,51 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
     marginTop: 4,
   },
-  messageInputContainer: {
+  messageBar: {
     flexDirection: 'row',
-    padding: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#e1e5e9',
-    backgroundColor: '#f9fafb',
     alignItems: 'flex-end',
-    gap: 8,
-  },
-  messageInput: {
-    flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 20,
+    gap: 10,
     paddingHorizontal: 16,
-    paddingVertical: 10,
-    fontSize: 15,
-    maxHeight: 100,
-    borderWidth: 1,
-    borderColor: '#e1e5e9',
+    paddingVertical: 12,
+    paddingBottom: 16,
+    backgroundColor: '#fff',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e5e7eb',
   },
-  sendButton: {
+  messageBarFixed: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    paddingBottom: 12,
+  },
+  messageBarInput: {
+    flex: 1,
+    minHeight: 44,
+    maxHeight: 100,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    paddingTop: 12,
+    fontSize: 16,
+    color: '#111827',
+  },
+  messageBarSend: {
     width: 44,
     height: 44,
     borderRadius: 22,
     backgroundColor: '#ec4899',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#ec4899',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  sendButtonDisabled: {
-    opacity: 0.5,
+  messageBarSendDisabled: {
+    backgroundColor: '#d1d5db',
+    shadowOpacity: 0,
   },
   startVoiceButton: {
     flexDirection: 'row',

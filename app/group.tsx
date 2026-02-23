@@ -87,7 +87,7 @@ import {
     const [newStreakDescription, setNewStreakDescription] = useState('');
     const [creatingStreak, setCreatingStreak] = useState(false);
     // Challenge (gamified streak) state
-    const [challengeProgress, setChallengeProgress] = useState<Awaited<ReturnType<typeof getChallengeProgress>>(null);
+    const [challengeProgress, setChallengeProgress] = useState<{ group: any; members: any[]; myMember: any } | null>(null);
     const [loadingChallenge, setLoadingChallenge] = useState(false);
     const [showChallengeModal, setShowChallengeModal] = useState(false);
     const [isAppAdmin, setIsAppAdmin] = useState(false);

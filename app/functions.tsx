@@ -10,6 +10,7 @@ import {
     getDocs,
     increment,
     limit,
+    onSnapshot,
     orderBy,
     query,
     setDoc,
@@ -310,8 +311,9 @@ export const updateUserProfile = async (updates: {
 }) => {
   const user = auth.currentUser;
   if (!user) throw new Error('User not authenticated');
-  await updateDoc(doc(db, 'users', user.uid), updates as any);
-  const snap = await getDoc(doc(db, 'users', user.uid));
+  const userRef = doc(db, 'users', user.uid);
+  await setDoc(userRef, updates as any, { merge: true });
+  const snap = await getDoc(userRef);
   return { id: user.uid, ...snap.data() };
 };
 
@@ -807,12 +809,13 @@ export const fetchMessages = async (convId: string, limitCount = 50) => {
   }
 };
 
+// Query without orderBy so it works even while composite index is building; sort in memory.
 export const getConversations = async () => {
   const user = auth.currentUser;
   if (!user) return [];
   try {
-    const q1 = query(collection(db, 'conversations'), where('participant1_id', '==', user.uid), where('status', '==', 'accepted'), orderBy('updated_at', 'desc'));
-    const q2 = query(collection(db, 'conversations'), where('participant2_id', '==', user.uid), where('status', '==', 'accepted'), orderBy('updated_at', 'desc'));
+    const q1 = query(collection(db, 'conversations'), where('participant1_id', '==', user.uid), where('status', '==', 'accepted'));
+    const q2 = query(collection(db, 'conversations'), where('participant2_id', '==', user.uid), where('status', '==', 'accepted'));
     const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)]);
     const convs: any[] = [];
     const seen = new Set<string>();
@@ -831,12 +834,7 @@ export const getConversations = async () => {
     convs.sort((a, b) => new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime());
     return convs;
   } catch (error: any) {
-    const isIndexError = error?.code === 'failed-precondition' || error?.message?.includes('index');
-    if (isIndexError) {
-      console.warn('Conversations query needs a composite index. Open the link from the error above in your browser to create it (Firebase Console → Firestore → Indexes).');
-    } else {
-      console.error('Error fetching conversations:', error);
-    }
+    console.error('Error fetching conversations:', error);
     return [];
   }
 };
@@ -846,7 +844,7 @@ export const getPendingRequests = async () => {
   if (!user) return [];
   try {
     const snap = await getDocs(
-      query(collection(db, 'conversations'), where('participant2_id', '==', user.uid), where('status', '==', 'pending'), orderBy('updated_at', 'desc'))
+      query(collection(db, 'conversations'), where('participant2_id', '==', user.uid), where('status', '==', 'pending'))
     );
     const list = await Promise.all(
       snap.docs.map(async (d) => {
@@ -859,14 +857,10 @@ export const getPendingRequests = async () => {
         return { id: d.id, ...data, otherUser, firstMessage };
       })
     );
+    list.sort((a: any, b: any) => new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime());
     return list;
   } catch (error: any) {
-    const isIndexError = error?.code === 'failed-precondition' || error?.message?.includes('index');
-    if (isIndexError) {
-      console.warn('Pending requests query needs a composite index. Create it from the link in the error (Firebase Console → Firestore → Indexes).');
-    } else {
-      console.error('Error fetching pending requests:', error);
-    }
+    console.error('Error fetching pending requests:', error);
     return [];
   }
 };
@@ -970,10 +964,11 @@ export const createGroup = async (name: string, description: string, category: s
   }
 };
 
+// Query without orderBy to avoid composite index; sort in memory.
 export const getGroups = async (includePrivate: boolean = false, category?: string) => {
   const user = auth.currentUser;
   try {
-    const constraints: any[] = [orderBy('created_at', 'desc')];
+    const constraints: any[] = [];
     if (!includePrivate) constraints.push(where('is_public', '==', true));
     if (category && category !== 'All') constraints.push(where('category', '==', category));
     const snap = await getDocs(query(collection(db, 'groups'), ...constraints));
@@ -992,6 +987,7 @@ export const getGroups = async (includePrivate: boolean = false, category?: stri
         return { ...group, member_count: membersSnap.size || 1, is_member: isMember };
       })
     );
+    groupsWithStats.sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
     return groupsWithStats;
   } catch (error) {
     console.error('Error getting groups:', error);
@@ -1243,14 +1239,13 @@ export const leaveChallengeGroup = async (groupId: string, forfeit: boolean = fa
   }
 };
 
-/** List official (admin-managed) challenge groups anyone can join. Optional category filter (value from CHALLENGE_CATEGORIES). */
+/** List official (admin-managed) challenge groups. Query without orderBy to avoid index; sort in memory. */
 export const getOfficialChallenges = async (category?: string): Promise<any[]> => {
   try {
     const q = query(
       collection(db, 'groups'),
       where('is_challenge', '==', true),
       where('managed_by_admin', '==', true),
-      orderBy('created_at', 'desc'),
       limit(50)
     );
     const snap = await getDocs(q);
@@ -1273,6 +1268,7 @@ export const getOfficialChallenges = async (category?: string): Promise<any[]> =
         };
       })
     );
+    list.sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
     if (category && category !== 'All') {
       list = list.filter((c) => (c.challenge_category || 'other') === category);
     }
@@ -2751,17 +2747,17 @@ export const getWeeklySummary = async (): Promise<{
 // ANONYMOUS MATCHING FUNCTIONS (Firestore)
 // ========================================
 
-// Get available users for matching (those who opted in)
+// Get available users for matching (those who opted in). Excludes users we already sent a request to.
 export const getAvailableUsers = async (category?: string): Promise<any[]> => {
   try {
     const uid = auth.currentUser?.uid;
     if (!uid) return [];
 
     const usersRef = collection(db, 'users');
-    let q = query(
+    const q = query(
       usersRef,
       where('available_for_matches', '==', true),
-      limit(50)
+      limit(100)
     );
     const snap = await getDocs(q);
     let list: any[] = [];
@@ -2776,6 +2772,20 @@ export const getAvailableUsers = async (category?: string): Promise<any[]> => {
         match_struggles: data.match_struggles ?? [],
       });
     });
+
+    const sentRequestSnap = await getDocs(
+      query(
+        collection(db, 'match_requests'),
+        where('sender_id', '==', uid),
+        limit(100)
+      )
+    );
+    const alreadyRequestedIds = new Set(
+      sentRequestSnap.docs
+        .filter((d) => d.data().status === 'pending' || d.data().status === 'accepted')
+        .map((d) => d.data().receiver_id)
+    );
+    list = list.filter((u: any) => !alreadyRequestedIds.has(u.id));
 
     if (category && category !== 'All' && list.length > 0) {
       list = list.filter((u: any) => (u.match_struggles || []).includes(category));
@@ -2820,6 +2830,45 @@ export const sendMatchRequest = async (targetUserId: string): Promise<string | n
   }
 };
 
+// Subscribe to pending match requests in real time (requests sent TO current user). Returns unsubscribe.
+export const subscribeToMatchRequests = (onUpdate: (requests: any[]) => void): (() => void) => {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return () => {};
+  const requestsRef = collection(db, 'match_requests');
+  const q = query(
+    requestsRef,
+    where('receiver_id', '==', uid),
+    where('status', '==', 'pending'),
+    limit(50)
+  );
+  const unsub = onSnapshot(
+    q,
+    async (snap) => {
+      const requests = snap.docs
+        .map((d) => ({ id: d.id, ...d.data(), created_at: (d.data() as any).created_at || '' }))
+        .sort((a: any, b: any) => (b.created_at || '').localeCompare(a.created_at || ''));
+      const senderIds = [...new Set(requests.map((r: any) => r.sender_id))];
+      const profiles: Record<string, any> = {};
+      for (const sid of senderIds) {
+        const userSnap = await getDoc(doc(db, 'users', sid));
+        if (userSnap.exists()) {
+          const d = userSnap.data();
+          profiles[sid] = {
+            id: sid,
+            display_name: d?.display_name ?? null,
+            anonymous_username: d?.anonymous_username ?? null,
+            avatar_url: d?.avatar_url ?? null,
+            match_struggles: d?.match_struggles ?? [],
+          };
+        }
+      }
+      onUpdate(requests.map((r: any) => ({ ...r, profiles: profiles[r.sender_id] || null })));
+    },
+    (err) => console.error('subscribeToMatchRequests', err)
+  );
+  return unsub;
+};
+
 // Get pending match requests (requests sent to current user)
 export const getPendingMatchRequests = async (): Promise<any[]> => {
   try {
@@ -2832,13 +2881,14 @@ export const getPendingMatchRequests = async (): Promise<any[]> => {
         requestsRef,
         where('receiver_id', '==', uid),
         where('status', '==', 'pending'),
-        orderBy('created_at', 'desc'),
         limit(50)
       )
     );
     if (snap.empty) return [];
 
-    const requests = snap.docs.map((d) => ({ id: d.id, ...d.data(), created_at: d.data().created_at || '' }));
+    const requests = snap.docs
+      .map((d) => ({ id: d.id, ...d.data(), created_at: (d.data() as any).created_at || '' }))
+      .sort((a: any, b: any) => (b.created_at || '').localeCompare(a.created_at || ''));
     const senderIds = [...new Set(requests.map((r: any) => r.sender_id))];
     const profiles: Record<string, any> = {};
     for (const sid of senderIds) {
@@ -2876,8 +2926,9 @@ export const acceptMatchRequest = async (requestId: string): Promise<boolean> =>
     const data = requestSnap.data()!;
     if (data.receiver_id !== uid || data.status !== 'pending') return false;
 
+    // No time limit: set far future so match never auto-expires
     const expiresAt = new Date();
-    expiresAt.setMinutes(expiresAt.getMinutes() + 30);
+    expiresAt.setFullYear(expiresAt.getFullYear() + 100);
 
     const matchRef = await addDoc(collection(db, 'anonymous_matches'), {
       user1_id: data.sender_id,
@@ -2886,6 +2937,27 @@ export const acceptMatchRequest = async (requestId: string): Promise<boolean> =>
       expires_at: expiresAt.toISOString(),
     });
     await updateDoc(requestRef, { status: 'accepted' });
+    // Notify the sender (person who sent the request) that they were accepted
+    try {
+      const notifRef = collection(db, 'notifications');
+      await addDoc(notifRef, {
+        recipient_id: data.sender_id,
+        type: 'match_accepted',
+        created_at: new Date().toISOString(),
+        read: false,
+        match_id: matchRef.id,
+        from_user_id: uid,
+        request_id: requestId,
+      });
+      sendPushToUser(
+        data.sender_id,
+        'Match accepted',
+        "Someone accepted your match request. Tap to open the chat!",
+        { type: 'match_accepted', match_id: matchRef.id }
+      );
+    } catch (e) {
+      console.warn('Failed to create match_accepted notification', e);
+    }
     return true;
   } catch (error) {
     console.error('Error accepting match request:', error);
@@ -2908,6 +2980,23 @@ export const declineMatchRequest = async (requestId: string): Promise<boolean> =
   } catch (error) {
     console.error('Error declining match request:', error);
     return false;
+  }
+};
+
+// Get partner's display name for match header (display_name or anonymous_username)
+export const getPartnerProfile = async (partnerId: string): Promise<{ display_name?: string; anonymous_username?: string } | null> => {
+  try {
+    if (!partnerId) return null;
+    const userSnap = await getDoc(doc(db, 'users', partnerId));
+    if (!userSnap.exists()) return null;
+    const d = userSnap.data() as any;
+    return {
+      display_name: d?.display_name ?? undefined,
+      anonymous_username: d?.anonymous_username ?? undefined,
+    };
+  } catch (error) {
+    console.error('Error getting partner profile:', error);
+    return null;
   }
 };
 
@@ -2934,25 +3023,41 @@ export const getActiveMatch = async (): Promise<{
     if (!match) return null;
 
     const partnerId = match.user1_id === uid ? match.user2_id : match.user1_id;
-    const expiresAt = new Date(match.expires_at);
-    const now = new Date();
-    const timeRemaining = Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / 1000 / 60));
-
-    if (timeRemaining <= 0) {
-      await updateDoc(doc(db, 'anonymous_matches', match.id), { status: 'expired' });
-      return null;
-    }
-
+    // No time limit: matches don't expire
     return {
       id: match.id,
       partnerId,
-      expiresAt: match.expires_at,
-      timeRemaining,
+      expiresAt: match.expires_at || '',
+      timeRemaining: 999999,
     };
   } catch (error) {
     console.error('Error getting active match:', error);
     return null;
   }
+};
+
+// Real-time subscription: when someone accepts your request, you see the active match immediately
+export const subscribeToActiveMatch = (
+  onUpdate: (match: { id: string; partnerId: string; expiresAt: string; timeRemaining: number } | null) => void
+): (() => void) => {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return () => {};
+
+  const matchesRef = collection(db, 'anonymous_matches');
+  const q1 = query(matchesRef, where('user1_id', '==', uid), where('status', '==', 'active'), limit(5));
+  const q2 = query(matchesRef, where('user2_id', '==', uid), where('status', '==', 'active'), limit(5));
+
+  const refresh = () => {
+    getActiveMatch().then((m) => onUpdate(m));
+  };
+
+  const unsub1 = onSnapshot(q1, refresh, (err) => console.error('subscribeToActiveMatch (user1)', err));
+  const unsub2 = onSnapshot(q2, refresh, (err) => console.error('subscribeToActiveMatch (user2)', err));
+
+  return () => {
+    unsub1();
+    unsub2();
+  };
 };
 
 // Extend match time (add 15 more minutes)
@@ -2977,7 +3082,7 @@ export const extendMatch = async (matchId: string): Promise<boolean> => {
   }
 };
 
-// End match gracefully
+// End match gracefully (Unfriend)
 export const endMatch = async (matchId: string): Promise<boolean> => {
   try {
     const uid = auth.currentUser?.uid;
@@ -2996,7 +3101,183 @@ export const endMatch = async (matchId: string): Promise<boolean> => {
   }
 };
 
+const GAME_LABELS: Record<string, string> = {
+  tictactoe: 'Tic-Tac-Toe',
+  chess: 'Chess',
+  ludo: 'Ludo',
+};
+
+async function sendPushToUser(
+  recipientId: string,
+  title: string,
+  body: string,
+  data: Record<string, string>
+): Promise<void> {
+  try {
+    const sendPush = httpsCallable<
+      { recipientId: string; title: string; body: string; data?: Record<string, string> },
+      { ok: boolean; error?: string }
+    >(functions, 'sendExpoPush');
+    await sendPush({ recipientId, title, body, data });
+  } catch (e) {
+    console.warn('Push send failed', e);
+  }
+}
+
+// Send a game invite to your match partner (in-app notification + push to tray)
+export const sendGameInvite = async (
+  partnerId: string,
+  matchId: string,
+  gameType: string
+): Promise<boolean> => {
+  try {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return false;
+
+    const notifRef = collection(db, 'notifications');
+    await addDoc(notifRef, {
+      recipient_id: partnerId,
+      type: 'game_invite',
+      created_at: new Date().toISOString(),
+      read: false,
+      from_user_id: uid,
+      match_id: matchId,
+      room_id: matchId,
+      game_type: gameType,
+    });
+    const now = new Date().toISOString();
+    const matchRef = doc(db, 'anonymous_matches', matchId);
+    await updateDoc(matchRef, {
+      last_game_invite: {
+        game_type: gameType,
+        from_user_id: uid,
+        status: 'pending',
+        created_at: now,
+      },
+    });
+    const gameLabel = GAME_LABELS[gameType] || gameType;
+    sendPushToUser(
+      partnerId,
+      'Game invite',
+      `Your match invited you to play ${gameLabel}.`,
+      { type: 'game_invite', match_id: matchId, game_type: gameType }
+    );
+    return true;
+  } catch (error) {
+    console.error('Error sending game invite:', error);
+    return false;
+  }
+};
+
+// Called when recipient taps "Later" so the sender can see the invite was declined
+export const setGameInviteDeclined = async (matchId: string): Promise<void> => {
+  try {
+    const matchRef = doc(db, 'anonymous_matches', matchId);
+    const snap = await getDoc(matchRef);
+    if (!snap.exists()) return;
+    const data = snap.data() as any;
+    const prev = data?.last_game_invite || {};
+    await updateDoc(matchRef, {
+      last_game_invite: {
+        ...prev,
+        status: 'declined',
+        game_type: prev.game_type || '',
+        from_user_id: prev.from_user_id || '',
+        created_at: prev.created_at || new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    console.error('Error setting game invite declined:', error);
+  }
+};
+
+// Subscribe to match doc so sender can see when their game invite was declined
+export const subscribeToMatchGameInviteStatus = (
+  matchId: string,
+  gameType: string,
+  onDeclined: () => void
+): (() => void) => {
+  const uid = auth.currentUser?.uid;
+  if (!uid || !matchId) return () => {};
+
+  const matchRef = doc(db, 'anonymous_matches', matchId);
+  const unsub = onSnapshot(
+    matchRef,
+    (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data() as any;
+      const inv = data?.last_game_invite;
+      if (
+        inv?.from_user_id === uid &&
+        (inv?.game_type || '') === (gameType || '') &&
+        inv?.status === 'declined'
+      ) {
+        onDeclined();
+      }
+    },
+    (err) => console.error('subscribeToMatchGameInviteStatus', err)
+  );
+  return unsub;
+};
+
+// Subscribe to game invites (so we can show in-app alert when partner invites you)
+export const subscribeToGameInvites = (
+  onInvites: (invites: { id: string; game_type: string; match_id: string; from_user_id: string; read: boolean }[]) => void
+): (() => void) => {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return () => {};
+
+  const notifRef = collection(db, 'notifications');
+  const q = query(
+    notifRef,
+    where('recipient_id', '==', uid),
+    where('type', '==', 'game_invite'),
+    limit(30)
+  );
+  const unsub = onSnapshot(
+    q,
+    (snap) => {
+      const invites = snap.docs.map((d) => {
+        const data = d.data() as any;
+        return {
+          id: d.id,
+          game_type: data.game_type || 'tictactoe',
+          match_id: data.match_id || '',
+          from_user_id: data.from_user_id || '',
+          read: !!data.read,
+          created_at: data.created_at || '',
+        };
+      });
+      invites.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+      onInvites(invites);
+    },
+    (err) => console.error('subscribeToGameInvites', err)
+  );
+  return unsub;
+};
+
+// Subscribe to unread notification count (for tab + app icon badge)
+export const subscribeToUnreadNotificationCount = (onCount: (count: number) => void): (() => void) => {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return () => {};
+
+  const notifRef = collection(db, 'notifications');
+  const q = query(
+    notifRef,
+    where('recipient_id', '==', uid),
+    where('read', '==', false),
+    limit(500)
+  );
+  const unsub = onSnapshot(
+    q,
+    (snap) => onCount(snap.size),
+    (err) => console.error('subscribeToUnreadNotificationCount', err)
+  );
+  return unsub;
+};
+
 // Get match conversation (messages between matched users)
+// Query without orderBy so it works even while composite index is building; we sort in memory.
 export const getMatchMessages = async (matchId: string): Promise<any[]> => {
   try {
     const uid = auth.currentUser?.uid;
@@ -3007,15 +3288,41 @@ export const getMatchMessages = async (matchId: string): Promise<any[]> => {
       query(
         messagesRef,
         where('match_id', '==', matchId),
-        orderBy('created_at', 'asc'),
         limit(200)
       )
     );
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const list = snap.docs.map((d) => ({ id: d.id, ...d.data(), created_at: (d.data() as any).created_at || '' }));
+    list.sort((a: any, b: any) => (a.created_at || '').localeCompare(b.created_at || ''));
+    return list;
   } catch (error) {
     console.error('Error getting match messages:', error);
     return [];
   }
+};
+
+// Real-time subscription for match messages (no orderBy = works while index is building; sort in memory)
+export const subscribeToMatchMessages = (
+  matchId: string,
+  onMessages: (messages: any[]) => void
+): (() => void) => {
+  if (!matchId) return () => {};
+
+  const messagesRef = collection(db, 'match_messages');
+  const q = query(
+    messagesRef,
+    where('match_id', '==', matchId),
+    limit(200)
+  );
+  const unsub = onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data(), created_at: (d.data() as any).created_at || '' }));
+      list.sort((a: any, b: any) => (a.created_at || '').localeCompare(b.created_at || ''));
+      onMessages(list);
+    },
+    (err) => console.error('subscribeToMatchMessages', err)
+  );
+  return unsub;
 };
 
 // Send message in match
@@ -3035,6 +3342,83 @@ export const sendMatchMessage = async (matchId: string, content: string): Promis
   } catch (error) {
     console.error('Error sending match message:', error);
     return null;
+  }
+};
+
+// Unread notification count (for badge)
+export const getUnreadNotificationCount = async (): Promise<number> => {
+  try {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return 0;
+    const notifRef = collection(db, 'notifications');
+    const snap = await getDocs(
+      query(
+        notifRef,
+        where('recipient_id', '==', uid),
+        where('read', '==', false),
+        limit(200)
+      )
+    );
+    return snap.size;
+  } catch (error) {
+    console.error('Error getting unread notification count:', error);
+    return 0;
+  }
+};
+
+// In-app notifications
+export const getNotifications = async (): Promise<any[]> => {
+  try {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return [];
+
+    const notifRef = collection(db, 'notifications');
+    const snap = await getDocs(
+      query(
+        notifRef,
+        where('recipient_id', '==', uid),
+        limit(100)
+      )
+    );
+    const list = snap.docs
+      .map((d) => ({ id: d.id, ...d.data(), created_at: (d.data() as any).created_at || '' }))
+      .sort((a: any, b: any) => (b.created_at || '').localeCompare(a.created_at || ''));
+    const fromIds = [...new Set(list.map((n: any) => n.from_user_id).filter(Boolean))];
+    const profiles: Record<string, any> = {};
+    for (const fid of fromIds) {
+      const userSnap = await getDoc(doc(db, 'users', fid));
+      if (userSnap.exists()) {
+        const d = userSnap.data();
+        profiles[fid] = {
+          id: fid,
+          display_name: d?.display_name ?? null,
+          anonymous_username: d?.anonymous_username ?? null,
+          avatar_url: d?.avatar_url ?? null,
+        };
+      }
+    }
+    return list.map((n: any) => ({
+      ...n,
+      profiles: n.from_user_id ? (profiles[n.from_user_id] || { id: n.from_user_id }) : { id: '' },
+    }));
+  } catch (error) {
+    console.error('Error getting notifications:', error);
+    return [];
+  }
+};
+
+export const markNotificationRead = async (notificationId: string): Promise<boolean> => {
+  try {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return false;
+    const ref = doc(db, 'notifications', notificationId);
+    const snap = await getDoc(ref);
+    if (!snap.exists() || snap.data()?.recipient_id !== uid) return false;
+    await updateDoc(ref, { read: true });
+    return true;
+  } catch (error) {
+    console.error('Error marking notification read:', error);
+    return false;
   }
 };
 

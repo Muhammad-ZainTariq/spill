@@ -86,6 +86,16 @@
     }
     .cell .token.p0 { background: linear-gradient(145deg, #ef4444, #b91c1c); }
     .cell .token.p1 { background: linear-gradient(145deg, #3b82f6, #1d4ed8); }
+    .cell.possible-move {
+      box-shadow: 0 0 0 3px #22c55e;
+      background: #bbf7d0 !important;
+      border-color: #16a34a;
+      animation: pulse-move 1s ease-in-out infinite;
+    }
+    @keyframes pulse-move {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.08); }
+    }
 
     .dice-section {
       margin-top: 14px;
@@ -184,7 +194,7 @@
     const LEN = 40;
     let myIndex = null;
     let opponentName = opponentFromUrl || 'Opponent';
-    let state = { positions: [0, 0], turn: 0, lastDice: 0, winner: null };
+    let state = { positions: [-1, -1], turn: 0, lastDice: 0, winner: null };
 
     function pathPosition(i) {
       if (i <= 9) return { row: 0, col: i + 1 };
@@ -222,32 +232,39 @@
     }
 
     function render() {
+      var myPos = myIndex !== null ? state.positions[myIndex] : -1;
       trackEl.innerHTML = '';
       trackEl.style.gridTemplateColumns = 'repeat(11, 1fr)';
       trackEl.style.gridTemplateRows = 'repeat(11, 1fr)';
-      for (let i = 0; i < LEN; i++) {
-        const { row, col } = pathPosition(i);
-        const cell = document.createElement('div');
+      for (var i = 0; i < LEN; i++) {
+        var pos = pathPosition(i);
+        var cell = document.createElement('div');
         cell.className = 'cell path';
-        cell.style.gridRow = row + 1;
-        cell.style.gridColumn = col + 1;
+        cell.style.gridRow = pos.row + 1;
+        cell.style.gridColumn = pos.col + 1;
         if (i === 0) cell.classList.add('start');
         if (i === LEN - 1) {
           cell.classList.add('end');
-          const lbl = document.createElement('span');
+          var lbl = document.createElement('span');
           lbl.textContent = 'HOME';
           lbl.style.fontSize = '9px';
           cell.appendChild(lbl);
         }
-        if (state.positions[0] === i) {
-          const t = document.createElement('span');
-          t.className = 'token p0';
-          cell.appendChild(t);
+        if (state.positions[0] >= 0 && state.positions[0] === i) {
+          var t0 = document.createElement('span');
+          t0.className = 'token p0';
+          cell.appendChild(t0);
         }
-        if (state.positions[1] === i) {
-          const t = document.createElement('span');
-          t.className = 'token p1';
-          cell.appendChild(t);
+        if (state.positions[1] >= 0 && state.positions[1] === i) {
+          var t1 = document.createElement('span');
+          t1.className = 'token p1';
+          cell.appendChild(t1);
+        }
+        if (state.turn === myIndex && myPos >= 0 && state.winner === null) {
+          for (var step = 1; step <= 6; step++) {
+            var dest = Math.min(LEN - 1, myPos + step);
+            if (dest === i) { cell.classList.add('possible-move'); break; }
+          }
         }
         trackEl.appendChild(cell);
       }
@@ -260,8 +277,12 @@
         gameOverActionsEl.classList.remove('hidden');
       } else {
         gameOverActionsEl.classList.add('hidden');
-        if (state.turn === myIndex) setStatus('Your turn', 'Tap Roll dice!', 'you-turn');
-        else setStatus(opponentName + "'s turn", 'Waiting for their roll...', '');
+        if (state.turn === myIndex) {
+          if (myPos === -1) setStatus('Your turn', 'Roll a 6 to enter the board!', 'you-turn');
+          else setStatus('Your turn', 'Roll dice — green cells are your possible moves', 'you-turn');
+        } else {
+          setStatus(opponentName + "'s turn", 'Waiting for their roll...', '');
+        }
       }
     }
 
@@ -283,12 +304,13 @@
         opponentName = (data.opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
       }
       gameArea.classList.remove('hidden');
-      state = { positions: [0, 0], turn: 0, lastDice: 0, winner: null };
+      state = { positions: [-1, -1], turn: 0, lastDice: 0, winner: null };
       render();
     });
 
     socket.on('state', (data) => {
       state = data;
+      if (!state.positions) state.positions = [-1, -1];
       render();
     });
 

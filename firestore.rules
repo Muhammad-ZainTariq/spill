@@ -1,0 +1,92 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users: anyone authenticated can read (for matching list, profiles); only own doc writable
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Match requests: only sender or receiver can read/write
+    match /match_requests/{requestId} {
+      allow create: if request.auth != null
+        && request.resource.data.sender_id == request.auth.uid;
+      allow read, update, delete: if request.auth != null
+        && (resource.data.sender_id == request.auth.uid
+            || resource.data.receiver_id == request.auth.uid);
+    }
+
+    // Anonymous matches: only participants can read/write
+    match /anonymous_matches/{matchId} {
+      allow create: if request.auth != null
+        && (request.resource.data.user1_id == request.auth.uid
+            || request.resource.data.user2_id == request.auth.uid);
+      allow read, update, delete: if request.auth != null
+        && (resource.data.user1_id == request.auth.uid
+            || resource.data.user2_id == request.auth.uid);
+    }
+
+    // Match messages: any authenticated user (app restricts by match membership)
+    match /match_messages/{messageId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Conversations (DMs): only participants can read/write
+    match /conversations/{convId} {
+      allow create: if request.auth != null
+        && (request.resource.data.participant1_id == request.auth.uid
+            || request.resource.data.participant2_id == request.auth.uid);
+      allow read, update, delete: if request.auth != null
+        && (resource.data.participant1_id == request.auth.uid
+            || resource.data.participant2_id == request.auth.uid);
+    }
+
+    // Messages in conversations
+    match /messages/{messageId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Posts, comments, votes, followers, etc.
+    match /posts/{postId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.user_id == request.auth.uid;
+      allow update, delete: if request.auth != null;
+    }
+    match /comments/{commentId} {
+      allow read, write: if request.auth != null;
+    }
+    match /postVotes/{voteId} {
+      allow read, write: if request.auth != null;
+    }
+    match /followers/{followerId} {
+      allow read, write: if request.auth != null;
+    }
+    match /login_logs/{logId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Groups
+    match /groups/{groupId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null;
+    }
+    match /group_members/{memberId} {
+      allow read, write: if request.auth != null;
+    }
+    match /group_activities/{activityId} {
+      allow read, write: if request.auth != null;
+    }
+    match /group_streak_proofs/{proofId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // In-app notifications (match accepted, game invites)
+    match /notifications/{notifId} {
+      allow create: if request.auth != null;
+      allow read, update, delete: if request.auth != null
+        && (resource == null || resource.data.recipient_id == request.auth.uid);
+    }
+  }
+}

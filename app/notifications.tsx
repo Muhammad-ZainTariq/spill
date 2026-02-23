@@ -12,11 +12,12 @@ import {
   View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getNotifications, markNotificationRead } from '../app/functions';
 import { auth } from '../lib/firebase';
 
 interface Notification {
   id: string;
-  type: 'follow' | 'like' | 'comment' | 'new_post' | 'message' | 'group_message';
+  type: 'follow' | 'like' | 'comment' | 'new_post' | 'message' | 'group_message' | 'match_accepted' | 'game_invite';
   created_at: string;
   read: boolean;
   profiles: {
@@ -25,6 +26,9 @@ interface Notification {
     anonymous_username?: string;
     avatar_url?: string;
   };
+  match_id?: string;
+  from_user_id?: string;
+  game_type?: string;
   posts?: {
     id: string;
     content: string;
@@ -66,8 +70,8 @@ export default function NotificationsScreen() {
         setNotifications([]);
         return;
       }
-      // TODO: implement with Firestore (followers, postVotes, comments, messages collections)
-      setNotifications([]);
+      const list = await getNotifications();
+      setNotifications(list);
     } catch (error) {
       console.error('Error loading notifications:', error);
       setNotifications([]);
@@ -109,19 +113,24 @@ export default function NotificationsScreen() {
         return `${username} sent you a message`;
       case 'group_message':
         return `${username} sent a message in ${notification.group_messages?.group_name || 'a group'}`;
+      case 'match_accepted':
+        return `${username} accepted your match request. Tap to open the chat!`;
+      case 'game_invite': {
+        const gameLabel = { tictactoe: 'Tic-Tac-Toe', chess: 'Chess', ludo: 'Ludo' }[notification.game_type || ''] || notification.game_type || 'a game';
+        return `${username} invited you to play ${gameLabel}. Tap to join!`;
+      }
       default:
         return 'New notification';
     }
   };
 
-  const handleNotificationPress = (notification: Notification) => {
+  const handleNotificationPress = async (notification: Notification) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    
-    // Mark as read
-    setNotifications(prev => 
+    setNotifications(prev =>
       prev.map(n => n.id === notification.id ? { ...n, read: true } : n)
     );
-    
+    await markNotificationRead(notification.id);
+
     if (notification.type === 'follow') {
       router.push(`/profile?userId=${notification.profiles.id}` as any);
     } else if (notification.type === 'message' && notification.messages) {
@@ -130,6 +139,10 @@ export default function NotificationsScreen() {
       router.push(`/group?groupId=${notification.group_messages.group_id}` as any);
     } else if (notification.posts) {
       router.push(`/comments?postId=${notification.posts.id}` as any);
+    } else if (notification.type === 'match_accepted') {
+      router.replace('/(tabs)/matches' as any);
+    } else if (notification.type === 'game_invite' && notification.match_id && notification.game_type) {
+      router.push({ pathname: '/game-webview', params: { room: notification.match_id, gameType: notification.game_type } } as any);
     }
   };
 
@@ -220,7 +233,7 @@ export default function NotificationsScreen() {
         <View style={styles.emptyState}>
           <Text style={styles.emptyTitle}>No notifications yet</Text>
           <Text style={styles.emptySubtitle}>
-            You'll see notifications when someone follows you or likes your posts
+            You'll see notifications when someone accepts your match request, follows you, or likes your posts
           </Text>
         </View>
       ) : (

@@ -194,3 +194,61 @@ exports.createStaffUser = functions.region('us-central1').https.onCall(async (da
     throw new functions.https.HttpsError('internal', err.message || 'Failed to create staff user.');
   }
 });
+
+// Callable: send an Expo push notification to a user (used for game invites, match accepted, etc.)
+exports.sendExpoPush = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+    }
+    const { recipientId, title, body, data: payload } = data || {};
+    if (!recipientId || typeof recipientId !== 'string' || !title || typeof title !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'recipientId and title are required.');
+    }
+    const db = admin.firestore();
+    const userSnap = await db.collection('users').doc(recipientId.trim()).get();
+    if (!userSnap.exists) {
+      return { ok: false, error: 'User not found' };
+    }
+    const expoPushToken = userSnap.data().expo_push_token;
+    if (!expoPushToken || typeof expoPushToken !== 'string' || !expoPushToken.startsWith('ExponentPushToken[')) {
+      return { ok: false, error: 'No push token' };
+    }
+    const recipientIdTrimmed = recipientId.trim();
+    let badge = 0;
+    try {
+      const unreadSnap = await db.collection('notifications')
+        .where('recipient_id', '==', recipientIdTrimmed)
+        .where('read', '==', false)
+        .limit(500)
+        .get();
+      badge = unreadSnap.size;
+    } catch (e) {
+      // ignore badge count failure
+    }
+    try {
+      const res = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: expoPushToken,
+          title: title.substring(0, 100),
+          body: (body || '').substring(0, 200),
+          data: payload || {},
+          sound: 'default',
+          channelId: 'default',
+          badge,
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error('Expo push error', res.status, text);
+        return { ok: false, error: text };
+      }
+      return { ok: true };
+    } catch (err) {
+      console.error('sendExpoPush failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Failed to send push.');
+    }
+  });
