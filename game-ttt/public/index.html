@@ -2,147 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no" />
-  <title>Tic-Tac-Toe · Spill</title>
-  <script src="/socket.io/socket.io.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Spill · Games</title>
   <style>
-    * { box-sizing: border-box; }
-    html { -webkit-text-size-adjust: 100%; touch-action: manipulation; }
-    body { font-family: system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8fafc; padding: 12px 16px; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; user-select: none; }
-    h1 { font-size: 1rem; font-weight: 600; color: #64748b; margin: 0 0 4px 0; }
-    .status { color: #64748b; margin-bottom: 12px; text-align: center; font-size: 0.9rem; }
-    .board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 280px; }
-    .cell { width: 80px; height: 80px; border: 2px solid #e2e8f0; border-radius: 12px; background: #fff; font-size: 2rem; font-weight: 700; color: #0f172a; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-    .cell:hover:not(.filled) { background: #f1f5f9; border-color: #ec4899; }
-    .cell.filled { cursor: default; }
-    .cell.x { color: #ec4899; }
-    .cell.o { color: #8b5cf6; }
-    .waiting { color: #64748b; }
-    .winner { color: #10b981; font-weight: 700; }
-    .draw { color: #64748b; }
-    .hidden { display: none !important; }
-    .game-over-actions { display: flex; gap: 10px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
-    .game-over-actions.hidden { display: none !important; }
-    .btn-game-over {
-      padding: 10px 20px;
-      border-radius: 10px;
-      font-size: 0.95rem;
-      font-weight: 600;
-      border: none;
-      cursor: pointer;
-      font-family: inherit;
-    }
-    .btn-replay { background: #34d399; color: #0f172a; }
-    .btn-leave { background: #e2e8f0; color: #475569; }
+    body { font-family: system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f8fafc; padding: 20px; }
+    .box { max-width: 420px; text-align: center; }
+    h1 { font-size: 1.25rem; color: #0f172a; margin-bottom: 12px; }
+    p { color: #64748b; font-size: 0.95rem; line-height: 1.5; margin: 0 0 8px 0; }
+    a { color: #3b82f6; }
   </style>
 </head>
 <body>
-  <p id="status" class="status">Connecting...</p>
-  <div id="gameOverActions" class="game-over-actions hidden">
-    <button type="button" class="btn-game-over btn-replay">Replay</button>
-    <button type="button" class="btn-game-over btn-leave">Leave</button>
+  <div class="box">
+    <h1>Spill games</h1>
+    <p>This server does not host custom games. Use <strong>ready-made games</strong> only.</p>
+    <p>Deploy Square Off, Breakout, and Space-Shooter at <code>/squareoff</code>, <code>/breakout</code>, <code>/spaceshooter</code> with <code>?room=</code> support, then set <code>gameBaseUrl</code> in app.json to this URL.</p>
+    <p>See <a href="https://github.com/ScriptaGames/SquareOff">Square Off</a>, <a href="https://github.com/Couchfriends/breakout">Breakout</a>, <a href="https://github.com/Couchfriends/Space-Shooter">Space-Shooter</a>.</p>
   </div>
-  <div id="board" class="board hidden">
-    <button type="button" class="cell" data-i="0"></button>
-    <button type="button" class="cell" data-i="1"></button>
-    <button type="button" class="cell" data-i="2"></button>
-    <button type="button" class="cell" data-i="3"></button>
-    <button type="button" class="cell" data-i="4"></button>
-    <button type="button" class="cell" data-i="5"></button>
-    <button type="button" class="cell" data-i="6"></button>
-    <button type="button" class="cell" data-i="7"></button>
-    <button type="button" class="cell" data-i="8"></button>
-  </div>
-
-  <script>
-    const socket = io();
-    const params = new URLSearchParams(window.location.search);
-    const roomCode = params.get('room') || '';
-    const opponentFromUrl = (params.get('opponent') || params.get('opponentName') || '').trim().slice(0, 30);
-    const statusEl = document.getElementById('status');
-    const boardEl = document.getElementById('board');
-    const gameOverActionsEl = document.getElementById('gameOverActions');
-    let myRole = null;
-    let opponentName = opponentFromUrl || 'Opponent';
-    let state = { board: [], turn: 'X', winner: null };
-
-    function setStatus(text, className = '') {
-      statusEl.textContent = text;
-      statusEl.className = 'status ' + className;
-    }
-
-    function renderBoard() {
-      state.board.forEach((v, i) => {
-        const cell = boardEl.querySelector(`[data-i="${i}"]`);
-        cell.textContent = v;
-        cell.classList.toggle('filled', !!v);
-        cell.classList.toggle('x', v === 'X');
-        cell.classList.toggle('o', v === 'O');
-        cell.disabled = !!state.winner || state.turn !== myRole || !!v;
-      });
-      if (state.winner === 'draw') {
-        setStatus("It's a draw!", 'draw');
-        gameOverActionsEl.classList.remove('hidden');
-      } else if (state.winner) {
-        setStatus(state.winner === myRole ? 'You win!' : opponentName + ' won.', 'winner');
-        gameOverActionsEl.classList.remove('hidden');
-      } else {
-        gameOverActionsEl.classList.add('hidden');
-        setStatus(state.turn === myRole ? 'Your turn' : opponentName + "'s turn");
-      }
-    }
-
-    boardEl.querySelectorAll('.cell').forEach(cell => {
-      cell.addEventListener('click', () => {
-        const i = parseInt(cell.dataset.i, 10);
-        if (state.board[i] || state.winner || state.turn !== myRole) return;
-        socket.emit('move', { roomCode, index: i, mark: myRole });
-      });
-    });
-
-    socket.on('connect', () => {
-      if (roomCode) {
-        setStatus('Joining game...');
-        socket.emit('joinOrCreate', { roomCode, name: 'Player' });
-      } else {
-        setStatus('Open this page with ?room=YOUR_ROOM_ID (e.g. from the Spill app).');
-      }
-    });
-
-    socket.on('waiting', () => {
-      boardEl.classList.add('hidden');
-      setStatus('Waiting for opponent... Share the same link with your match.', 'waiting');
-    });
-
-    socket.on('start', (data) => {
-      myRole = data.role;
-      if (!opponentName || opponentName === 'Opponent') {
-        opponentName = (data.opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
-      }
-      state = { board: Array(9).fill(''), turn: 'X', winner: null };
-      boardEl.classList.remove('hidden');
-      setStatus(state.turn === myRole ? 'Your turn' : opponentName + "'s turn");
-    });
-
-    socket.on('state', (data) => {
-      state = data;
-      renderBoard();
-    });
-
-    socket.on('roomFull', () => setStatus('This room is full.'));
-    socket.on('opponentLeft', () => setStatus('Opponent left.', 'draw'));
-
-    gameOverActionsEl.addEventListener('click', (e) => {
-      if (e.target.classList.contains('btn-replay')) {
-        window.location.reload();
-      } else if (e.target.classList.contains('btn-leave')) {
-        if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
-          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'leave' }));
-        } else {
-          window.close();
-        }
-      }
-    });
-  </script>
 </body>
 </html>
