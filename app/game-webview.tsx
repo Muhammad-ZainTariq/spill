@@ -105,7 +105,7 @@ export default function GameWebViewScreen() {
       </View>
       <WebView
         source={{ uri: gameUrl! }}
-        style={[styles.webview, gameType === 'chess' && { backgroundColor: '#0f172a' }]}
+        style={[styles.webview, gameType === 'chess' && { backgroundColor: '#0f172a' }, gameType === 'ludo' && { backgroundColor: '#22c55e' }]}
         startInLoadingState
         scrollEnabled={false}
         bounces={false}
@@ -156,9 +156,9 @@ export default function GameWebViewScreen() {
           } catch (_) {}
         }}
         renderLoading={() => (
-          <View style={[styles.loading, gameType === 'chess' && styles.loadingDark]}>
+          <View style={[styles.loading, gameType === 'chess' && styles.loadingDark, gameType === 'ludo' && styles.loadingGreen]}>
             <ActivityIndicator size="large" color="#ec4899" />
-            <Text style={[styles.loadingText, gameType === 'chess' && styles.loadingTextDark]}>Loading game...</Text>
+            <Text style={[styles.loadingText, gameType === 'chess' && styles.loadingTextDark, gameType === 'ludo' && styles.loadingTextGreen]}>Loading game...</Text>
           </View>
         )}
       />
@@ -203,8 +203,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   loadingDark: { backgroundColor: '#0f172a' },
+  loadingGreen: { backgroundColor: '#22c55e' },
   loadingText: { marginTop: 12, fontSize: 14, color: '#64748b' },
   loadingTextDark: { color: '#94a3b8' },
+  loadingTextGreen: { color: '#fff' },
   placeholder: {
     flex: 1,
     justifyContent: 'center',
