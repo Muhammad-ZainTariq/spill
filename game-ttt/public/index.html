@@ -7,17 +7,25 @@
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f8fafc; padding: 20px; }
     .box { max-width: 420px; text-align: center; }
-    h1 { font-size: 1.25rem; color: #0f172a; margin-bottom: 12px; }
-    p { color: #64748b; font-size: 0.95rem; line-height: 1.5; margin: 0 0 8px 0; }
-    a { color: #3b82f6; }
+    h1 { font-size: 1.25rem; color: #0f172a; margin-bottom: 16px; }
+    p { color: #64748b; font-size: 0.95rem; line-height: 1.5; margin: 0 0 12px 0; }
+    ul { list-style: none; padding: 0; margin: 16px 0 0 0; }
+    li { margin: 8px 0; }
+    a { color: #3b82f6; text-decoration: none; font-weight: 500; }
+    a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
   <div class="box">
     <h1>Spill games</h1>
-    <p>This server does not host custom games. Use <strong>ready-made games</strong> only.</p>
-    <p>Deploy Square Off, Breakout, and Space-Shooter at <code>/squareoff</code>, <code>/breakout</code>, <code>/spaceshooter</code> with <code>?room=</code> support, then set <code>gameBaseUrl</code> in app.json to this URL.</p>
-    <p>See <a href="https://github.com/ScriptaGames/SquareOff">Square Off</a>, <a href="https://github.com/Couchfriends/breakout">Breakout</a>, <a href="https://github.com/Couchfriends/Space-Shooter">Space-Shooter</a>.</p>
+    <p>Ready-made games. Open from the Spill app (Play in a match) so both players join the same room.</p>
+    <ul>
+      <li><a href="/chess">Chess</a></li>
+      <li><a href="/tictactoe">Tic-Tac-Toe</a></li>
+      <li><a href="/squareoff">Square Off!</a></li>
+      <li><a href="/breakout">Breakout</a></li>
+      <li><a href="/spaceshooter">Space Shooter</a></li>
+    </ul>
   </div>
 </body>
 </html>

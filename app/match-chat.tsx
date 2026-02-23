@@ -91,13 +91,6 @@ export default function MatchChatScreen() {
   const handlePlay = () => {
     Alert.alert('Choose game', "Invite your match to play. They'll get a notification.", [
       {
-        text: 'Tic-Tac-Toe',
-        onPress: async () => {
-          await sendGameInvite(partnerId!, matchId!, 'tictactoe');
-          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'tictactoe', opponentName: partnerName } } as any);
-        },
-      },
-      {
         text: 'Chess',
         onPress: async () => {
           await sendGameInvite(partnerId!, matchId!, 'chess');
@@ -105,10 +98,31 @@ export default function MatchChatScreen() {
         },
       },
       {
-        text: 'Ludo',
+        text: 'Tic-Tac-Toe',
         onPress: async () => {
-          await sendGameInvite(partnerId!, matchId!, 'ludo');
-          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'ludo', opponentName: partnerName } } as any);
+          await sendGameInvite(partnerId!, matchId!, 'tictactoe');
+          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'tictactoe', opponentName: partnerName } } as any);
+        },
+      },
+      {
+        text: 'Square Off!',
+        onPress: async () => {
+          await sendGameInvite(partnerId!, matchId!, 'squareoff');
+          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'squareoff', opponentName: partnerName } } as any);
+        },
+      },
+      {
+        text: 'Breakout',
+        onPress: async () => {
+          await sendGameInvite(partnerId!, matchId!, 'breakout');
+          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'breakout', opponentName: partnerName } } as any);
+        },
+      },
+      {
+        text: 'Space Shooter',
+        onPress: async () => {
+          await sendGameInvite(partnerId!, matchId!, 'spaceshooter');
+          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'spaceshooter', opponentName: partnerName } } as any);
         },
       },
       { text: 'Cancel', style: 'cancel' },

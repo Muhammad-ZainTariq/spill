@@ -14,16 +14,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
 const GAME_TITLES: Record<string, string> = {
-  tictactoe: 'Tic-Tac-Toe',
-  connect4: 'Connect 4',
   chess: 'Chess',
-  ludo: 'Ludo',
+  tictactoe: 'Tic-Tac-Toe',
+  squareoff: 'Square Off!',
+  breakout: 'Breakout',
+  spaceshooter: 'Space Shooter',
 };
 
 export default function GameWebViewScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { room, gameType = 'tictactoe', opponentName: opponentNameParam } = useLocalSearchParams<{
+  const { room, gameType = 'squareoff', opponentName: opponentNameParam } = useLocalSearchParams<{
     room?: string;
     gameType?: string;
     opponentName?: string;
@@ -44,7 +45,7 @@ export default function GameWebViewScreen() {
   const gameUrl = useMemo(() => {
     if (!gameBaseUrl.trim() || !room?.trim()) return null;
     const base = gameBaseUrl.replace(/\/$/, '');
-    const path = gameType === 'chess' ? '/chess' : gameType === 'ludo' ? '/ludo' : '';
+    const path = gameType === 'chess' ? '/chess' : gameType === 'tictactoe' ? '/tictactoe' : gameType === 'squareoff' ? '/squareoff' : gameType === 'breakout' ? '/breakout' : gameType === 'spaceshooter' ? '/spaceshooter' : '';
     const sep = (base + path).includes('?') ? '&' : '?';
     let url = `${base}${path}${sep}room=${encodeURIComponent(room)}`;
     if (opponentNameParam?.trim()) {
@@ -70,7 +71,7 @@ export default function GameWebViewScreen() {
           <Text style={styles.placeholderTitle}>Game URL not set</Text>
           <Text style={styles.placeholderText}>
             Add your deployed game URL in app.json → extra → gameBaseUrl.{'\n\n'}
-            Deploy a multiplayer game (e.g. Tic-Tac-Toe from GitHub), then set the frontend URL here.
+            Deploy ready-made games (Square Off, Breakout, Space-Shooter) with ?room= support at /squareoff, /breakout, /spaceshooter.
           </Text>
         </View>
       </View>
@@ -105,7 +106,7 @@ export default function GameWebViewScreen() {
       </View>
       <WebView
         source={{ uri: gameUrl! }}
-        style={[styles.webview, gameType === 'chess' && { backgroundColor: '#0f172a' }, gameType === 'ludo' && { backgroundColor: '#22c55e' }]}
+        style={styles.webview}
         startInLoadingState
         scrollEnabled={false}
         bounces={false}
@@ -156,9 +157,9 @@ export default function GameWebViewScreen() {
           } catch (_) {}
         }}
         renderLoading={() => (
-          <View style={[styles.loading, gameType === 'chess' && styles.loadingDark, gameType === 'ludo' && styles.loadingGreen]}>
+          <View style={styles.loading}>
             <ActivityIndicator size="large" color="#ec4899" />
-            <Text style={[styles.loadingText, gameType === 'chess' && styles.loadingTextDark, gameType === 'ludo' && styles.loadingTextGreen]}>Loading game...</Text>
+            <Text style={styles.loadingText}>Loading game...</Text>
           </View>
         )}
       />
@@ -202,11 +203,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#f8fafc',
   },
-  loadingDark: { backgroundColor: '#0f172a' },
-  loadingGreen: { backgroundColor: '#22c55e' },
   loadingText: { marginTop: 12, fontSize: 14, color: '#64748b' },
-  loadingTextDark: { color: '#94a3b8' },
-  loadingTextGreen: { color: '#fff' },
   placeholder: {
     flex: 1,
     justifyContent: 'center',

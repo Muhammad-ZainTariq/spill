@@ -3102,9 +3102,11 @@ export const endMatch = async (matchId: string): Promise<boolean> => {
 };
 
 const GAME_LABELS: Record<string, string> = {
-  tictactoe: 'Tic-Tac-Toe',
   chess: 'Chess',
-  ludo: 'Ludo',
+  tictactoe: 'Tic-Tac-Toe',
+  squareoff: 'Square Off!',
+  breakout: 'Breakout',
+  spaceshooter: 'Space Shooter',
 };
 
 async function sendPushToUser(
@@ -3241,7 +3243,7 @@ export const subscribeToGameInvites = (
         const data = d.data() as any;
         return {
           id: d.id,
-          game_type: data.game_type || 'tictactoe',
+          game_type: data.game_type || 'squareoff',
           match_id: data.match_id || '',
           from_user_id: data.from_user_id || '',
           read: !!data.read,

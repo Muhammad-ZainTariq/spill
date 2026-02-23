@@ -1,6 +1,6 @@
-# Step-by-step: Deploy Tic-Tac-Toe and connect the app
+# Step-by-step: Deploy ready-made games and connect the app
 
-The game is already in your project (`game-ttt/`). Follow these steps once to deploy it and set the URL in the app.
+The app uses **ready-made games only** (Square Off!, Breakout, Space Shooter). Deploy those games (or a server that serves them) and set the URL in the app.
 
 ---
 
@@ -47,7 +47,7 @@ If Spill is already in a GitHub repo:
    cd /tmp/spill-ttt
    git init
    git add .
-   git commit -m "Tic-Tac-Toe for Spill"
+   git commit -m "Games server for Spill"
    git remote add origin https://github.com/YOUR_USERNAME/spill-ttt.git
    git branch -M main
    git push -u origin main
@@ -107,7 +107,7 @@ You’ll paste it into the app in Step 3.
 3. In the match screen, tap **Play** (grid icon next to +15m).
 4. The game screen should open and show “Connecting…” then “Waiting for opponent…” or the board.
 5. On the **other** device (or in another browser with the same match), also tap **Play**.
-6. Both should see the same Tic-Tac-Toe game and be able to play.
+6. Both should see the same game (Square Off, Breakout, or Space Shooter) and be able to play. Ensure each game is deployed at /squareoff, /breakout, /spaceshooter with ?room= support.
 
 ---
 
