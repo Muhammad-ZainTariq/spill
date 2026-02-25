@@ -3104,7 +3104,6 @@ export const endMatch = async (matchId: string): Promise<boolean> => {
 const GAME_LABELS: Record<string, string> = {
   tictactoe: 'Tic-Tac-Toe',
   chess: 'Chess',
-  ludo: 'Ludo',
 };
 
 async function sendPushToUser(
@@ -3133,6 +3132,29 @@ export const sendGameInvite = async (
   try {
     const uid = auth.currentUser?.uid;
     if (!uid) return false;
+    if (!partnerId || partnerId === uid) return false;
+
+    // If we already have a recent pending invite from our partner for this same game,
+    // don't send a new invite back (prevents "both users invite each other" spam).
+    try {
+      const matchRef = doc(db, 'anonymous_matches', matchId);
+      const snap = await getDoc(matchRef);
+      if (snap.exists()) {
+        const inv = (snap.data() as any)?.last_game_invite;
+        const createdAt = inv?.created_at ? Date.parse(inv.created_at) : 0;
+        const isRecent = createdAt && (Date.now() - createdAt) < 2 * 60 * 1000; // 2 min
+        if (
+          inv?.status === 'pending' &&
+          (inv?.game_type || '') === (gameType || '') &&
+          inv?.from_user_id === partnerId &&
+          isRecent
+        ) {
+          return true;
+        }
+      }
+    } catch (_) {
+      // ignore and continue sending
+    }
 
     const notifRef = collection(db, 'notifications');
     await addDoc(notifRef, {

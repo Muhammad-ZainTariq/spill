@@ -8,50 +8,90 @@
   <style>
     * { box-sizing: border-box; }
     html { -webkit-text-size-adjust: 100%; touch-action: manipulation; }
-    body { font-family: system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8fafc; padding: 12px 16px; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; user-select: none; }
-    h1 { font-size: 1rem; font-weight: 600; color: #64748b; margin: 0 0 4px 0; }
-    .status { color: #64748b; margin-bottom: 12px; text-align: center; font-size: 0.9rem; }
-    .board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 280px; }
-    .cell { width: 80px; height: 80px; border: 2px solid #e2e8f0; border-radius: 12px; background: #fff; font-size: 2rem; font-weight: 700; color: #0f172a; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-    .cell:hover:not(.filled) { background: #f1f5f9; border-color: #ec4899; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system; margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: radial-gradient(1100px 620px at 50% 0%, rgba(236,72,153,0.22) 0%, #0b1020 48%, #070a14 100%); padding: 16px; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; user-select: none; }
+    .card { width: min(92vw, 420px); background: rgba(15,23,42,0.78); backdrop-filter: blur(10px); border: 1px solid rgba(148,163,184,0.14); border-radius: 22px; box-shadow: 0 28px 80px rgba(0, 0, 0, 0.50); padding: 16px; }
+    .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .title { font-size: 16px; font-weight: 900; color: #e5e7eb; letter-spacing: -0.2px; }
+    .pill { font-size: 12px; font-weight: 800; color: #e5e7eb; background: rgba(236,72,153,0.16); border: 1px solid rgba(236,72,153,0.28); padding: 6px 10px; border-radius: 999px; }
+    .status { color: rgba(229,231,235,0.78); margin: 10px 0 12px; text-align: left; font-size: 13px; line-height: 1.35; }
+    .board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; width: 100%; max-width: 340px; margin: 0 auto; }
+    .cell { aspect-ratio: 1 / 1; width: 100%; border: 2px solid rgba(148,163,184,0.18); border-radius: 18px; background: linear-gradient(180deg, rgba(30,41,59,0.7) 0%, rgba(15,23,42,0.9) 100%); font-size: 44px; font-weight: 900; color: #e5e7eb; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 120ms ease, border-color 120ms ease, background 120ms ease; }
+    .cell:active { transform: scale(0.98); }
+    .cell:hover:not(.filled) { background: linear-gradient(180deg, rgba(51,65,85,0.75) 0%, rgba(15,23,42,0.92) 100%); border-color: rgba(236,72,153,0.55); }
     .cell.filled { cursor: default; }
-    .cell.x { color: #ec4899; }
-    .cell.o { color: #8b5cf6; }
+    .cell.x { color: #ec4899; text-shadow: 0 8px 22px rgba(236,72,153,0.18); }
+    .cell.o { color: #8b5cf6; text-shadow: 0 8px 22px rgba(139,92,246,0.18); }
     .waiting { color: #64748b; }
     .winner { color: #10b981; font-weight: 700; }
     .draw { color: #64748b; }
     .hidden { display: none !important; }
-    .game-over-actions { display: flex; gap: 10px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
+    .game-over-actions { display: flex; gap: 10px; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
     .game-over-actions.hidden { display: none !important; }
     .btn-game-over {
       padding: 10px 20px;
-      border-radius: 10px;
+      border-radius: 14px;
       font-size: 0.95rem;
       font-weight: 600;
       border: none;
       cursor: pointer;
       font-family: inherit;
     }
-    .btn-replay { background: #34d399; color: #0f172a; }
-    .btn-leave { background: #e2e8f0; color: #475569; }
+    .btn-replay { background: linear-gradient(180deg, #34d399 0%, #10b981 100%); color: #052e16; }
+    .btn-leave { background: rgba(148,163,184,0.12); color: #e5e7eb; border: 1px solid rgba(148,163,184,0.18); }
+
+    /* iOS-like endgame alert */
+    .modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 18px; background: rgba(2,6,23,0.55); backdrop-filter: blur(6px); }
+    .modal.hidden { display: none !important; }
+    .iosAlert {
+      width: min(86vw, 320px);
+      background: rgba(255,255,255,0.92);
+      color: #0f172a;
+      border-radius: 18px;
+      box-shadow: 0 18px 55px rgba(0,0,0,0.35);
+      overflow: hidden;
+    }
+    .iosAlertText { padding: 16px 16px 14px; text-align: center; }
+    .iosAlertTitle { font-weight: 800; font-size: 16px; letter-spacing: -0.2px; }
+    .iosAlertBody { margin-top: 6px; font-size: 13px; line-height: 1.35; color: rgba(15,23,42,0.72); }
+    .iosAlertDivider { height: 1px; background: rgba(15,23,42,0.10); }
+    .iosAlertBtns { display: flex; }
+    .iosAlertBtn {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      flex: 1;
+      padding: 12px 10px;
+      font-size: 15px;
+      font-weight: 800;
+      color: #0f172a;
+      cursor: pointer;
+    }
+    .iosAlertBtnPrimary { color: #ec4899; }
+    .iosAlertBtnSep { width: 1px; background: rgba(15,23,42,0.10); }
   </style>
 </head>
 <body>
-  <p id="status" class="status">Connecting...</p>
-  <div id="gameOverActions" class="game-over-actions hidden">
-    <button type="button" class="btn-game-over btn-replay">Replay</button>
-    <button type="button" class="btn-game-over btn-leave">Leave</button>
-  </div>
-  <div id="board" class="board hidden">
-    <button type="button" class="cell" data-i="0"></button>
-    <button type="button" class="cell" data-i="1"></button>
-    <button type="button" class="cell" data-i="2"></button>
-    <button type="button" class="cell" data-i="3"></button>
-    <button type="button" class="cell" data-i="4"></button>
-    <button type="button" class="cell" data-i="5"></button>
-    <button type="button" class="cell" data-i="6"></button>
-    <button type="button" class="cell" data-i="7"></button>
-    <button type="button" class="cell" data-i="8"></button>
+  <div class="card">
+    <div class="top">
+      <div class="title">Tic‑Tac‑Toe</div>
+      <div id="roomPill" class="pill hidden"></div>
+    </div>
+    <p id="status" class="status">Connecting...</p>
+    <div id="gameOverActions" class="game-over-actions hidden">
+      <button type="button" class="btn-game-over btn-replay">Replay</button>
+      <button type="button" class="btn-game-over btn-leave">Leave</button>
+    </div>
+    <div id="board" class="board hidden">
+      <button type="button" class="cell" data-i="0"></button>
+      <button type="button" class="cell" data-i="1"></button>
+      <button type="button" class="cell" data-i="2"></button>
+      <button type="button" class="cell" data-i="3"></button>
+      <button type="button" class="cell" data-i="4"></button>
+      <button type="button" class="cell" data-i="5"></button>
+      <button type="button" class="cell" data-i="6"></button>
+      <button type="button" class="cell" data-i="7"></button>
+      <button type="button" class="cell" data-i="8"></button>
+    </div>
   </div>
 
   <script>
@@ -59,10 +99,13 @@
     const params = new URLSearchParams(window.location.search);
     const roomCode = params.get('room') || '';
     const opponentFromUrl = (params.get('opponent') || params.get('opponentName') || '').trim().slice(0, 30);
+    const myNameFromUrl = (params.get('name') || params.get('player') || '').trim().slice(0, 30);
     const statusEl = document.getElementById('status');
     const boardEl = document.getElementById('board');
     const gameOverActionsEl = document.getElementById('gameOverActions');
+    const roomPill = document.getElementById('roomPill');
     let myRole = null;
+    let myName = myNameFromUrl || 'You';
     let opponentName = opponentFromUrl || 'Opponent';
     let state = { board: [], turn: 'X', winner: null };
 
@@ -81,14 +124,14 @@
         cell.disabled = !!state.winner || state.turn !== myRole || !!v;
       });
       if (state.winner === 'draw') {
-        setStatus("It's a draw!", 'draw');
-        gameOverActionsEl.classList.remove('hidden');
+        setStatus("It's a draw.", 'draw');
+        openEndModal('Draw', "Nobody wins this round.");
       } else if (state.winner) {
-        setStatus(state.winner === myRole ? 'You win!' : opponentName + ' won.', 'winner');
-        gameOverActionsEl.classList.remove('hidden');
+        const youWon = state.winner === myRole;
+        openEndModal('Game over', youWon ? (myName + ' wins!') : (opponentName + ' wins.'));
       } else {
         gameOverActionsEl.classList.add('hidden');
-        setStatus(state.turn === myRole ? 'Your turn' : opponentName + "'s turn");
+        setStatus((state.turn === myRole ? myName : opponentName) + "'s turn");
       }
     }
 
@@ -102,6 +145,8 @@
 
     socket.on('connect', () => {
       if (roomCode) {
+        roomPill.textContent = 'Room ' + roomCode;
+        roomPill.classList.remove('hidden');
         setStatus('Joining game...');
         socket.emit('joinOrCreate', { roomCode, name: 'Player' });
       } else {
@@ -121,7 +166,7 @@
       }
       state = { board: Array(9).fill(''), turn: 'X', winner: null };
       boardEl.classList.remove('hidden');
-      setStatus(state.turn === myRole ? 'Your turn' : opponentName + "'s turn");
+      setStatus((state.turn === myRole ? myName : opponentName) + "'s turn");
     });
 
     socket.on('state', (data) => {
@@ -132,10 +177,48 @@
     socket.on('roomFull', () => setStatus('This room is full.'));
     socket.on('opponentLeft', () => setStatus('Opponent left.', 'draw'));
 
+    // End-game modal (Replay / Leave) — iOS-like alert
+    const endModalHtml = \`
+      <div id="endModal" class="modal hidden">
+        <div class="iosAlert" role="dialog" aria-modal="true">
+          <div class="iosAlertText">
+            <div id="endTitle" class="iosAlertTitle"></div>
+            <div id="endBody" class="iosAlertBody"></div>
+          </div>
+          <div class="iosAlertDivider"></div>
+          <div class="iosAlertBtns">
+            <button type="button" id="btnReplay" class="iosAlertBtn iosAlertBtnPrimary">Replay</button>
+            <div class="iosAlertBtnSep"></div>
+            <button type="button" id="btnLeave" class="iosAlertBtn">Leave</button>
+          </div>
+        </div>
+      </div>\`;
+    document.body.insertAdjacentHTML('beforeend', endModalHtml);
+    const endModal = document.getElementById('endModal');
+    const endTitle = document.getElementById('endTitle');
+    const endBody = document.getElementById('endBody');
+
+    function openEndModal(title, body) {
+      endTitle.textContent = title;
+      endBody.textContent = body;
+      endModal.classList.remove('hidden');
+      gameOverActionsEl.classList.add('hidden');
+    }
+    function closeEndModal() { endModal.classList.add('hidden'); }
+
+    document.getElementById('btnReplay').addEventListener('click', () => window.location.reload());
+    document.getElementById('btnLeave').addEventListener('click', () => {
+      closeEndModal();
+      if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'leave' }));
+      } else {
+        window.close();
+      }
+    });
+
     gameOverActionsEl.addEventListener('click', (e) => {
-      if (e.target.classList.contains('btn-replay')) {
-        window.location.reload();
-      } else if (e.target.classList.contains('btn-leave')) {
+      if (e.target.classList.contains('btn-replay')) window.location.reload();
+      else if (e.target.classList.contains('btn-leave')) {
         if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
           window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'leave' }));
         } else {

@@ -1,5 +1,6 @@
 import {
   endMatch,
+  fetchUserProfile,
   getPartnerProfile,
   sendGameInvite,
   sendMatchMessage,
@@ -30,6 +31,7 @@ export default function MatchChatScreen() {
   const insets = useSafeAreaInsets();
   const { matchId, partnerId } = useLocalSearchParams<{ matchId: string; partnerId: string }>();
   const [partnerProfile, setPartnerProfile] = useState<{ display_name?: string; anonymous_username?: string } | null>(null);
+  const [myName, setMyName] = useState<string>('Player');
   const [matchMessages, setMatchMessages] = useState<any[]>([]);
   const [messageText, setMessageText] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
@@ -46,6 +48,16 @@ export default function MatchChatScreen() {
     });
     return () => { cancelled = true; };
   }, [partnerId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchUserProfile().then((p: any) => {
+      if (cancelled) return;
+      const name = (p?.display_name || p?.anonymous_username || 'Player').toString().trim();
+      setMyName(name || 'Player');
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!matchId) return;
@@ -94,21 +106,14 @@ export default function MatchChatScreen() {
         text: 'Tic-Tac-Toe',
         onPress: async () => {
           await sendGameInvite(partnerId!, matchId!, 'tictactoe');
-          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'tictactoe', opponentName: partnerName } } as any);
+          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'tictactoe', opponentName: partnerName, myName } } as any);
         },
       },
       {
         text: 'Chess',
         onPress: async () => {
           await sendGameInvite(partnerId!, matchId!, 'chess');
-          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'chess', opponentName: partnerName } } as any);
-        },
-      },
-      {
-        text: 'Ludo',
-        onPress: async () => {
-          await sendGameInvite(partnerId!, matchId!, 'ludo');
-          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'ludo', opponentName: partnerName } } as any);
+          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'chess', opponentName: partnerName, myName } } as any);
         },
       },
       { text: 'Cancel', style: 'cancel' },

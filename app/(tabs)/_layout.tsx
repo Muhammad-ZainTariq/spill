@@ -67,7 +67,7 @@ export default function TabLayout() {
         const latest = unread[0];
         if (!latest || gameInvitesShownRef.current.has(latest.id)) return;
         gameInvitesShownRef.current.add(latest.id);
-        const gameLabel = { tictactoe: 'Tic-Tac-Toe', chess: 'Chess', ludo: 'Ludo' }[latest.game_type] || latest.game_type;
+        const gameLabel = { tictactoe: 'Tic-Tac-Toe', chess: 'Chess' }[latest.game_type] || latest.game_type;
         const title = 'Game invite';
         const body = `Your match invited you to play ${gameLabel}.`;
         showLocalNotification(title, body, {

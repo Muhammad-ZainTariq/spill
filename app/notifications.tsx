@@ -116,7 +116,7 @@ export default function NotificationsScreen() {
       case 'match_accepted':
         return `${username} accepted your match request. Tap to open the chat!`;
       case 'game_invite': {
-        const gameLabel = { tictactoe: 'Tic-Tac-Toe', chess: 'Chess', ludo: 'Ludo' }[notification.game_type || ''] || notification.game_type || 'a game';
+        const gameLabel = { tictactoe: 'Tic-Tac-Toe', chess: 'Chess' }[notification.game_type || ''] || notification.game_type || 'a game';
         return `${username} invited you to play ${gameLabel}. Tap to join!`;
       }
       default:

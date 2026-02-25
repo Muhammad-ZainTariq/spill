@@ -15,18 +15,17 @@ import { WebView } from 'react-native-webview';
 
 const GAME_TITLES: Record<string, string> = {
   tictactoe: 'Tic-Tac-Toe',
-  connect4: 'Connect 4',
   chess: 'Chess',
-  ludo: 'Ludo',
 };
 
 export default function GameWebViewScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { room, gameType = 'tictactoe', opponentName: opponentNameParam } = useLocalSearchParams<{
+  const { room, gameType = 'tictactoe', opponentName: opponentNameParam, myName: myNameParam } = useLocalSearchParams<{
     room?: string;
     gameType?: string;
     opponentName?: string;
+    myName?: string;
   }>();
   const [inviteDeclined, setInviteDeclined] = useState(false);
 
@@ -44,14 +43,17 @@ export default function GameWebViewScreen() {
   const gameUrl = useMemo(() => {
     if (!gameBaseUrl.trim() || !room?.trim()) return null;
     const base = gameBaseUrl.replace(/\/$/, '');
-    const path = gameType === 'chess' ? '/chess' : gameType === 'ludo' ? '/ludo' : '';
+    const path = gameType === 'chess' ? '/chess' : '';
     const sep = (base + path).includes('?') ? '&' : '?';
     let url = `${base}${path}${sep}room=${encodeURIComponent(room)}`;
     if (opponentNameParam?.trim()) {
       url += '&opponent=' + encodeURIComponent(opponentNameParam.trim());
     }
+    if (myNameParam?.trim()) {
+      url += '&name=' + encodeURIComponent(myNameParam.trim());
+    }
     return url;
-  }, [gameBaseUrl, room, gameType, opponentNameParam]);
+  }, [gameBaseUrl, room, gameType, opponentNameParam, myNameParam]);
 
   const title = GAME_TITLES[gameType] || 'Play';
 
@@ -105,7 +107,7 @@ export default function GameWebViewScreen() {
       </View>
       <WebView
         source={{ uri: gameUrl! }}
-        style={[styles.webview, gameType === 'chess' && { backgroundColor: '#0f172a' }, gameType === 'ludo' && { backgroundColor: '#22c55e' }]}
+        style={[styles.webview, gameType === 'chess' && { backgroundColor: '#0f172a' }]}
         startInLoadingState
         scrollEnabled={false}
         bounces={false}
@@ -156,9 +158,9 @@ export default function GameWebViewScreen() {
           } catch (_) {}
         }}
         renderLoading={() => (
-          <View style={[styles.loading, gameType === 'chess' && styles.loadingDark, gameType === 'ludo' && styles.loadingGreen]}>
+          <View style={[styles.loading, gameType === 'chess' && styles.loadingDark]}>
             <ActivityIndicator size="large" color="#ec4899" />
-            <Text style={[styles.loadingText, gameType === 'chess' && styles.loadingTextDark, gameType === 'ludo' && styles.loadingTextGreen]}>Loading game...</Text>
+            <Text style={[styles.loadingText, gameType === 'chess' && styles.loadingTextDark]}>Loading game...</Text>
           </View>
         )}
       />
@@ -203,10 +205,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   loadingDark: { backgroundColor: '#0f172a' },
-  loadingGreen: { backgroundColor: '#22c55e' },
   loadingText: { marginTop: 12, fontSize: 14, color: '#64748b' },
   loadingTextDark: { color: '#94a3b8' },
-  loadingTextGreen: { color: '#fff' },
   placeholder: {
     flex: 1,
     justifyContent: 'center',

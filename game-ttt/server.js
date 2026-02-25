@@ -1,6 +1,6 @@
 /**
- * Multi-game server for Spill: Tic-Tac-Toe, Chess, Ludo.
- * All games use ?room= (matchId). Routes: / (ttt), /chess, /ludo.
+ * Multi-game server for Spill: Tic-Tac-Toe, Chess.
+ * All games use ?room= (matchId). Routes: / (ttt), /chess.
  */
 const express = require('express');
 const http = require('http');
@@ -18,7 +18,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/chess', (req, res) => res.sendFile(path.join(__dirname, 'public', 'chess.html')));
-app.get('/ludo', (req, res) => res.sendFile(path.join(__dirname, 'public', 'ludo.html')));
 
 // ----- Tic-Tac-Toe (default namespace) -----
 const tttRooms = new Map();
@@ -153,82 +152,6 @@ chessIo.on('connection', (socket) => {
   });
 });
 
-// ----- Ludo (namespace /ludo) -----
-const ludoIo = io.of('/ludo');
-const ludoRooms = new Map();
-const ludoGames = new Map();
-const ludoSocketToRoom = new Map();
-const LUDO_TRACK = 40;
-
-function rollDice() { return Math.floor(Math.random() * 6) + 1; }
-
-ludoIo.on('connection', (socket) => {
-  socket.on('joinOrCreate', (data) => {
-    const { roomCode, name } = data;
-    if (!roomCode || !name) return;
-    const n = (name && name.trim().slice(0, 20)) || 'Player';
-    const room = ludoRooms.get(roomCode);
-    if (room && !room.p2) {
-      room.p2 = { id: socket.id, name: n };
-      socket.join(roomCode);
-      ludoSocketToRoom.set(socket.id, roomCode);
-      ludoGames.set(roomCode, {
-        positions: [-1, -1],
-        turn: 0,
-        lastDice: 0,
-        winner: null,
-      });
-      ludoIo.to(room.p1.id).emit('start', { playerIndex: 0, opponent: n });
-      socket.emit('start', { playerIndex: 1, opponent: room.p1.name });
-      ludoIo.to(roomCode).emit('state', ludoGames.get(roomCode));
-      return;
-    }
-    if (room && room.p2) {
-      socket.emit('roomFull');
-      return;
-    }
-    ludoRooms.set(roomCode, { p1: { id: socket.id, name: n }, p2: null });
-    socket.join(roomCode);
-    ludoSocketToRoom.set(socket.id, roomCode);
-    socket.emit('waiting', { roomCode });
-  });
-
-  socket.on('roll', (data) => {
-    const { roomCode } = data;
-    const g = ludoGames.get(roomCode);
-    if (!g || g.winner !== null) return;
-    const dice = rollDice();
-    g.lastDice = dice;
-    const pos = g.positions[g.turn];
-    if (pos === -1) {
-      if (dice === 6) {
-        g.positions[g.turn] = 0;
-      }
-      g.turn = 1 - g.turn;
-    } else {
-      const newPos = Math.min(LUDO_TRACK, pos + dice);
-      g.positions[g.turn] = newPos;
-      if (newPos >= LUDO_TRACK) g.winner = g.turn;
-      else g.turn = 1 - g.turn;
-    }
-    ludoIo.to(roomCode).emit('state', { ...g });
-  });
-
-  socket.on('disconnect', () => {
-    const roomCode = ludoSocketToRoom.get(socket.id);
-    if (roomCode) {
-      const room = ludoRooms.get(roomCode);
-      if (room) {
-        const other = room.p1?.id === socket.id ? room.p2 : room.p1;
-        if (other) ludoIo.to(other.id).emit('opponentLeft');
-        ludoRooms.delete(roomCode);
-        ludoGames.delete(roomCode);
-      }
-      ludoSocketToRoom.delete(socket.id);
-    }
-  });
-});
-
 server.listen(PORT, () => {
-  console.log('Games server at http://localhost:' + PORT + ' (/, /chess, /ludo)');
+  console.log('Games server at http://localhost:' + PORT + ' (/, /chess)');
 });
