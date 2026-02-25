@@ -167,11 +167,9 @@ io.on('connection', (socket) => {
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-// Chess: Open-Chess (marble UI). Redirect to /chess/?room= so index.html loads with params
+// Chess: Open-Chess (marble UI). Serve index directly (avoid iOS redirect loops)
 app.get('/chess', (req, res) => {
-  const room = (req.query.room || '').toString().trim() || '1';
-  const username = (req.query.username || 'Player').toString().trim().slice(0, 30) || 'Player';
-  res.redirect(302, `/chess/?room=${encodeURIComponent(room)}&username=${encodeURIComponent(username)}`);
+  res.sendFile(path.join(repos, 'chess', 'public', 'index.html'));
 });
 app.use('/chess', express.static(path.join(repos, 'chess', 'public')));
 
