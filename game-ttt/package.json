@@ -1,12 +1,15 @@
 {
   "name": "spill-games",
   "version": "1.0.0",
-  "description": "Spill games placeholder; use ready-made games at /squareoff, /breakout, /spaceshooter",
+  "description": "Spill games: ready-made only (Chess, Tic-Tac-Toe, Square Off, Breakout, Space Shooter)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
   },
   "engines": { "node": ">=18" },
-  "dependencies": { "express": "^4.18.2", "socket.io": "^4.7.2" }
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  }
 }

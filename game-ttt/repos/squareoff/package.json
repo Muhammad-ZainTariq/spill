@@ -1,0 +1,59 @@
+{
+  "name": "square-off",
+  "version": "1.0.1",
+  "build": "2",
+  "description": "A game we're building for Ludum Dare 35!",
+  "keywords": [
+    "Node.js",
+    "application"
+  ],
+  "homepage": "https://github.com/ScriptaGames/SquareOff",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:ScriptaGames/SquareOff.git"
+  },
+  "dependencies": {
+    "console-stamp": "^0.2.9",
+    "express": "^4.17.1",
+    "lodash": "^4.17.20",
+    "lodash.template": "^4.5.0",
+    "node-gameloop": "^0.1.4",
+    "node-uuid": "^1.4.8",
+    "p2": "^0.7.1",
+    "phaser": "^2.6.2",
+    "schemapack": "^1.4.2",
+    "socket.io": "^3.1.1",
+    "socket.io-client": "^3.1.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.12.16",
+    "@babel/preset-env": "^7.12.16",
+    "babelify": "^10.0.0",
+    "browserify": "^17.0.0",
+    "del": "^6.0.0",
+    "exorcist": "^1.0.1",
+    "gulp": "^4.0.2",
+    "gulp-buffer": "^0.0.2",
+    "gulp-if": "^3.0.0",
+    "gulp-string-replace": "^1.1.2",
+    "gulp-tap": "^2.0.0",
+    "gulp-terser": "^2.0.1",
+    "gulp-util": "^3.0.8",
+    "vinyl-source-stream": "^2.0.0",
+    "yargs": "^16.2.0"
+  },
+  "bundleDependencies": [],
+  "private": true,
+  "main": "server/server.js",
+  "license": "AGPL-3.0",
+  "bugs": {
+    "url": "https://github.com/ScriptaGames/SquareOff/issues"
+  },
+  "scripts": {
+    "start": "SO_ENV=prod node server/server.js",
+    "start-dev": "SO_ENV=dev node server/server.js",
+    "build": "gulp build --production",
+    "build-dev": "gulp build",
+    "build-dev-fast": "gulp fastBuild"
+  }
+}
