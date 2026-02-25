@@ -1,7 +1,6 @@
 import {
   endMatch,
   getPartnerProfile,
-  sendGameInvite,
   sendMatchMessage,
   subscribeToMatchMessages,
 } from '@/app/functions';
@@ -88,43 +87,11 @@ export default function MatchChatScreen() {
     );
   };
 
-  const handlePlay = () => {
-    Alert.alert('Choose game', "Invite your match to play. They'll get a notification.", [
-      {
-        text: 'Chess',
-        onPress: async () => {
-          await sendGameInvite(partnerId!, matchId!, 'chess');
-          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'chess', opponentName: partnerName } } as any);
-        },
-      },
-      {
-        text: 'Tic-Tac-Toe',
-        onPress: async () => {
-          await sendGameInvite(partnerId!, matchId!, 'tictactoe');
-          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'tictactoe', opponentName: partnerName } } as any);
-        },
-      },
-      {
-        text: 'Square Off!',
-        onPress: async () => {
-          await sendGameInvite(partnerId!, matchId!, 'squareoff');
-          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'squareoff', opponentName: partnerName } } as any);
-        },
-      },
-      {
-        text: 'Breakout',
-        onPress: async () => {
-          await sendGameInvite(partnerId!, matchId!, 'breakout');
-          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'breakout', opponentName: partnerName } } as any);
-        },
-      },
-      {
-        text: 'Space Shooter',
-        onPress: async () => {
-          await sendGameInvite(partnerId!, matchId!, 'spaceshooter');
-          router.push({ pathname: '/game-webview', params: { room: matchId, gameType: 'spaceshooter', opponentName: partnerName } } as any);
-        },
-      },
+  const handleChess = () => {
+    if (!matchId) return;
+    Alert.alert('Chess', 'Choose a mode', [
+      { text: 'Multiplayer', onPress: () => router.push({ pathname: '/chess', params: { matchId, mode: 'multiplayer' } } as any) },
+      { text: 'Vs Bot', onPress: () => router.push({ pathname: '/chess', params: { matchId, mode: 'bot' } } as any) },
       { text: 'Cancel', style: 'cancel' },
     ]);
   };
@@ -153,9 +120,9 @@ export default function MatchChatScreen() {
         </Pressable>
         <Text style={styles.headerTitle} numberOfLines={1}>{partnerName}</Text>
         <View style={styles.headerActions}>
-          <Pressable style={styles.actionBtn} onPress={handlePlay}>
+          <Pressable style={styles.actionBtn} onPress={handleChess}>
             <Feather name="grid" size={18} color="#ec4899" />
-            <Text style={styles.actionBtnTextPink}>Play</Text>
+            <Text style={styles.actionBtnTextPink}>Chess</Text>
           </Pressable>
           <Pressable style={[styles.actionBtn, styles.actionBtnRed]} onPress={handleUnfriend}>
             <Feather name="user-minus" size={18} color="#ef4444" />

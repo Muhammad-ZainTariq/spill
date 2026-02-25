@@ -10,7 +10,6 @@ import {
     getPartnerProfile,
     getPendingMatchRequests,
     getWeeklySummary,
-    sendGameInvite,
     sendMatchMessage,
     sendMatchRequest,
     subscribeToActiveMatch,

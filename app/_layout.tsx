@@ -193,18 +193,18 @@ export default function RootLayout() {
           }} 
         />
         <Stack.Screen 
-          name="game-webview" 
-          options={{ 
-            headerShown: false,
-            gestureEnabled: true,
-          }} 
-        />
-        <Stack.Screen 
           name="match-chat" 
           options={{ 
             headerShown: false,
             gestureEnabled: true,
           }} 
+        />
+        <Stack.Screen
+          name="chess"
+          options={{
+            headerShown: false,
+            gestureEnabled: true,
+          }}
         />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>

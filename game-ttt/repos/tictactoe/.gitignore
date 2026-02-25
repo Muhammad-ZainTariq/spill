@@ -1,7 +1,0 @@
-venv
-*.env*
-
-dg_tessstts
-.vscode
-
-*.bat

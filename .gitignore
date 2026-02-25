@@ -49,6 +49,3 @@ app-example
 FIREBASE_SETUP.md
 README.md
 
-# Cloned game repos: ignore their node_modules and .git (we commit source + builds only)
-game-ttt/repos/*/node_modules/
-game-ttt/repos/*/.git/

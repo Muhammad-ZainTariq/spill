@@ -1,16 +1,15 @@
 import { Tabs, useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
-import { Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { auth } from '@/lib/firebase';
-import { savePushTokenToFirestore, showLocalNotification } from '@/lib/pushNotifications';
+import { savePushTokenToFirestore } from '@/lib/pushNotifications';
 import * as Notifications from 'expo-notifications';
 import { onAuthStateChanged } from 'firebase/auth';
-import { getConversations, getUnreadNotificationCount, markNotificationRead, setGameInviteDeclined, subscribeToGameInvites, subscribeToUnreadNotificationCount } from '@/app/functions';
+import { getConversations, getUnreadNotificationCount, subscribeToUnreadNotificationCount } from '@/app/functions';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
@@ -18,7 +17,6 @@ export default function TabLayout() {
   const router = useRouter();
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
-  const gameInvitesShownRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     loadUnreadCounts();
@@ -35,10 +33,8 @@ export default function TabLayout() {
 
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const d = response.notification.request.content.data as { type?: string; match_id?: string; game_type?: string };
-      if (d?.type === 'game_invite' && d?.match_id && d?.game_type) {
-        router.push({ pathname: '/game-webview', params: { room: d.match_id, gameType: d.game_type } } as any);
-      } else if (d?.type === 'match_accepted') {
+      const d = response.notification.request.content.data as { type?: string };
+      if (d?.type === 'match_accepted') {
         router.replace('/(tabs)/matches' as any);
       }
     });
@@ -55,47 +51,7 @@ export default function TabLayout() {
     return () => unsub();
   }, []);
 
-  // Listen for game invites app-wide (any tab) — only subscribe once auth is ready
-  useEffect(() => {
-    let inviteUnsub: (() => void) | undefined;
-    const authUnsub = onAuthStateChanged(auth, (user) => {
-      inviteUnsub?.();
-      inviteUnsub = undefined;
-      if (!user) return;
-      inviteUnsub = subscribeToGameInvites((invites) => {
-        const unread = invites.filter((i) => !i.read);
-        const latest = unread[0];
-        if (!latest || gameInvitesShownRef.current.has(latest.id)) return;
-        gameInvitesShownRef.current.add(latest.id);
-        const gameLabel = { chess: 'Chess', tictactoe: 'Tic-Tac-Toe', squareoff: 'Square Off!', breakout: 'Breakout', spaceshooter: 'Space Shooter' }[latest.game_type] || latest.game_type;
-        const title = 'Game invite';
-        const body = `Your match invited you to play ${gameLabel}.`;
-        showLocalNotification(title, body, {
-          type: 'game_invite',
-          match_id: latest.match_id,
-          game_type: latest.game_type,
-        });
-        Alert.alert(
-          title,
-          body,
-          [
-            { text: 'Later', onPress: () => { markNotificationRead(latest.id); setGameInviteDeclined(latest.match_id); } },
-            {
-              text: 'Join',
-              onPress: () => {
-                markNotificationRead(latest.id);
-                router.push({ pathname: '/game-webview', params: { room: latest.match_id, gameType: latest.game_type } } as any);
-              },
-            },
-          ]
-        );
-      });
-    });
-    return () => {
-      inviteUnsub?.();
-      authUnsub();
-    };
-  }, []);
+  // (Games removed) No game-invite listeners
 
   const loadUnreadCounts = async () => {
     try {
