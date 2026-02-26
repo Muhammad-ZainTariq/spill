@@ -35,8 +35,14 @@ io.on('connection', (socket) => {
       socket.join(roomCode);
       tttSocketToRoom.set(socket.id, roomCode);
       tttGames.set(roomCode, { board: Array(9).fill(''), turn: 'X', winner: null });
+      // Emit to each socket individually so they get the right role
       io.to(room.p1.id).emit('start', { role: 'X', opponent: n });
       socket.emit('start', { role: 'O', opponent: room.p1.name });
+      // Also broadcast to room so both get the event even if socket id was stale (e.g. reconnect)
+      io.to(roomCode).emit('gameStart', {
+        p1: { id: room.p1.id, name: room.p1.name },
+        p2: { id: room.p2.id, name: room.p2.name },
+      });
       return;
     }
     if (room && room.p2) {
@@ -96,6 +102,10 @@ chessIo.on('connection', (socket) => {
       chessGames.set(roomCode, { chess: game, fen: game.fen(), turn: 'w', result: null });
       chessIo.to(room.p1.id).emit('start', { color: 'w', opponent: n });
       socket.emit('start', { color: 'b', opponent: room.p1.name });
+      chessIo.to(roomCode).emit('gameStart', {
+        p1: { id: room.p1.id, name: room.p1.name },
+        p2: { id: room.p2.id, name: room.p2.name },
+      });
       chessIo.to(roomCode).emit('state', { fen: game.fen(), turn: 'w', result: null });
       return;
     }

@@ -99,7 +99,7 @@
     const params = new URLSearchParams(window.location.search);
     const roomCode = params.get('room') || '';
     const socketUrlParam = params.get('socketUrl') || params.get('socket') || '';
-    const socket = socketUrlParam.trim() ? io(socketUrlParam.trim(), { transports: ['websocket', 'polling'] }) : io({ transports: ['websocket', 'polling'] });
+    const socket = socketUrlParam.trim() ? io(socketUrlParam.trim(), { transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: 5, timeout: 10000 }) : io({ transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: 5, timeout: 10000 });
     const opponentFromUrl = (params.get('opponent') || params.get('opponentName') || '').trim().slice(0, 30);
     const myNameFromUrl = (params.get('name') || params.get('player') || '').trim().slice(0, 30);
     const statusEl = document.getElementById('status');
@@ -111,6 +111,7 @@
     let opponentName = opponentFromUrl || 'Opponent';
     let state = { board: [], turn: 'X', winner: null };
     let connectionFailed = false;
+    let connectTimeoutId = null;
 
     function setStatus(text, className = '') {
       statusEl.textContent = text;
@@ -155,6 +156,10 @@
 
     socket.on('connect', () => {
       connectionFailed = false;
+      if (connectTimeoutId) {
+        clearTimeout(connectTimeoutId);
+        connectTimeoutId = null;
+      }
       document.getElementById('retryWrap')?.classList.add('hidden');
       if (roomCode) {
         roomPill.textContent = 'Room ' + roomCode;
@@ -166,8 +171,27 @@
       }
     });
 
+    if (roomCode) {
+      connectTimeoutId = setTimeout(function () {
+        if (connectionFailed || myRole !== null) return;
+        var text = statusEl.textContent || '';
+        if (text.indexOf('Connecting') !== -1 || text.indexOf('Joining') !== -1) {
+          connectionFailed = true;
+          setStatus('Connection failed. Make sure the game server is running and supports WebSockets, then try again.', 'waiting');
+          boardEl.classList.add('hidden');
+          var rw = document.getElementById('retryWrap');
+          if (rw) rw.classList.remove('hidden');
+        }
+        connectTimeoutId = null;
+      }, 12000);
+    }
+
     socket.on('connect_error', (err) => {
       connectionFailed = true;
+      if (connectTimeoutId) {
+        clearTimeout(connectTimeoutId);
+        connectTimeoutId = null;
+      }
       console.warn('Socket connect_error', err);
       setStatus('Connection failed. Make sure the game server is running and supports WebSockets, then try again.', 'waiting');
       boardEl.classList.add('hidden');
@@ -189,18 +213,32 @@
     });
 
     socket.on('waiting', () => {
+      if (connectTimeoutId) { clearTimeout(connectTimeoutId); connectTimeoutId = null; }
       boardEl.classList.add('hidden');
       setStatus('Waiting for opponent... Share the same link with your match.', 'waiting');
     });
 
-    socket.on('start', (data) => {
-      myRole = data.role;
+    function applyGameStart(role, opponent) {
+      if (connectTimeoutId) { clearTimeout(connectTimeoutId); connectTimeoutId = null; }
+      myRole = role;
       if (!opponentName || opponentName === 'Opponent') {
-        opponentName = (data.opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
+        opponentName = (opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
       }
       state = { board: Array(9).fill(''), turn: 'X', winner: null };
       boardEl.classList.remove('hidden');
       setStatus((state.turn === myRole ? myName : opponentName) + "'s turn");
+    }
+
+    socket.on('start', (data) => {
+      applyGameStart(data.role, data.opponent);
+    });
+
+    socket.on('gameStart', (data) => {
+      if (!data || !data.p1 || !data.p2) return;
+      const isP1 = socket.id === data.p1.id;
+      const role = isP1 ? 'X' : 'O';
+      const opponent = isP1 ? (data.p2.name || 'Opponent') : (data.p1.name || 'Opponent');
+      applyGameStart(role, opponent);
     });
 
     socket.on('state', (data) => {

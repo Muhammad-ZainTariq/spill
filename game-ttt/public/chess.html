@@ -404,12 +404,24 @@
       setStatus('Waiting for opponent...', 'Share the game link or wait.', '');
     });
 
-    socket.on('start', (data) => {
-      myColor = data.color;
+    function applyGameStart(color, opponent) {
+      myColor = color;
       if (!opponentName || opponentName === 'Opponent') {
-        opponentName = (data.opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
+        opponentName = (opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
       }
       boardWrap.classList.remove('hidden');
+    }
+
+    socket.on('start', (data) => {
+      applyGameStart(data.color, data.opponent);
+    });
+
+    socket.on('gameStart', (data) => {
+      if (!data || !data.p1 || !data.p2) return;
+      const isP1 = socket.id === data.p1.id;
+      const color = isP1 ? 'w' : 'b';
+      const opponent = isP1 ? (data.p2.name || 'Opponent') : (data.p1.name || 'Opponent');
+      applyGameStart(color, opponent);
     });
 
     socket.on('state', (data) => {

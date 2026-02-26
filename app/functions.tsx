@@ -3263,7 +3263,7 @@ export const subscribeToGameInvites = (
         const data = d.data() as any;
         return {
           id: d.id,
-          game_type: data.game_type || 'tictactoe',
+          game_type: (data.game_type || 'tictactoe').toLowerCase(),
           match_id: data.match_id || '',
           from_user_id: data.from_user_id || '',
           read: !!data.read,
