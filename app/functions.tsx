@@ -3101,6 +3101,125 @@ export const endMatch = async (matchId: string): Promise<boolean> => {
   }
 };
 
+// ----- Game scores & leaderboard -----
+const GAME_STATS_COLLECTION = 'user_game_stats';
+const GAME_TYPE_FIELD: Record<string, string> = { tictactoe: 'tictactoe_wins', chess: 'chess_wins' };
+
+/** Record game result (win/loss/draw) for the current user. Updates global wins and per-match score. */
+export const recordGameResult = async (
+  matchId: string,
+  result: 'win' | 'loss' | 'draw',
+  gameType: string
+): Promise<void> => {
+  try {
+    const uid = auth.currentUser?.uid;
+    if (!uid || !matchId) return;
+    const g = (gameType || 'tictactoe').toLowerCase();
+    if (g !== 'tictactoe' && g !== 'chess') return;
+
+    const matchRef = doc(db, 'anonymous_matches', matchId);
+    const matchSnap = await getDoc(matchRef);
+    if (!matchSnap.exists()) return;
+    const d = matchSnap.data() as any;
+    if (d.user1_id !== uid && d.user2_id !== uid) return;
+
+    const winnerId = result === 'win' ? uid : result === 'loss' ? (d.user1_id === uid ? d.user2_id : d.user1_id) : null;
+    if (!winnerId && result !== 'draw') return;
+
+    if (winnerId) {
+      const field = GAME_TYPE_FIELD[g] || 'tictactoe_wins';
+      const statsRef = doc(db, GAME_STATS_COLLECTION, winnerId);
+      const statsSnap = await getDoc(statsRef);
+      const batch = writeBatch(db);
+      if (!statsSnap.exists()) {
+        batch.set(statsRef, { tictactoe_wins: g === 'tictactoe' ? 1 : 0, chess_wins: g === 'chess' ? 1 : 0 });
+      } else {
+        batch.update(statsRef, { [field]: increment(1) });
+      }
+      batch.update(matchRef, { [`game_score.${winnerId}`]: increment(1) });
+      await batch.commit();
+    }
+  } catch (e) {
+    console.warn('recordGameResult failed', e);
+  }
+};
+
+/** Get game score for this match (wins per user). Returns { myWins, partnerWins }. */
+export const getMatchGameScore = async (matchId: string): Promise<{ myWins: number; partnerWins: number }> => {
+  try {
+    const uid = auth.currentUser?.uid;
+    if (!uid || !matchId) return { myWins: 0, partnerWins: 0 };
+    const matchRef = doc(db, 'anonymous_matches', matchId);
+    const snap = await getDoc(matchRef);
+    if (!snap.exists()) return { myWins: 0, partnerWins: 0 };
+    const d = snap.data() as any;
+    const score = d.game_score || {};
+    const partnerId = d.user1_id === uid ? d.user2_id : d.user1_id;
+    return {
+      myWins: Number(score[uid]) || 0,
+      partnerWins: Number(score[partnerId]) || 0,
+    };
+  } catch (e) {
+    return { myWins: 0, partnerWins: 0 };
+  }
+};
+
+/** Subscribe to match game score for live updates. */
+export const subscribeToMatchGameScore = (
+  matchId: string,
+  onScore: (score: { myWins: number; partnerWins: number }) => void
+): (() => void) => {
+  const uid = auth.currentUser?.uid;
+  if (!uid || !matchId) return () => {};
+  const matchRef = doc(db, 'anonymous_matches', matchId);
+  return onSnapshot(
+    matchRef,
+    (snap) => {
+      if (!snap.exists()) {
+        onScore({ myWins: 0, partnerWins: 0 });
+        return;
+      }
+      const d = snap.data() as any;
+      const score = d.game_score || {};
+      const partnerId = d.user1_id === uid ? d.user2_id : d.user1_id;
+      onScore({
+        myWins: Number(score[uid]) || 0,
+        partnerWins: Number(score[partnerId]) || 0,
+      });
+    },
+    (err) => console.warn('subscribeToMatchGameScore', err)
+  );
+};
+
+/** Leaderboard: top users by total game wins (tictactoe + chess). */
+export const getGameLeaderboard = async (limitCount: number = 30): Promise<{ userId: string; displayName: string; totalWins: number; tictactoeWins: number; chessWins: number }[]> => {
+  try {
+    const ref = collection(db, GAME_STATS_COLLECTION);
+    const q = query(ref, limit(200));
+    const snap = await getDocs(q);
+    const list: { userId: string; totalWins: number; tictactoeWins: number; chessWins: number }[] = snap.docs.map((docSnap) => {
+      const data = docSnap.data() as any;
+      const tw = Number(data.tictactoe_wins) || 0;
+      const cw = Number(data.chess_wins) || 0;
+      return { userId: docSnap.id, totalWins: tw + cw, tictactoeWins: tw, chessWins: cw };
+    });
+    list.sort((a, b) => b.totalWins - a.totalWins);
+    const top = list.slice(0, limitCount);
+    const names: Record<string, string> = {};
+    for (const t of top) {
+      const u = await getDoc(doc(db, 'users', t.userId));
+      if (u.exists()) {
+        const d = u.data() as any;
+        names[t.userId] = d.display_name || d.anonymous_username || 'Anonymous';
+      }
+    }
+    return top.map((t) => ({ ...t, displayName: names[t.userId] || 'Anonymous' }));
+  } catch (e) {
+    console.warn('getGameLeaderboard failed', e);
+    return [];
+  }
+};
+
 const GAME_LABELS: Record<string, string> = {
   tictactoe: 'Tic-Tac-Toe',
   chess: 'Chess',

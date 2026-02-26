@@ -202,6 +202,7 @@
     let state = { fen: '', turn: 'w', result: null, lastMove: null };
     let selected = null;
     let validMoves = [];
+    let gameOverSent = false;
     const gameOverActionsEl = document.getElementById('gameOverActions');
 
     // Professional chess piece images (Cburnett, Wikimedia Commons, CC BY-SA 3.0)
@@ -297,10 +298,19 @@
       if (state.result === 'draw') {
         setStatus("It's a draw!", '', 'game-over');
         gameOverActionsEl.classList.remove('hidden');
+        if (!gameOverSent && roomCode && window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+          gameOverSent = true;
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'game_over', result: 'draw', gameType: 'chess', roomCode: roomCode }));
+        }
       } else if (state.result) {
         if (state.result === myColor) setStatus('You win!', 'Well played.', 'game-over win');
         else setStatus('You lose', opponentName + ' won.', 'game-over lose');
         gameOverActionsEl.classList.remove('hidden');
+        if (!gameOverSent && roomCode && window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+          var result = state.result === myColor ? 'win' : 'loss';
+          gameOverSent = true;
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'game_over', result: result, gameType: 'chess', roomCode: roomCode }));
+        }
       } else {
         gameOverActionsEl.classList.add('hidden');
         if (state.turn === myColor) {
@@ -405,6 +415,7 @@
     });
 
     function applyGameStart(color, opponent) {
+      gameOverSent = false;
       myColor = color;
       if (!opponentName || opponentName === 'Opponent') {
         opponentName = (opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';

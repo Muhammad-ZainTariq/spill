@@ -1,4 +1,4 @@
-import { subscribeToMatchGameInviteStatus } from '@/app/functions';
+import { recordGameResult, subscribeToMatchGameInviteStatus } from '@/app/functions';
 import Constants from 'expo-constants';
 import { Feather } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -161,6 +161,9 @@ export default function GameWebViewScreen() {
           try {
             const data = JSON.parse(e.nativeEvent.data);
             if (data?.type === 'leave') router.back();
+            if (data?.type === 'game_over' && data?.roomCode && (data?.result === 'win' || data?.result === 'loss' || data?.result === 'draw')) {
+              recordGameResult(data.roomCode, data.result, data.gameType || 'tictactoe').catch(() => {});
+            }
           } catch (_) {}
         }}
         renderLoading={() => (

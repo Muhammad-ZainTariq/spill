@@ -4,6 +4,7 @@ import {
   getPartnerProfile,
   sendGameInvite,
   sendMatchMessage,
+  subscribeToMatchGameScore,
   subscribeToMatchMessages,
 } from '@/app/functions';
 import { auth } from '@/lib/firebase';
@@ -35,6 +36,7 @@ export default function MatchChatScreen() {
   const [matchMessages, setMatchMessages] = useState<any[]>([]);
   const [messageText, setMessageText] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
+  const [gameScore, setGameScore] = useState<{ myWins: number; partnerWins: number }>({ myWins: 0, partnerWins: 0 });
   const listRef = useRef<FlatList>(null);
   const currentUserId = auth.currentUser?.uid ?? null;
 
@@ -62,6 +64,12 @@ export default function MatchChatScreen() {
   useEffect(() => {
     if (!matchId) return;
     const unsub = subscribeToMatchMessages(matchId, setMatchMessages);
+    return () => unsub();
+  }, [matchId]);
+
+  useEffect(() => {
+    if (!matchId) return;
+    const unsub = subscribeToMatchGameScore(matchId, setGameScore);
     return () => unsub();
   }, [matchId]);
 
@@ -142,7 +150,12 @@ export default function MatchChatScreen() {
         <Pressable style={styles.backButton} onPress={() => router.back()} hitSlop={12}>
           <Feather name="chevron-left" size={24} color="#111827" />
         </Pressable>
-        <Text style={styles.headerTitle} numberOfLines={1}>{partnerName}</Text>
+        <View style={styles.headerTitleWrap}>
+          <Text style={styles.headerTitle} numberOfLines={1}>{partnerName}</Text>
+          {(gameScore.myWins > 0 || gameScore.partnerWins > 0) && (
+            <Text style={styles.headerScore}>You {gameScore.myWins} – {gameScore.partnerWins} {partnerName}</Text>
+          )}
+        </View>
         <View style={styles.headerActions}>
           <Pressable style={styles.actionBtn} onPress={handlePlay}>
             <Feather name="grid" size={18} color="#ec4899" />
@@ -229,7 +242,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   backButton: { padding: 8, marginRight: 4 },
-  headerTitle: { flex: 1, fontSize: 17, fontWeight: '600', color: '#111827' },
+  headerTitleWrap: { flex: 1, minWidth: 0 },
+  headerTitle: { fontSize: 17, fontWeight: '600', color: '#111827' },
+  headerScore: { fontSize: 12, color: '#6b7280', marginTop: 2 },
   headerActions: { flexDirection: 'row', gap: 8 },
   actionBtn: {
     flexDirection: 'row',

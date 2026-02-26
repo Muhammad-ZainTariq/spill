@@ -108,6 +108,7 @@
     let myName = myNameFromUrl || 'You';
     let opponentName = opponentFromUrl || 'Opponent';
     let state = { board: [], turn: 'X', winner: null };
+    var gameOverSent = false;
 
     function setStatus(text, className = '') {
       statusEl.textContent = text;
@@ -160,6 +161,7 @@
     });
 
     socket.on('start', (data) => {
+      gameOverSent = false;
       myRole = data.role;
       if (!opponentName || opponentName === 'Opponent') {
         opponentName = (data.opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
@@ -232,6 +234,11 @@
       endBody.textContent = body;
       endModal.classList.remove('hidden');
       gameOverActionsEl.classList.add('hidden');
+      if (!gameOverSent && roomCode && window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+        var result = state.winner === 'draw' ? 'draw' : (state.winner === myRole ? 'win' : 'loss');
+        gameOverSent = true;
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'game_over', result: result, gameType: 'tictactoe', roomCode: roomCode }));
+      }
     }
     function closeEndModal() { endModal.classList.add('hidden'); }
     function openReplayPromptModal() {

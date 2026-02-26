@@ -28,6 +28,7 @@ import {
     formatTimeAgo,
     getConversations,
     getCurrentUserRole,
+    getGameLeaderboard,
     getGroups,
     getOfficialChallenges,
     getOrCreateConversation,
@@ -49,7 +50,7 @@ interface Message {
   };
 }
 
-type TabKey = 'messages' | 'groups' | 'requests';
+type TabKey = 'messages' | 'groups' | 'requests' | 'leaderboard';
 
 export default function ConnectionsScreen() {
   const router = useRouter();
@@ -73,6 +74,9 @@ export default function ConnectionsScreen() {
 
   const [requests, setRequests] = useState<any[]>([]);
   const [loadingRequests, setLoadingRequests] = useState(true);
+
+  const [leaderboard, setLeaderboard] = useState<{ userId: string; displayName: string; totalWins: number; tictactoeWins: number; chessWins: number }[]>([]);
+  const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
 
   // User search state
   const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -135,6 +139,18 @@ export default function ConnectionsScreen() {
       setOfficialChallenges([]);
     } finally {
       setLoadingOfficial(false);
+    }
+  };
+
+  const loadLeaderboard = async () => {
+    try {
+      setLoadingLeaderboard(true);
+      const list = await getGameLeaderboard(30);
+      setLeaderboard(list);
+    } catch (e) {
+      setLeaderboard([]);
+    } finally {
+      setLoadingLeaderboard(false);
     }
   };
 
@@ -270,6 +286,10 @@ export default function ConnectionsScreen() {
     const interval = setInterval(loadMessages, 5000);
     return () => clearInterval(interval);
   }, [selectedConversation]);
+
+  useEffect(() => {
+    if (activeTab === 'leaderboard') loadLeaderboard();
+  }, [activeTab]);
 
   useEffect(() => {
     const delayDebounce = setTimeout(() => {
@@ -546,6 +566,7 @@ export default function ConnectionsScreen() {
   const showMessages = activeTab === 'messages';
   const showGroups = activeTab === 'groups';
   const showRequests = activeTab === 'requests';
+  const showLeaderboard = activeTab === 'leaderboard';
 
   // If a conversation is selected, show the chat view
   if (selectedConversation) {
@@ -648,6 +669,8 @@ export default function ConnectionsScreen() {
                 ? 'Search people...' 
                 : showGroups 
                 ? 'Search groups...' 
+                : showLeaderboard 
+                ? 'Leaderboard' 
                 : 'Search requests...'
             }
             placeholderTextColor="#999"
@@ -681,9 +704,9 @@ export default function ConnectionsScreen() {
         </View>
       </View>
 
-      {/* Segmented control: Messages / Groups / Requests */}
+      {/* Segmented control: Messages / Groups / Requests / Leaderboard */}
       <View style={styles.segmentRow}>
-        {(['messages', 'groups', 'requests'] as TabKey[]).map((key) => (
+        {(['messages', 'groups', 'requests', 'leaderboard'] as TabKey[]).map((key) => (
           <Pressable
             key={key}
             style={[
@@ -697,8 +720,9 @@ export default function ConnectionsScreen() {
                 styles.segmentText,
                 activeTab === key && styles.segmentTextActive,
               ]}
+              numberOfLines={1}
             >
-              {key === 'messages' ? 'Messages' : key === 'groups' ? 'Groups' : 'Requests'}
+              {key === 'messages' ? 'Messages' : key === 'groups' ? 'Groups' : key === 'requests' ? 'Requests' : 'Leaderboard'}
             </Text>
             {key === 'requests' && requests.length > 0 && (
               <View style={styles.requestBadge}>
@@ -865,6 +889,42 @@ export default function ConnectionsScreen() {
             }
             refreshing={loadingRequests}
             onRefresh={loadRequests}
+          />
+        )
+      ) : showLeaderboard ? (
+        loadingLeaderboard ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#ec4899" />
+            <Text style={styles.loadingText}>Loading leaderboard...</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={leaderboard}
+            keyExtractor={(item) => item.userId}
+            contentContainerStyle={styles.listContent}
+            ListHeaderComponent={
+              <View style={{ paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e5e7eb' }}>
+                <Text style={{ fontSize: 15, fontWeight: '600', color: '#374151' }}>Game wins (Tic-Tac-Toe + Chess)</Text>
+                <Text style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>Top players by total wins</Text>
+              </View>
+            }
+            renderItem={({ item, index }) => (
+              <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#f3f4f6' }}>
+                <Text style={{ fontSize: 17, fontWeight: '700', color: '#9ca3af', width: 28 }}>#{index + 1}</Text>
+                <Text style={{ flex: 1, fontSize: 16, fontWeight: '600', color: '#111827' }} numberOfLines={1}>{item.displayName}</Text>
+                <View style={{ backgroundColor: '#ec4899', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>{item.totalWins} wins</Text>
+                </View>
+              </View>
+            )}
+            ListEmptyComponent={
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyTitle}>No games played yet</Text>
+                <Text style={styles.emptySubtitle}>Win Tic-Tac-Toe or Chess with your matches to appear here.</Text>
+              </View>
+            }
+            refreshing={loadingLeaderboard}
+            onRefresh={loadLeaderboard}
           />
         )
       ) : null}
