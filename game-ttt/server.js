@@ -61,6 +61,37 @@ io.on('connection', (socket) => {
     io.to(roomCode).emit('state', { board: game.board, turn: game.turn, winner: game.winner });
   });
 
+  socket.on('requestReplay', (data) => {
+    const { roomCode } = data;
+    if (!roomCode) return;
+    const room = tttRooms.get(roomCode);
+    const game = tttGames.get(roomCode);
+    if (!room || !room.p2 || !game || !game.winner) return;
+    room.replayRequested = room.replayRequested || {};
+    const isP1 = room.p1.id === socket.id;
+    if (isP1) room.replayRequested.p1 = true;
+    else room.replayRequested.p2 = true;
+    const other = isP1 ? room.p2 : room.p1;
+    if (room.replayRequested.p1 && room.replayRequested.p2) {
+      room.replayRequested = { p1: false, p2: false };
+      tttGames.set(roomCode, { board: Array(9).fill(''), turn: 'X', winner: null });
+      io.to(room.p1.id).emit('start', { role: 'X', opponent: room.p2.name });
+      io.to(room.p2.id).emit('start', { role: 'O', opponent: room.p1.name });
+      io.to(roomCode).emit('state', { board: Array(9).fill(''), turn: 'X', winner: null });
+    } else {
+      io.to(other.id).emit('replayRequested');
+    }
+  });
+
+  socket.on('replayDeclined', (data) => {
+    const { roomCode } = data;
+    if (!roomCode) return;
+    const room = tttRooms.get(roomCode);
+    if (!room || !room.p2) return;
+    const other = room.p1.id === socket.id ? room.p2 : room.p1;
+    io.to(other.id).emit('replayDeclined');
+  });
+
   socket.on('disconnect', () => {
     const roomCode = tttSocketToRoom.get(socket.id);
     if (roomCode) {
