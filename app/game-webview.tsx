@@ -39,6 +39,10 @@ export default function GameWebViewScreen() {
     (Constants as any)?.expoConfig?.extra?.gameBaseUrl ||
     (Constants as any)?.manifest?.extra?.gameBaseUrl ||
     '';
+  const gameSocketUrl =
+    (Constants as any)?.expoConfig?.extra?.gameSocketUrl ||
+    (Constants as any)?.manifest?.extra?.gameSocketUrl ||
+    '';
 
   const gameUrl = useMemo(() => {
     if (!gameBaseUrl.trim() || !room?.trim()) return null;
@@ -46,6 +50,8 @@ export default function GameWebViewScreen() {
     const path = gameType === 'chess' ? '/chess' : '';
     const sep = (base + path).includes('?') ? '&' : '?';
     let url = `${base}${path}${sep}room=${encodeURIComponent(room)}`;
+    const socketBase = gameSocketUrl.trim() ? gameSocketUrl.replace(/\/$/, '') : base;
+    url += '&socketUrl=' + encodeURIComponent(socketBase);
     if (opponentNameParam?.trim()) {
       url += '&opponent=' + encodeURIComponent(opponentNameParam.trim());
     }
@@ -53,7 +59,7 @@ export default function GameWebViewScreen() {
       url += '&name=' + encodeURIComponent(myNameParam.trim());
     }
     return url;
-  }, [gameBaseUrl, room, gameType, opponentNameParam, myNameParam]);
+  }, [gameBaseUrl, gameSocketUrl, room, gameType, opponentNameParam, myNameParam]);
 
   const title = GAME_TITLES[gameType] || 'Play';
 

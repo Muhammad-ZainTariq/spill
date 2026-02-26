@@ -171,6 +171,9 @@
   <div id="statusCard" class="status-card">
     <div id="statusText" class="status-text">Connecting...</div>
     <div id="statusSub" class="status-sub"></div>
+    <div id="retryWrap" class="status-sub" style="display:none; margin-top: 8px;">
+      <button type="button" id="retryBtn" style="padding:8px 16px;background:rgba(52,211,153,0.2);border:1px solid rgba(52,211,153,0.5);border-radius:10px;color:#34d399;font-weight:600;cursor:pointer;">Retry connection</button>
+    </div>
     <div id="gameOverActions" class="game-over-actions hidden">
       <button type="button" class="btn-game-over btn-replay">Replay</button>
       <button type="button" class="btn-game-over btn-leave">Leave</button>
@@ -183,8 +186,12 @@
   <script>
     const params = new URLSearchParams(window.location.search);
     const roomCode = params.get('room') || '';
+    const socketUrlParam = params.get('socketUrl') || params.get('socket') || '';
     const opponentFromUrl = (params.get('opponent') || params.get('opponentName') || '').trim().slice(0, 30);
-    const socket = io('/chess');
+    const socket = socketUrlParam.trim()
+      ? io(socketUrlParam.trim() + '/chess', { path: '/socket.io', transports: ['websocket', 'polling'] })
+      : io('/chess', { transports: ['websocket', 'polling'] });
+    let connectionFailed = false;
     const statusCard = document.getElementById('statusCard');
     const statusText = document.getElementById('statusText');
     const statusSub = document.getElementById('statusSub');
@@ -360,10 +367,36 @@
     }
 
     socket.on('connect', () => {
+      connectionFailed = false;
+      var rw = document.getElementById('retryWrap');
+      if (rw) rw.style.display = 'none';
       if (roomCode) {
         setStatus('Joining game...', '', '');
         socket.emit('joinOrCreate', { roomCode, name: 'Player' });
       } else setStatus('Open with ?room= from the Spill app.', '', '');
+    });
+
+    socket.on('connect_error', (err) => {
+      connectionFailed = true;
+      console.warn('Chess socket connect_error', err);
+      setStatus('Connection failed', 'Make sure the game server is running and try again.', '');
+      boardWrap.classList.add('hidden');
+      var rw = document.getElementById('retryWrap');
+      if (rw) rw.style.display = 'block';
+    });
+
+    socket.on('disconnect', (reason) => {
+      if (reason === 'io server disconnect' || reason === 'io client disconnect') return;
+      if (!connectionFailed && !state.result) {
+        setStatus('Disconnected', 'Reconnecting...', '');
+      }
+    });
+
+    document.getElementById('retryBtn')?.addEventListener('click', function () {
+      connectionFailed = false;
+      document.getElementById('retryWrap').style.display = 'none';
+      setStatus('Connecting...', '', '');
+      socket.connect();
     });
 
     socket.on('waiting', () => {

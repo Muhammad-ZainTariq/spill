@@ -3178,7 +3178,7 @@ export const sendGameInvite = async (
       },
     });
     const gameLabel = GAME_LABELS[gameType] || gameType;
-    sendPushToUser(
+    await sendPushToUser(
       partnerId,
       'Game invite',
       `Your match invited you to play ${gameLabel}.`,
