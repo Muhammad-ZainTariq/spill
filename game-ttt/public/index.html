@@ -77,7 +77,6 @@
       <div id="roomPill" class="pill hidden"></div>
     </div>
     <p id="status" class="status">Connecting...</p>
-    <p id="retryWrap" class="status hidden"><button type="button" id="retryBtn" style="margin-top:8px;padding:8px 16px;background:rgba(236,72,153,0.2);border:1px solid rgba(236,72,153,0.4);border-radius:12px;color:#ec4899;font-weight:600;cursor:pointer;">Retry connection</button></p>
     <div id="gameOverActions" class="game-over-actions hidden">
       <button type="button" class="btn-game-over btn-replay">Replay</button>
       <button type="button" class="btn-game-over btn-leave">Leave</button>
@@ -96,10 +95,9 @@
   </div>
 
   <script>
+    const socket = io();
     const params = new URLSearchParams(window.location.search);
     const roomCode = params.get('room') || '';
-    const socketUrlParam = params.get('socketUrl') || params.get('socket') || '';
-    const socket = socketUrlParam.trim() ? io(socketUrlParam.trim(), { transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: 5, timeout: 10000 }) : io({ transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: 5, timeout: 10000 });
     const opponentFromUrl = (params.get('opponent') || params.get('opponentName') || '').trim().slice(0, 30);
     const myNameFromUrl = (params.get('name') || params.get('player') || '').trim().slice(0, 30);
     const statusEl = document.getElementById('status');
@@ -110,8 +108,6 @@
     let myName = myNameFromUrl || 'You';
     let opponentName = opponentFromUrl || 'Opponent';
     let state = { board: [], turn: 'X', winner: null };
-    let connectionFailed = false;
-    let connectTimeoutId = null;
 
     function setStatus(text, className = '') {
       statusEl.textContent = text;
@@ -147,20 +143,7 @@
       });
     });
 
-    document.getElementById('retryBtn')?.addEventListener('click', function () {
-      connectionFailed = false;
-      document.getElementById('retryWrap')?.classList.add('hidden');
-      setStatus('Connecting...', '');
-      socket.connect();
-    });
-
     socket.on('connect', () => {
-      connectionFailed = false;
-      if (connectTimeoutId) {
-        clearTimeout(connectTimeoutId);
-        connectTimeoutId = null;
-      }
-      document.getElementById('retryWrap')?.classList.add('hidden');
       if (roomCode) {
         roomPill.textContent = 'Room ' + roomCode;
         roomPill.classList.remove('hidden');
@@ -171,74 +154,19 @@
       }
     });
 
-    if (roomCode) {
-      connectTimeoutId = setTimeout(function () {
-        if (connectionFailed || myRole !== null) return;
-        var text = statusEl.textContent || '';
-        if (text.indexOf('Connecting') !== -1 || text.indexOf('Joining') !== -1) {
-          connectionFailed = true;
-          setStatus('Connection failed. Make sure the game server is running and supports WebSockets, then try again.', 'waiting');
-          boardEl.classList.add('hidden');
-          var rw = document.getElementById('retryWrap');
-          if (rw) rw.classList.remove('hidden');
-        }
-        connectTimeoutId = null;
-      }, 12000);
-    }
-
-    socket.on('connect_error', (err) => {
-      connectionFailed = true;
-      if (connectTimeoutId) {
-        clearTimeout(connectTimeoutId);
-        connectTimeoutId = null;
-      }
-      console.warn('Socket connect_error', err);
-      setStatus('Connection failed. Make sure the game server is running and supports WebSockets, then try again.', 'waiting');
-      boardEl.classList.add('hidden');
-      var rw = document.getElementById('retryWrap');
-      if (rw) rw.classList.remove('hidden');
-    });
-
-    if (socket.io && socket.io.on) {
-      socket.io.on('reconnect_attempt', () => {
-        if (connectionFailed) setStatus('Reconnecting...', '');
-      });
-    }
-
-    socket.on('disconnect', (reason) => {
-      if (reason === 'io server disconnect' || reason === 'io client disconnect') return;
-      if (!connectionFailed && !state.winner) {
-        setStatus('Disconnected. Reconnecting...', 'waiting');
-      }
-    });
-
     socket.on('waiting', () => {
-      if (connectTimeoutId) { clearTimeout(connectTimeoutId); connectTimeoutId = null; }
       boardEl.classList.add('hidden');
       setStatus('Waiting for opponent... Share the same link with your match.', 'waiting');
     });
 
-    function applyGameStart(role, opponent) {
-      if (connectTimeoutId) { clearTimeout(connectTimeoutId); connectTimeoutId = null; }
-      myRole = role;
+    socket.on('start', (data) => {
+      myRole = data.role;
       if (!opponentName || opponentName === 'Opponent') {
-        opponentName = (opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
+        opponentName = (data.opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
       }
       state = { board: Array(9).fill(''), turn: 'X', winner: null };
       boardEl.classList.remove('hidden');
       setStatus((state.turn === myRole ? myName : opponentName) + "'s turn");
-    }
-
-    socket.on('start', (data) => {
-      applyGameStart(data.role, data.opponent);
-    });
-
-    socket.on('gameStart', (data) => {
-      if (!data || !data.p1 || !data.p2) return;
-      const isP1 = socket.id === data.p1.id;
-      const role = isP1 ? 'X' : 'O';
-      const opponent = isP1 ? (data.p2.name || 'Opponent') : (data.p1.name || 'Opponent');
-      applyGameStart(role, opponent);
     });
 
     socket.on('state', (data) => {
@@ -250,7 +178,7 @@
     socket.on('opponentLeft', () => setStatus('Opponent left.', 'draw'));
 
     // End-game modal (Replay / Leave) — iOS-like alert
-    const endModalHtml = \`
+    const endModalHtml = `
       <div id="endModal" class="modal hidden">
         <div class="iosAlert" role="dialog" aria-modal="true">
           <div class="iosAlertText">
@@ -264,7 +192,7 @@
             <button type="button" id="btnLeave" class="iosAlertBtn">Leave</button>
           </div>
         </div>
-      </div>\`;
+      </div>`;
     document.body.insertAdjacentHTML('beforeend', endModalHtml);
     const endModal = document.getElementById('endModal');
     const endTitle = document.getElementById('endTitle');
