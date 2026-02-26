@@ -141,8 +141,9 @@ export default function NotificationsScreen() {
       router.push(`/comments?postId=${notification.posts.id}` as any);
     } else if (notification.type === 'match_accepted') {
       router.replace('/(tabs)/matches' as any);
-    } else if (notification.type === 'game_invite' && notification.match_id && notification.game_type) {
-      router.push({ pathname: '/game-webview', params: { room: notification.match_id, gameType: notification.game_type } } as any);
+    } else if (notification.type === 'game_invite' && notification.match_id) {
+      const gameType = (notification.game_type || 'tictactoe').toLowerCase();
+      router.push({ pathname: '/game-webview', params: { room: notification.match_id, gameType } } as any);
     }
   };
 

@@ -36,8 +36,9 @@ export default function TabLayout() {
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       const d = response.notification.request.content.data as { type?: string; match_id?: string; game_type?: string };
-      if (d?.type === 'game_invite' && d?.match_id && d?.game_type) {
-        router.push({ pathname: '/game-webview', params: { room: d.match_id, gameType: d.game_type } } as any);
+      if (d?.type === 'game_invite' && d?.match_id) {
+        const gameType = (d?.game_type || 'tictactoe').toLowerCase();
+        router.push({ pathname: '/game-webview', params: { room: d.match_id, gameType } } as any);
       } else if (d?.type === 'match_accepted') {
         router.replace('/(tabs)/matches' as any);
       }
@@ -67,13 +68,14 @@ export default function TabLayout() {
         const latest = unread[0];
         if (!latest || gameInvitesShownRef.current.has(latest.id)) return;
         gameInvitesShownRef.current.add(latest.id);
-        const gameLabel = { tictactoe: 'Tic-Tac-Toe', chess: 'Chess' }[latest.game_type] || latest.game_type;
+        const gt = (latest.game_type || 'tictactoe').toLowerCase();
+        const gameLabel = { tictactoe: 'Tic-Tac-Toe', chess: 'Chess' }[gt] || latest.game_type || 'Tic-Tac-Toe';
         const title = 'Game invite';
         const body = `Your match invited you to play ${gameLabel}.`;
         showLocalNotification(title, body, {
           type: 'game_invite',
           match_id: latest.match_id,
-          game_type: latest.game_type,
+          game_type: gt,
         });
         Alert.alert(
           title,
@@ -84,7 +86,7 @@ export default function TabLayout() {
               text: 'Join',
               onPress: () => {
                 markNotificationRead(latest.id);
-                router.push({ pathname: '/game-webview', params: { room: latest.match_id, gameType: latest.game_type } } as any);
+                router.push({ pathname: '/game-webview', params: { room: latest.match_id, gameType: gt } } as any);
               },
             },
           ]

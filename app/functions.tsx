@@ -3145,7 +3145,7 @@ export const sendGameInvite = async (
         const isRecent = createdAt && (Date.now() - createdAt) < 2 * 60 * 1000; // 2 min
         if (
           inv?.status === 'pending' &&
-          (inv?.game_type || '') === (gameType || '') &&
+          (inv?.game_type || '').toLowerCase() === (gameType || 'tictactoe').toLowerCase() &&
           inv?.from_user_id === partnerId &&
           isRecent
         ) {
@@ -3156,6 +3156,7 @@ export const sendGameInvite = async (
       // ignore and continue sending
     }
 
+    const gameTypeNorm = (gameType || 'tictactoe').toLowerCase();
     const notifRef = collection(db, 'notifications');
     await addDoc(notifRef, {
       recipient_id: partnerId,
@@ -3165,24 +3166,24 @@ export const sendGameInvite = async (
       from_user_id: uid,
       match_id: matchId,
       room_id: matchId,
-      game_type: gameType,
+      game_type: gameTypeNorm,
     });
     const now = new Date().toISOString();
     const matchRef = doc(db, 'anonymous_matches', matchId);
     await updateDoc(matchRef, {
       last_game_invite: {
-        game_type: gameType,
+        game_type: gameTypeNorm,
         from_user_id: uid,
         status: 'pending',
         created_at: now,
       },
     });
-    const gameLabel = GAME_LABELS[gameType] || gameType;
+    const gameLabel = GAME_LABELS[gameTypeNorm] || GAME_LABELS[gameType] || gameType;
     await sendPushToUser(
       partnerId,
       'Game invite',
       `Your match invited you to play ${gameLabel}.`,
-      { type: 'game_invite', match_id: matchId, game_type: gameType }
+      { type: 'game_invite', match_id: matchId, game_type: gameTypeNorm }
     );
     return true;
   } catch (error) {

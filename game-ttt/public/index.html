@@ -131,7 +131,7 @@
         openEndModal('Game over', youWon ? (myName + ' wins!') : (opponentName + ' wins.'));
       } else {
         gameOverActionsEl.classList.add('hidden');
-        setStatus((state.turn === myRole ? myName : opponentName) + "'s turn");
+        setStatus(state.turn === myRole ? 'Your turn' : (opponentName + "'s turn"));
       }
     }
 
@@ -166,7 +166,7 @@
       }
       state = { board: Array(9).fill(''), turn: 'X', winner: null };
       boardEl.classList.remove('hidden');
-      setStatus((state.turn === myRole ? myName : opponentName) + "'s turn");
+      setStatus(state.turn === myRole ? 'Your turn' : (opponentName + "'s turn"));
       endModal.classList.add('hidden');
       if (replayPromptModal) replayPromptModal.classList.add('hidden');
     });
