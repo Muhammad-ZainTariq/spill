@@ -1,11 +1,11 @@
     import { Feather } from '@expo/vector-icons';
-import { Buffer } from 'buffer';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { doc, getDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -17,29 +17,38 @@ import {
     Platform,
     Pressable,
     ScrollView,
+    Share,
     StyleSheet,
     Text,
     TextInput,
     View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { auth, db, getDownloadURL, ref, storage, uploadBytes } from '../lib/firebase';
+import { auth, db, functions, getDownloadURL, ref, storage, uploadString } from '../lib/firebase';
+import { KeyboardAwareLayout } from './KeyboardAwareLayout.native';
+import { tokens } from './ui/tokens';
+import { HuzzPressable } from './ui/components/HuzzPressable.native';
 import {
     acceptStreak,
     checkInToStreak,
     createStreak,
     formatTimeAgo,
     getAvailableStreaks,
+    getChallengeProgress,
     getCurrentUserRole,
     getGroup,
+    getGroupInviteLink,
     getGroupMembers,
-    getGroupMessages,
     getUserStreaks,
-    GroupMessage,
+    hasProofToday,
     isGroupAdmin,
     issueWarningToMember,
+    leaveChallengeGroup,
     removeMemberFromGroup,
-    sendGroupMessage,
+    subscribeToGroupStreakFeed,
+    subscribeToTodayProofs,
+    submitChallengeProof,
+    TodayProof,
     updateGroupCoverImage,
     updateGroupSettings
 } from './functions';
@@ -52,8 +61,6 @@ import {
     
     const [group, setGroup] = useState<any>(null);
     const [loading, setLoading] = useState(true);
-    const [messages, setMessages] = useState<GroupMessage[]>([]);
-    const [messageText, setMessageText] = useState('');
     const [sending, setSending] = useState(false);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [isAdmin, setIsAdminState] = useState(false);
@@ -62,8 +69,7 @@ import {
     const [members, setMembers] = useState<any[]>([]);
     const [loadingMembers, setLoadingMembers] = useState(false);
     const [isMember, setIsMember] = useState(false);
-    const [messagesKey, setMessagesKey] = useState(0);
-    const [typingUsers, setTypingUsers] = useState<{ [userId: string]: { name: string; timestamp: number } }>({});
+    // Streak-only: no normal group messaging
     
     // Settings state
     const [allowPosting, setAllowPosting] = useState(true);
@@ -75,13 +81,6 @@ import {
     const [availableStreaks, setAvailableStreaks] = useState<any[]>([]);
     const [userStreaks, setUserStreaks] = useState<any[]>([]);
     const [loadingStreaks, setLoadingStreaks] = useState(false);
-    // Animated bottom position for floating input bar
-    // IDLE: 8px above bottom safe area
-    // ACTIVE: keyboardHeight + safeArea + 8px above keyboard
-    const IDLE_BOTTOM = 8;
-    const animBottom = useRef(new Animated.Value(IDLE_BOTTOM)).current;
-    const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-    const [keyboardHeight, setKeyboardHeight] = useState(0);
     const [showCreateStreakModal, setShowCreateStreakModal] = useState(false);
     const [newStreakName, setNewStreakName] = useState('');
     const [newStreakDescription, setNewStreakDescription] = useState('');
@@ -91,52 +90,26 @@ import {
     const [loadingChallenge, setLoadingChallenge] = useState(false);
     const [showChallengeModal, setShowChallengeModal] = useState(false);
     const [isAppAdmin, setIsAppAdmin] = useState(false);
+    // Today's proofs (realtime, Snapchat-style)
+    const [todayProofs, setTodayProofs] = useState<TodayProof[]>([]);
+    const [streakFeed, setStreakFeed] = useState<TodayProof[]>([]);
+    const [proofViewer, setProofViewer] = useState<{ list: TodayProof[]; index: number } | null>(null);
+    const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+    const atBottomRef = useRef(true);
+    const [showPostStreakModal, setShowPostStreakModal] = useState(false);
+    const [postCaption, setPostCaption] = useState('');
+    const [postingProof, setPostingProof] = useState(false);
 
-    // Keyboard listeners for smooth input bar animation
+    // Keep latest messages visible when keyboard opens
     useEffect(() => {
         const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-        const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-
-        const keyboardWillShow = Keyboard.addListener(showEvent, (e) => {
-            setIsKeyboardVisible(true);
-            const keyboardHeightValue = e.endCoordinates.height;
-            setKeyboardHeight(keyboardHeightValue);
-            
-            // Calculate bottom position: keyboard height + safe area + 8px gap
-            const targetBottom = keyboardHeightValue + insets.bottom + 8;
-            
-            // Animate input bar to sit 8px above keyboard
-            Animated.timing(animBottom, {
-                toValue: targetBottom,
-                duration: Platform.OS === 'ios' ? (e.duration || 250) : 250,
-                easing: Easing.out(Easing.ease),
-                useNativeDriver: false, // Required for bottom positioning
-            }).start();
-            
-            // Scroll to latest message (offset 0 for inverted list)
-            setTimeout(() => {
+        const sub = Keyboard.addListener(showEvent, () => {
+            requestAnimationFrame(() => {
                 flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-            }, 100);
+            });
         });
-
-        const keyboardWillHide = Keyboard.addListener(hideEvent, (e) => {
-            setIsKeyboardVisible(false);
-            setKeyboardHeight(0);
-            
-            // Animate input bar back to idle position (8px above bottom)
-            Animated.timing(animBottom, {
-                toValue: IDLE_BOTTOM,
-                duration: Platform.OS === 'ios' ? (e.duration || 250) : 250,
-                easing: Easing.out(Easing.ease),
-                useNativeDriver: false,
-            }).start();
-        });
-
-        return () => {
-            keyboardWillShow.remove();
-            keyboardWillHide.remove();
-        };
-    }, [insets.bottom]);
+        return () => sub.remove();
+    }, []);
 
     useEffect(() => {
         if (!groupId || typeof groupId !== 'string') return;
@@ -144,11 +117,7 @@ import {
         setCurrentUserId(auth.currentUser?.uid ?? null);
         loadGroup();
         checkAdminStatus();
-        setTimeout(() => loadMessages(), 100);
-
-        const messagesPoll = setInterval(loadMessages, 5000);
         return () => {
-            clearInterval(messagesPoll);
             if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         };
     }, [groupId]);
@@ -161,21 +130,12 @@ import {
         }
     }, [group]);
 
-    // Reload messages when screen comes into focus
-    useFocusEffect(
-        useCallback(() => {
-        if (groupId && typeof groupId === 'string' && isMember) {
-            loadMessages();
-            loadStreaks();
-        }
-        }, [groupId, isMember])
-    );
-
-    useFocusEffect(
-        useCallback(() => {
-            if (group?.is_challenge && groupId && typeof groupId === 'string') loadChallengeProgress();
-        }, [group?.is_challenge, groupId, loadChallengeProgress])
-    );
+    // Realtime subscription: when anyone posts a proof, everyone in the group sees it instantly (Snapchat-style)
+    useEffect(() => {
+        if (!groupId || typeof groupId !== 'string' || !group?.is_challenge) return;
+        const unsub = subscribeToTodayProofs(groupId, setTodayProofs);
+        return unsub;
+    }, [groupId, group?.is_challenge]);
 
     useEffect(() => {
         getCurrentUserRole().then((r) => setIsAppAdmin(r.is_admin));
@@ -207,15 +167,26 @@ import {
         setLoadingChallenge(false);
     }, [groupId]);
 
-    // Polling fallback for messages (in case Realtime isn't working)
+    // Refresh streak info when screen comes into focus
+    useFocusEffect(
+        useCallback(() => {
+        if (groupId && typeof groupId === 'string' && isMember) {
+            loadStreaks();
+        }
+        }, [groupId, isMember])
+    );
+
+    useFocusEffect(
+        useCallback(() => {
+            if (group?.is_challenge && groupId && typeof groupId === 'string') loadChallengeProgress();
+        }, [group?.is_challenge, groupId, loadChallengeProgress])
+    );
+
+    // Realtime streak feed (new posts show instantly)
     useEffect(() => {
         if (!groupId || typeof groupId !== 'string' || !isMember) return;
-        
-        const pollInterval = setInterval(() => {
-        loadMessages();
-        }, 2000); // Check every 2 seconds
-        
-        return () => clearInterval(pollInterval);
+        const unsub = subscribeToGroupStreakFeed(groupId, setStreakFeed);
+        return unsub;
     }, [groupId, isMember]);
 
     const loadGroup = async () => {
@@ -226,7 +197,7 @@ import {
         setGroup(groupData);
         if (groupData) {
             const uid = auth.currentUser?.uid;
-            const isCreator = uid === groupData.creator_id;
+            const isCreator = uid === (groupData as any).creator_id;
             const isMemberCheck = groupData.is_member || isCreator;
             setIsMember(isMemberCheck);
             
@@ -235,13 +206,7 @@ import {
             setIsAdminState(true);
             }
             
-            // Reload messages after confirming membership to ensure they're visible
-            if (isMemberCheck) {
-            await loadMessages();
-            } else {
-            // Clear messages if not a member
-            setMessages([]);
-            }
+            // streak feed is realtime; nothing else needed here
         }
         } catch (error) {
         console.error('Error loading group:', error);
@@ -250,46 +215,7 @@ import {
         }
     };
 
-    const loadMessages = async () => {
-        if (!groupId || typeof groupId !== 'string') return;
-        try {
-        const msgs = await getGroupMessages(groupId);
-        if (msgs && msgs.length > 0) {
-            // Sort messages by created_at
-            const sorted = msgs.sort((a, b) => 
-            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-            );
-            
-            // Only update if messages actually changed (avoid unnecessary re-renders)
-            setMessages(prev => {
-            const prevIds = new Set(prev.map(m => m.id));
-            const newIds = new Set(sorted.map(m => m.id));
-            
-            // Check if there are new messages
-            const hasNewMessages = sorted.some(m => !prevIds.has(m.id));
-            const hasRemovedMessages = prev.some(m => !newIds.has(m.id));
-            
-            // Only update if there are actual changes
-            if (hasNewMessages || hasRemovedMessages || prev.length !== sorted.length) {
-                setMessagesKey(prev => prev + 1);
-                return sorted;
-            }
-            
-            return prev;
-            });
-            
-            // Scroll to bottom if there are new messages
-            setTimeout(() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
-            }, 200);
-        } else {
-            setMessages([]);
-        }
-        } catch (error) {
-        console.error('Error loading messages:', error);
-        // Don't clear messages on error, might be RLS issue
-        }
-    };
+    // No loadMessages: group is streak-only (photo + caption posts)
 
     const checkAdminStatus = async () => {
         if (!groupId || typeof groupId !== 'string') return;
@@ -390,18 +316,8 @@ import {
         );
     };
 
-    // Typing indicator handler with debouncing
+    // Streak-only: no typing indicator / text messaging
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const handleTyping = useCallback(async (isTyping: boolean) => {
-        if (!groupId || typeof groupId !== 'string') return;
-        const user = auth.currentUser;
-        if (!user) return;
-        const profileSnap = await getDoc(doc(db, 'users', user.uid));
-        const profile = profileSnap.data();
-        const userName = profile?.display_name || profile?.anonymous_username || 'Someone';
-        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-        if (isTyping) typingTimeoutRef.current = setTimeout(() => {}, 2000);
-    }, [groupId]);
 
     const handleCreateStreak = async () => {
         if (!newStreakName.trim() || !groupId || typeof groupId !== 'string') return;
@@ -455,39 +371,117 @@ import {
         }
     };
 
-    const handleSendMessage = async () => {
-        if (!messageText.trim() || sending || !groupId || typeof groupId !== 'string') return;
-
-        const content = messageText.trim();
-        setMessageText('');
-        setSending(true);
-        
-        // Stop typing indicator
-        await handleTyping(false);
-        
+    const openPostStreak = useCallback(async () => {
+        if (!groupId || typeof groupId !== 'string') return;
         try {
-        const newMessage = await sendGroupMessage(groupId, content);
-        if (newMessage) {
-            // Immediately reload messages to ensure both sender and receiver see it
-            await loadMessages();
-            
-            // Scroll to latest message (offset 0 for inverted list)
-            setTimeout(() => {
-                flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-            }, 100);
-            
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        } else {
-            // Restore message text if send failed
-            setMessageText(content);
+            const already = await hasProofToday(groupId);
+            if (already) {
+                Alert.alert('Already posted', 'You already posted your streak proof today. Come back tomorrow.');
+                return;
+            }
+        } catch {
+            // If check fails, still allow posting; submitChallengeProof will block duplicates.
         }
-        } catch (error) {
-        console.error('Error sending message:', error);
-        setMessageText(content); // Restore message text
+        setPostCaption('');
+        setShowPostStreakModal(true);
+    }, [groupId]);
+
+    const captureAndSubmitProof = useCallback(async (useCamera: boolean) => {
+        if (!groupId || typeof groupId !== 'string' || !auth.currentUser) return;
+        if (postingProof) return;
+        try {
+            setPostingProof(true);
+
+            if (useCamera) {
+                const { status } = await ImagePicker.getCameraPermissionsAsync();
+                if (status !== 'granted') {
+                    const { status: s2 } = await ImagePicker.requestCameraPermissionsAsync();
+                    if (s2 !== 'granted') {
+                        Alert.alert('Permission required', 'Camera access is needed to take a photo.');
+                        return;
+                    }
+                }
+            } else {
+                const { status } = await ImagePicker.getMediaLibraryPermissionsAsync();
+                if (status !== 'granted') {
+                    const { status: s2 } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                    if (s2 !== 'granted') {
+                        Alert.alert('Permission required', 'Photo library access is needed to choose a photo.');
+                        return;
+                    }
+                }
+            }
+
+            const result = useCamera
+                ? await ImagePicker.launchCameraAsync({
+                    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                    allowsEditing: true,
+                    aspect: [1, 1],
+                    quality: 0.85,
+                })
+                : await ImagePicker.launchImageLibraryAsync({
+                    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                    allowsEditing: true,
+                    aspect: [1, 1],
+                    quality: 0.85,
+                });
+
+            if (result.canceled || !result.assets?.[0]) return;
+            const asset = result.assets[0];
+            const base64Data = await FileSystem.readAsStringAsync(asset.uri, {
+                encoding: FileSystem.EncodingType.Base64,
+            });
+            if (!base64Data?.length) {
+                Alert.alert('Upload failed', 'Could not read the selected image.');
+                return;
+            }
+
+            const uid = auth.currentUser.uid;
+            const path = `group_streak_proofs/${groupId}/${uid}_${Date.now()}.jpg`;
+            let imageUrl = '';
+
+            try {
+                const storageRef = ref(storage, path);
+                await uploadString(storageRef, base64Data, 'base64', { contentType: 'image/jpeg' });
+                imageUrl = await getDownloadURL(storageRef);
+            } catch (e: any) {
+                const msg = String(e?.message || e || '');
+                const needsServer = msg.includes('ArrayBuffer') || msg.includes('ArrayBufferView');
+                if (!needsServer) throw e;
+                const uploadMedia = httpsCallable<
+                    { base64: string; contentType: string; path: string },
+                    { path: string }
+                >(functions, 'uploadMedia');
+                const { data } = await uploadMedia({ base64: base64Data, contentType: 'image/jpeg', path });
+                const uploadedPath = String((data as any)?.path || '').trim();
+                if (!uploadedPath) throw e;
+                imageUrl = await getDownloadURL(ref(storage, uploadedPath));
+            }
+
+            const out = await submitChallengeProof(groupId, imageUrl, postCaption);
+            if (!out) {
+                Alert.alert('Could not post', 'You may have already posted today, or something went wrong.');
+                return;
+            }
+
+            setShowPostStreakModal(false);
+            setPostCaption('');
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            Alert.alert('Posted', 'Your streak was posted to the group.');
+        } catch (e: any) {
+            console.error('Group proof error:', e);
+            const msg = String(e?.message || e || '');
+            if (msg.toLowerCase().includes('camera not available on simulator')) {
+                Alert.alert('Camera not available', 'Simulators do not support the camera. Choose from gallery or test on a real device.');
+            } else if (msg.includes('functions/not-found') || msg.toLowerCase().includes('not-found')) {
+                Alert.alert('Upload server not deployed', 'Your upload fallback requires the Cloud Function `uploadMedia`. Deploy functions and try again.');
+            } else {
+                Alert.alert('Error', 'Failed to upload or submit proof. Try again.');
+            }
         } finally {
-        setSending(false);
+            setPostingProof(false);
         }
-    };
+    }, [groupId, postingProof, postCaption]);
 
     const pickGroupImage = async () => {
         if (!isAdmin) {
@@ -521,11 +515,10 @@ import {
         const base64Data = await FileSystem.readAsStringAsync(asset.uri, { 
             encoding: FileSystem.EncodingType.Base64 
         });
-        const byteArray = Buffer.from(base64Data, 'base64');
 
         const path = `groups/${groupId}/cover-${Date.now()}.jpg`;
         const storageRef = ref(storage, path);
-        await uploadBytes(storageRef, byteArray, { contentType: 'image/jpeg' });
+        await uploadString(storageRef, base64Data, 'base64', { contentType: 'image/jpeg' });
         const publicUrl = await getDownloadURL(storageRef);
         const success = await updateGroupCoverImage(groupId, publicUrl);
         
@@ -541,37 +534,33 @@ import {
         }
     };
 
-    const renderMessage = ({ item }: { item: GroupMessage }) => {
+    const renderStreakPost = ({ item, index }: { item: TodayProof; index: number }) => {
+        const username = item.display_name || item.anonymous_username || 'Anonymous';
         const isMe = item.user_id === currentUserId;
-        const username = item.user?.display_name || item.user?.anonymous_username || 'Anonymous';
-        
+        const caption = (item.caption || '').trim();
         return (
-        <View style={[styles.messageRow, isMe && styles.messageRowMe]}>
-            {!isMe && (
-            <View style={styles.messageAvatar}>
-                {item.user?.avatar_url ? (
-                <Image source={{ uri: item.user.avatar_url }} style={styles.avatarImage} />
-                ) : (
-                <View style={styles.defaultAvatar}>
-                    <Text style={styles.defaultAvatarText}>{username[0]?.toUpperCase() || '?'}</Text>
+            <View style={styles.streakPostCard}>
+                <View style={styles.streakPostHeader}>
+                    <View style={styles.streakPostUser}>
+                        <View style={[styles.defaultAvatar, isMe && styles.defaultAvatarMe]}>
+                            <Text style={styles.defaultAvatarText}>{username[0]?.toUpperCase() || '?'}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.streakPostName}>{isMe ? 'You' : username}</Text>
+                            <Text style={styles.streakPostTime}>{formatTimeAgo(item.created_at)}</Text>
+                        </View>
+                    </View>
                 </View>
-                )}
+                <Pressable
+                    onPress={() => {
+                        setProofViewer({ list: streakFeed, index });
+                    }}
+                    style={styles.streakPostImageWrap}
+                >
+                    <Image source={{ uri: item.image_url }} style={styles.streakPostImage} />
+                </Pressable>
+                {caption ? <Text style={styles.streakPostCaption}>{caption}</Text> : null}
             </View>
-            )}
-            <View style={[styles.messageBubble, isMe && styles.messageBubbleMe]}>
-            {!isMe && (
-                <View style={styles.messageSenderContainer}>
-                    <Text style={styles.messageSender}>{username}</Text>
-                </View>
-            )}
-            <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{item.content}</Text>
-            <View style={styles.messageTimeContainer}>
-                <Text style={[styles.messageTime, isMe && styles.messageTimeMe]}>
-                    {formatTimeAgo(item.created_at)}
-                </Text>
-            </View>
-            </View>
-        </View>
         );
     };
 
@@ -612,7 +601,26 @@ import {
                 <Text style={styles.headerDescription} numberOfLines={1}>{group.description}</Text>
             )}
             </Pressable>
-            <View style={{ width: 24 }} />
+            {isAdmin && groupId && typeof groupId === 'string' ? (
+                <Pressable
+                    style={styles.headerShareBtn}
+                    onPress={async () => {
+                        const url = getGroupInviteLink(groupId);
+                        try {
+                            await Share.share({
+                                message: `Join "${group.name}" on Spill: ${url}\n\nAnyone with this link can open the app and join the group.`,
+                                url: Platform.OS !== 'web' ? url : undefined,
+                            });
+                        } catch (e) {
+                            Alert.alert('Share', 'Could not share link.');
+                        }
+                    }}
+                >
+                    <Feather name="share-2" size={22} color="#333" />
+                </Pressable>
+            ) : (
+                <View style={{ width: 24 }} />
+            )}
         </View>
 
         {/* Group Cover Image */}
@@ -645,8 +653,7 @@ import {
                         <Pressable
                             style={styles.challengePostProofBtn}
                             onPress={() => {
-                                if (!groupId || typeof groupId !== 'string') return;
-                                router.push(`/challenge-proof?groupId=${groupId}` as any);
+                                openPostStreak();
                             }}
                         >
                             <Feather name="camera" size={18} color="#fff" />
@@ -661,12 +668,39 @@ import {
                         </Pressable>
                     </View>
                 ) : null}
+                {/* Today's proofs — realtime Snapchat-style: tap to view full screen, swipe/tap to next */}
+                {todayProofs.length > 0 && (
+                    <View style={styles.todayProofsSection}>
+                        <Text style={styles.todayProofsLabel}>Today&apos;s streaks</Text>
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.todayProofsScroll}
+                        >
+                            {todayProofs.map((p, idx) => (
+                                <Pressable
+                                    key={p.id}
+                                    style={styles.todayProofRing}
+                                    onPress={() => {
+                                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                                        setProofViewer({ list: todayProofs, index: idx });
+                                    }}
+                                >
+                                    <Image source={{ uri: p.image_url }} style={styles.todayProofThumb} />
+                                    <Text style={styles.todayProofName} numberOfLines={1}>
+                                        {p.display_name || p.anonymous_username || 'Anonymous'}
+                                    </Text>
+                                </Pressable>
+                            ))}
+                        </ScrollView>
+                    </View>
+                )}
             </View>
         )}
 
         {!isMember && group.creator_id !== currentUserId ? (
             <View style={styles.joinPrompt}>
-            <Text style={styles.joinPromptText}>Join this group to see messages and participate</Text>
+            <Text style={styles.joinPromptText}>Join this group to see streaks and participate</Text>
             <Pressable
                 style={styles.joinPromptButton}
                 onPress={async () => {
@@ -676,7 +710,6 @@ import {
                 if (success) {
                     // Reload everything
                     await loadGroup();
-                    await loadMessages();
                     checkAdminStatus();
                 }
                 }}
@@ -685,126 +718,57 @@ import {
             </Pressable>
             </View>
         ) : (
-            <>
-                {/* Messages List - Inverted for proper scrolling */}
-                <View style={styles.messagesListContainer}>
+            <KeyboardAwareLayout>
+                <View style={styles.streakOnlyContainer}>
                     <FlatList
-                    ref={flatListRef}
-                    data={messages}
-                    renderItem={renderMessage}
-                    keyExtractor={(item) => item.id}
-                    inverted={true}
-                    contentContainerStyle={[
-                        styles.messagesList,
-                        { 
-                            paddingTop: 90 + insets.bottom + 24, // INPUT_BAR_HEIGHT (56) + safe area + extra padding
-                            paddingBottom: 20
+                        ref={flatListRef}
+                        data={streakFeed}
+                        renderItem={renderStreakPost}
+                        keyExtractor={(item) => item.id}
+                        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 130 + (insets.bottom || 0), paddingTop: 12 }}
+                        scrollEventThrottle={100}
+                        onScroll={(e) => {
+                            const y = e.nativeEvent.contentOffset.y ?? 0;
+                            atBottomRef.current = y < 40;
+                            setShowScrollToBottom(y > 180);
+                        }}
+                        ListEmptyComponent={
+                            <View style={styles.emptyState}>
+                                <Text style={styles.emptyText}>No streaks yet</Text>
+                                <Text style={styles.emptySubtext}>Be the first to post today.</Text>
+                            </View>
                         }
-                    ]}
-                    extraData={messagesKey}
-                    onContentSizeChange={() => {
-                        // Auto-scroll to latest (offset 0 for inverted list)
-                        if (messages.length > 0) {
-                            setTimeout(() => {
-                                flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
-                            }, 50);
-                        }
-                    }}
-                    onLayout={() => {
-                        // Initial scroll to latest message
-                        if (messages.length > 0) {
-                            setTimeout(() => {
-                                flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
-                            }, 100);
-                        }
-                    }}
-                    ListEmptyComponent={
-                        <View style={styles.emptyState}>
-                        <Text style={styles.emptyText}>No messages yet</Text>
-                        <Text style={styles.emptySubtext}>Start the conversation!</Text>
-                        </View>
-                    }
-                    removeClippedSubviews={false}
-                    windowSize={21}
-                    initialNumToRender={20}
-                    maxToRenderPerBatch={10}
-                    keyboardShouldPersistTaps="handled"
-                    keyboardDismissMode="interactive"
+                        removeClippedSubviews={false}
+                        windowSize={21}
+                        initialNumToRender={8}
+                        maxToRenderPerBatch={8}
+                        keyboardShouldPersistTaps="handled"
+                        keyboardDismissMode="on-drag"
                     />
-                </View>
 
-                {/* Typing Indicator - Positioned above input bar */}
-                {Object.keys(typingUsers).length > 0 && (
-                    <Animated.View 
-                        style={[
-                            styles.typingIndicator,
-                            {
-                                bottom: Animated.add(
-                                    animBottom,
-                                    new Animated.Value(56) // INPUT_BAR_HEIGHT
-                                )
-                            }
-                        ]}
+                    <HuzzPressable
+                        style={[styles.postStreakBtn, { bottom: 16 + Math.max(0, insets.bottom) }]}
+                        onPress={openPostStreak}
+                        haptic="light"
                     >
-                    <Text style={styles.typingText}>
-                        {Object.values(typingUsers).map(u => u.name).join(', ')}
-                        {Object.keys(typingUsers).length === 1 ? ' is' : ' are'} typing...
-                    </Text>
-                    </Animated.View>
-                )}
+                        <Feather name="camera" size={18} color="#fff" />
+                        <Text style={styles.postStreakBtnText}>Post today’s streak</Text>
+                    </HuzzPressable>
 
-                {/* Floating Message Input Bar - Absolutely positioned */}
-                {(isMember || group.creator_id === currentUserId) && (
-                    <Animated.View
-                        style={[
-                            styles.inputBarWrapper,
-                            {
-                                bottom: animBottom,
-                                paddingBottom: insets.bottom,
-                            }
-                        ]}
-                    >
-                        {/* Solid background overlay to prevent messages showing through */}
-                        <View style={styles.inputBarBackground} />
-                        <View style={styles.inputContainer}>
-                            <TextInput
-                            style={styles.input}
-                            value={messageText}
-                            onChangeText={(text) => {
-                            setMessageText(text);
-                            // Send typing indicator
-                            if (text.trim().length > 0) {
-                                handleTyping(true);
-                            } else {
-                                handleTyping(false);
-                            }
-                            }}
-                            placeholder="Type a message..."
-                            placeholderTextColor="#999"
-                            multiline
-                            maxLength={1000}
-                            onFocus={() => {
-                            // Scroll to latest message when input is focused
-                            setTimeout(() => {
+                    {showScrollToBottom && (
+                        <HuzzPressable
+                            style={[styles.scrollToBottomBtnChat, { bottom: 86 + Math.max(0, insets.bottom) }]}
+                            onPress={() => {
                                 flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-                            }, 150);
+                                setShowScrollToBottom(false);
                             }}
-                            />
-                            <Pressable
-                            style={[styles.sendButton, (!messageText.trim() || sending) && styles.sendButtonDisabled]}
-                            onPress={handleSendMessage}
-                            disabled={!messageText.trim() || sending}
-                            >
-                            {sending ? (
-                                <ActivityIndicator size="small" color="#fff" />
-                            ) : (
-                                <Feather name="send" size={20} color="#fff" />
-                            )}
-                            </Pressable>
-                        </View>
-                    </Animated.View>
-                )}
-            </>
+                            haptic="light"
+                        >
+                            <Text style={styles.scrollToBottomText}>↑</Text>
+                        </HuzzPressable>
+                    )}
+                </View>
+            </KeyboardAwareLayout>
         )}
 
 
@@ -870,25 +834,6 @@ import {
                 </View>
                 <View style={[styles.toggle, allowPosting && styles.toggleActive]}>
                     <View style={[styles.toggleThumb, allowPosting && styles.toggleThumbActive]} />
-                </View>
-                </Pressable>
-
-                <Pressable 
-                    style={styles.settingRow} 
-                    onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setAllowMessaging(!allowMessaging);
-                    }}
-                >
-                <View style={styles.settingInfo}>
-                    <View style={styles.settingLabelRow}>
-                        <Feather name="message-square" size={16} color="#666" style={{ marginRight: 8 }} />
-                        <Text style={styles.settingLabel}>Allow Member Messaging</Text>
-                    </View>
-                    <Text style={styles.settingDescription}>Members can send messages in group chat</Text>
-                </View>
-                <View style={[styles.toggle, allowMessaging && styles.toggleActive]}>
-                    <View style={[styles.toggleThumb, allowMessaging && styles.toggleThumbActive]} />
                 </View>
                 </Pressable>
 
@@ -993,6 +938,67 @@ import {
             </View>
         )}
 
+        {/* Post streak modal (inline, no separate screen) */}
+        {showPostStreakModal && (
+            <View style={styles.modalOverlay}>
+                <View style={styles.postStreakModal}>
+                    <View style={styles.postStreakHeader}>
+                        <Text style={styles.postStreakTitle}>Post today’s streak</Text>
+                        <HuzzPressable
+                            style={styles.postStreakClose}
+                            onPress={() => setShowPostStreakModal(false)}
+                            haptic="light"
+                        >
+                            <Feather name="x" size={20} color="#111827" />
+                        </HuzzPressable>
+                    </View>
+
+                    <TextInput
+                        style={styles.postStreakCaption}
+                        placeholder="Add a caption (optional)"
+                        placeholderTextColor={tokens.colors.textMuted}
+                        value={postCaption}
+                        onChangeText={setPostCaption}
+                        multiline
+                        maxLength={180}
+                        editable={!postingProof}
+                    />
+
+                    <View style={styles.postStreakActions}>
+                        <HuzzPressable
+                            style={[styles.postStreakActionBtn, postingProof && styles.postStreakActionBtnDisabled]}
+                            onPress={() => captureAndSubmitProof(true)}
+                            disabled={postingProof}
+                            haptic="light"
+                        >
+                            {postingProof ? (
+                                <ActivityIndicator color="#fff" />
+                            ) : (
+                                <>
+                                    <Feather name="camera" size={18} color="#fff" />
+                                    <Text style={styles.postStreakActionText}>Take photo</Text>
+                                </>
+                            )}
+                        </HuzzPressable>
+
+                        <HuzzPressable
+                            style={[
+                                styles.postStreakActionBtn,
+                                styles.postStreakActionBtnSecondary,
+                                postingProof && styles.postStreakActionBtnDisabled,
+                            ]}
+                            onPress={() => captureAndSubmitProof(false)}
+                            disabled={postingProof}
+                            haptic="light"
+                        >
+                            <Feather name="image" size={18} color={tokens.colors.pink} />
+                            <Text style={styles.postStreakActionTextSecondary}>Choose from gallery</Text>
+                        </HuzzPressable>
+                    </View>
+                </View>
+            </View>
+        )}
+
         {/* Challenge modal (goal, members, leave) */}
         {showChallengeModal && group.is_challenge && (
             <View style={styles.modalOverlay}>
@@ -1030,7 +1036,7 @@ import {
                                     style={styles.challengePostProofBtnModal}
                                     onPress={() => {
                                         setShowChallengeModal(false);
-                                        if (groupId && typeof groupId === 'string') router.push(`/challenge-proof?groupId=${groupId}` as any);
+                                        openPostStreak();
                                     }}
                                 >
                                     <Feather name="camera" size={18} color="#fff" />
@@ -1077,6 +1083,48 @@ import {
                             </>
                         )}
                     </ScrollView>
+                </View>
+            </View>
+        )}
+
+        {/* Snapchat-style full-screen proof viewer: tap sides to go next/prev, tap top or X to close */}
+        {proofViewer && proofViewer.list[proofViewer.index] && (
+            <View style={[styles.proofViewerOverlay, { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 24 }]}>
+                <Pressable style={[styles.proofViewerCloseArea, { top: insets.top + 8 }]} onPress={() => setProofViewer(null)}>
+                    <Feather name="x" size={28} color="#fff" />
+                </Pressable>
+                <View style={styles.proofViewerHeader}>
+                    <Text style={styles.proofViewerName} numberOfLines={1}>
+                        {proofViewer.list[proofViewer.index].display_name || proofViewer.list[proofViewer.index].anonymous_username || 'Anonymous'}
+                    </Text>
+                </View>
+                <View style={styles.proofViewerBody}>
+                    <Pressable
+                        style={styles.proofViewerTapZone}
+                        onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            if (proofViewer.index <= 0) setProofViewer(null);
+                            else setProofViewer({ list: proofViewer.list, index: proofViewer.index - 1 });
+                        }}
+                    />
+                    <Image
+                        source={{ uri: proofViewer.list[proofViewer.index].image_url }}
+                        style={styles.proofViewerImage}
+                        resizeMode="contain"
+                    />
+                    <Pressable
+                        style={styles.proofViewerTapZone}
+                        onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            if (proofViewer.index >= proofViewer.list.length - 1) setProofViewer(null);
+                            else setProofViewer({ list: proofViewer.list, index: proofViewer.index + 1 });
+                        }}
+                    />
+                </View>
+                <View style={styles.proofViewerFooter}>
+                    <Text style={styles.proofViewerCounter}>
+                        {proofViewer.index + 1} / {proofViewer.list.length}
+                    </Text>
                 </View>
             </View>
         )}
@@ -1289,6 +1337,48 @@ import {
         marginTop: 2,
         fontWeight: '500',
     },
+    headerShareBtn: {
+        padding: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    scrollToBottomBtn: {
+        position: 'absolute',
+        right: 16,
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: tokens.colors.pink,
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+        elevation: 4,
+        zIndex: 900,
+    },
+    scrollToBottomBtnChat: {
+        position: 'absolute',
+        right: 16,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: tokens.colors.pink,
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.18,
+        shadowRadius: 4,
+        elevation: 4,
+        zIndex: 900,
+    },
+    scrollToBottomText: {
+        fontSize: 20,
+        fontWeight: '700',
+        color: '#fff',
+    },
     coverImage: {
         width: '100%',
         height: 200,
@@ -1363,7 +1453,7 @@ import {
         width: 36,
         height: 36,
         borderRadius: 18,
-        backgroundColor: '#ec4899',
+        backgroundColor: tokens.colors.pink,
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 2,
@@ -1374,9 +1464,159 @@ import {
         fontSize: 14,
         fontWeight: 'bold',
     },
+    defaultAvatarMe: {
+        backgroundColor: tokens.colors.pink,
+    },
+
+    // Streak-only feed
+    streakOnlyContainer: {
+        flex: 1,
+        minHeight: 0,
+    },
+    streakPostCard: {
+        backgroundColor: '#fff',
+        borderRadius: 18,
+        marginBottom: 12,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(244, 114, 182, 0.18)',
+    },
+    streakPostHeader: {
+        paddingHorizontal: 14,
+        paddingTop: 12,
+        paddingBottom: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(0,0,0,0.04)',
+    },
+    streakPostUser: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    streakPostName: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#111827',
+    },
+    streakPostTime: {
+        marginTop: 2,
+        fontSize: 12,
+        fontWeight: '500',
+        color: '#9ca3af',
+    },
+    streakPostImageWrap: {
+        width: '100%',
+        backgroundColor: '#f3f4f6',
+    },
+    streakPostImage: {
+        width: '100%',
+        height: 360,
+    },
+    streakPostCaption: {
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        fontSize: 14,
+        color: '#111827',
+        lineHeight: 20,
+    },
+    postStreakBtn: {
+        position: 'absolute',
+        left: 16,
+        right: 16,
+        height: 52,
+        borderRadius: 16,
+        backgroundColor: tokens.colors.pink,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.18,
+        shadowRadius: 10,
+        elevation: 8,
+        zIndex: 950,
+    },
+    postStreakBtnText: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: '800',
+    },
+
+    // Inline post-streak modal
+    postStreakModal: {
+        width: '92%',
+        maxWidth: 520,
+        backgroundColor: '#fff',
+        borderRadius: 22,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(244, 114, 182, 0.22)',
+    },
+    postStreakHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 12,
+    },
+    postStreakTitle: {
+        fontSize: 18,
+        fontWeight: '800',
+        color: '#111827',
+    },
+    postStreakClose: {
+        width: 40,
+        height: 40,
+        borderRadius: 14,
+        backgroundColor: '#f3f4f6',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    postStreakCaption: {
+        minHeight: 44,
+        maxHeight: 120,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: '#e5e7eb',
+        backgroundColor: '#fff',
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        fontSize: 15,
+        color: '#111827',
+        marginBottom: 14,
+    },
+    postStreakActions: {
+        gap: 10,
+    },
+    postStreakActionBtn: {
+        height: 52,
+        borderRadius: 16,
+        backgroundColor: tokens.colors.pink,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+    },
+    postStreakActionBtnSecondary: {
+        backgroundColor: '#fff',
+        borderWidth: 2,
+        borderColor: tokens.colors.pink,
+    },
+    postStreakActionBtnDisabled: {
+        opacity: 0.6,
+    },
+    postStreakActionText: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: '800',
+    },
+    postStreakActionTextSecondary: {
+        color: tokens.colors.pink,
+        fontSize: 16,
+        fontWeight: '800',
+    },
     messageBubble: {
         maxWidth: '75%',
-        backgroundColor: '#fff',
+        backgroundColor: 'rgba(244, 114, 182, 0.10)',
         borderRadius: 20,
         paddingHorizontal: 14,
         paddingVertical: 10,
@@ -1388,10 +1628,10 @@ import {
         elevation: 1,
     },
     messageBubbleMe: {
-        backgroundColor: '#ec4899',
+        backgroundColor: tokens.colors.pink,
         borderTopLeftRadius: 20,
         borderTopRightRadius: 4,
-        shadowColor: '#ec4899',
+        shadowColor: tokens.colors.pink,
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.2,
         shadowRadius: 4,
@@ -1403,7 +1643,7 @@ import {
     messageSender: {
         fontSize: 12,
         fontWeight: '700',
-        color: '#ec4899',
+        color: tokens.colors.pink,
         letterSpacing: 0.2,
     },
     messageText: {
@@ -1466,15 +1706,14 @@ import {
         bottom: 0,
         backgroundColor: '#ffffff',
     },
-    inputContainer: {
-        position: 'relative',
-        zIndex: 1,
+    composer: {
         flexDirection: 'row',
         alignItems: 'flex-end',
         paddingHorizontal: 16,
         paddingTop: 12,
-        paddingBottom: 12,
-        minHeight: 56,
+        backgroundColor: '#ffffff',
+        borderTopWidth: 1,
+        borderTopColor: '#e1e5e9',
     },
     input: {
         flex: 1,
@@ -1492,10 +1731,10 @@ import {
         width: 44,
         height: 44,
         borderRadius: 22,
-        backgroundColor: '#ec4899',
+        backgroundColor: tokens.colors.pink,
         justifyContent: 'center',
         alignItems: 'center',
-        shadowColor: '#ec4899',
+        shadowColor: tokens.colors.pink,
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.3,
         shadowRadius: 4,
@@ -1504,16 +1743,12 @@ import {
     sendButtonDisabled: {
         opacity: 0.5,
     },
-    typingIndicator: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
+    typingIndicatorInline: {
         paddingHorizontal: 16,
-        paddingVertical: 6,
-        backgroundColor: '#f3f4f6',
+        paddingVertical: 8,
+        backgroundColor: '#ffffff',
         borderTopWidth: 1,
         borderTopColor: '#e1e5e9',
-        zIndex: 998,
     },
     typingText: {
         fontSize: 12,
@@ -1804,6 +2039,45 @@ import {
     challengePostProofText: { fontSize: 15, fontWeight: '700', color: '#fff' },
     challengeViewAllBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     challengeViewAllText: { fontSize: 14, fontWeight: '600', color: '#ec4899' },
+    todayProofsSection: { marginTop: 14 },
+    todayProofsLabel: { fontSize: 13, fontWeight: '600', color: '#64748b', marginBottom: 10 },
+    todayProofsScroll: { flexDirection: 'row', gap: 14, paddingRight: 8 },
+    todayProofRing: { alignItems: 'center', width: 72 },
+    todayProofThumb: { width: 56, height: 56, borderRadius: 28, borderWidth: 3, borderColor: '#ec4899' },
+    todayProofName: { marginTop: 6, fontSize: 11, fontWeight: '600', color: '#0f172a', maxWidth: 72 },
+    proofViewerOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: '#000',
+        zIndex: 9999,
+        paddingTop: 50,
+        paddingBottom: 40,
+    },
+    proofViewerCloseArea: {
+        position: 'absolute',
+        top: 50,
+        right: 16,
+        zIndex: 10,
+        padding: 8,
+    },
+    proofViewerHeader: {
+        paddingHorizontal: 16,
+        paddingBottom: 8,
+        alignItems: 'center',
+    },
+    proofViewerName: { fontSize: 16, fontWeight: '700', color: '#fff' },
+    proofViewerBody: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'stretch',
+    },
+    proofViewerTapZone: { width: 60 },
+    proofViewerImage: { flex: 1, minWidth: 0 },
+    proofViewerFooter: { paddingVertical: 12, alignItems: 'center' },
+    proofViewerCounter: { fontSize: 13, color: 'rgba(255,255,255,0.8)' },
     challengeModal: { backgroundColor: '#fff', borderRadius: 24, maxHeight: '85%', marginHorizontal: 20 },
     challengeModalHeader: {
         flexDirection: 'row',

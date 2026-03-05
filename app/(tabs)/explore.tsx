@@ -73,6 +73,12 @@ export default function MoodGratitudeScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [generatingAI, setGeneratingAI] = useState(false);
   const [isPremium, setIsPremium] = useState(false);
+  // Future You – lightweight, local goal state (can later be persisted)
+  const [showFutureModal, setShowFutureModal] = useState(false);
+  const [futureTitle, setFutureTitle] = useState('');
+  const [futureDate, setFutureDate] = useState('');
+  const [futureNotes, setFutureNotes] = useState<string[]>([]);
+  const [futureDraftNote, setFutureDraftNote] = useState('');
 
   useEffect(() => {
     loadData();
@@ -652,39 +658,80 @@ export default function MoodGratitudeScreen() {
           </View>
         )}
 
-        {/* Gratitude Jar */}
+        {/* Future You – simple goal + date + steps */}
+        <View style={styles.futureCard}>
+          <View style={styles.futureHeader}>
+            <View style={styles.futureTitleRow}>
+              <Feather name="target" size={22} color="#0f172a" strokeWidth={2} />
+              <Text style={styles.futureTitle}>Future You</Text>
+            </View>
+            {futureDate ? (
+              <View style={styles.futureBadge}>
+                <Text style={styles.futureBadgeText}>By {futureDate}</Text>
+              </View>
+            ) : null}
+          </View>
+          <Text style={styles.futureSubtitle}>
+            Set a goal with a clear date and drop in small updates as you move towards it.
+          </Text>
+          {futureTitle ? (
+            <View style={styles.futureCurrent}>
+              <Text style={styles.futureCurrentLabel}>Current goal</Text>
+              <Text style={styles.futureCurrentTitle}>{futureTitle}</Text>
+              {futureNotes.length > 0 && (
+                <Text style={styles.futureCurrentNote}>
+                  Last step: {futureNotes[futureNotes.length - 1]}
+                </Text>
+              )}
+            </View>
+          ) : null}
+          <Pressable
+            style={({ pressed }) => [
+              styles.futureButton,
+              pressed && styles.quickActionPressed,
+            ]}
+            onPress={() => setShowFutureModal(true)}
+          >
+            <Text style={styles.futureButtonText}>
+              {futureTitle ? 'Add a step' : 'Create a Future You goal'}
+            </Text>
+          </Pressable>
+        </View>
+
+        {/* Gratitude Jar – simplified, calmer visual */}
         <View style={styles.jarCard}>
           <View style={styles.jarHeader}>
             <View style={styles.jarTitleRow}>
-              <Feather name="gift" size={22} color="#ec4899" strokeWidth={2} />
+              <Feather name="gift" size={22} color="#0f172a" strokeWidth={2} />
               <Text style={styles.jarTitle}>Gratitude Jar</Text>
             </View>
             <View style={styles.jarBadge}>
               <Text style={styles.jarBadgeText}>{gratitudeCount}</Text>
             </View>
           </View>
-          <Text style={styles.jarSubtitle}>Shake your phone or tap below to see a random gratitude</Text>
+          <Text style={styles.jarSubtitle}>A softer place to store the good moments.</Text>
           <View style={styles.jarContainer}>
-            <View style={styles.jarOuter}>
-              <View style={styles.jar}>
-                <View
-                  style={[
-                    styles.jarFill,
-                    { height: `${Math.max(jarFillPercentage, 5)}%` },
-                  ]}
-                >
-                  <View style={styles.jarFillGradient} />
-                </View>
-                <View style={styles.jarLid} />
-                <View style={styles.jarCountContainer}>
-                  <Text style={styles.jarCount}>{gratitudeCount}</Text>
-                  <Text style={styles.jarCountLabel}>gratitudes</Text>
-                </View>
-              </View>
+            <View style={styles.jarBarBackground}>
+              <View
+                style={[
+                  styles.jarBarFill,
+                  { width: `${Math.max(jarFillPercentage, 5)}%` },
+                ]}
+              />
+            </View>
+            <View style={styles.jarCountRow}>
+              <Text style={styles.jarCount}>{gratitudeCount}</Text>
+              <Text style={styles.jarCountLabel}>gratitudes saved</Text>
             </View>
           </View>
           {gratitudeCount > 0 && (
-            <Pressable style={({ pressed }) => [styles.randomButton, pressed && styles.quickActionPressed]} onPress={handleShake}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.randomButton,
+                pressed && styles.quickActionPressed,
+              ]}
+              onPress={handleShake}
+            >
               <Feather name="shuffle" size={18} color="#fff" strokeWidth={2} />
               <Text style={styles.randomButtonText}>Random Gratitude</Text>
             </Pressable>
@@ -725,6 +772,72 @@ export default function MoodGratitudeScreen() {
           </View>
         )}
       </ScrollView>
+
+      {/* Future You Modal */}
+      <Modal
+        visible={showFutureModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowFutureModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Future You</Text>
+            <Text style={styles.modalDescription}>
+              Where do you want to see yourself by a specific date? Set a clear goal and add small steps as you go.
+            </Text>
+            <TextInput
+              style={styles.noteInput}
+              placeholder="Your goal (e.g. Launch my first side project)"
+              placeholderTextColor="#9ca3af"
+              value={futureTitle}
+              onChangeText={setFutureTitle}
+            />
+            <TextInput
+              style={[styles.noteInput, { marginTop: 8 }]}
+              placeholder="Target date (YYYY-MM-DD)"
+              placeholderTextColor="#9ca3af"
+              value={futureDate}
+              onChangeText={setFutureDate}
+            />
+            <TextInput
+              style={[styles.noteInput, { marginTop: 8 }]}
+              placeholder="Today's step or note (optional)"
+              placeholderTextColor="#9ca3af"
+              multiline
+              value={futureDraftNote}
+              onChangeText={setFutureDraftNote}
+            />
+            <View style={styles.modalActions}>
+              <Pressable
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setShowFutureModal(false)}
+              >
+                <Text style={styles.cancelButtonText}>Close</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.modalButton,
+                  styles.submitButton,
+                  !futureTitle && styles.disabledButton,
+                ]}
+                onPress={() => {
+                  if (futureDraftNote.trim()) {
+                    setFutureNotes((prev) => [...prev, futureDraftNote.trim()]);
+                    setFutureDraftNote('');
+                  }
+                  setShowFutureModal(false);
+                }}
+                disabled={!futureTitle}
+              >
+                <Text style={styles.submitButtonText}>
+                  Save
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Mood Check-In Modal */}
       <Modal
@@ -1087,18 +1200,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   jarCard: {
-    backgroundColor: '#fff',
+    backgroundColor: '#ffffff',
     marginHorizontal: 24,
     marginBottom: 24,
     borderRadius: 24,
-    padding: 28,
+    padding: 24,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 12,
-    elevation: 3,
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    elevation: 2,
     borderWidth: 1,
-    borderColor: '#fce7f3',
+    borderColor: '#e2e8f0',
   },
   jarHeader: {
     flexDirection: 'row',
@@ -1117,31 +1230,31 @@ const styles = StyleSheet.create({
     color: '#0f172a',
   },
   jarBadge: {
-    backgroundColor: '#fdf2f8',
+    backgroundColor: '#eff6ff',
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: 6,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#fbcfe8',
+    borderColor: '#bfdbfe',
   },
   jarBadgeText: {
     fontSize: 15,
-    fontWeight: '800',
-    color: '#ec4899',
+    fontWeight: '700',
+    color: '#1d4ed8',
   },
   jarSubtitle: {
     fontSize: 14,
     color: '#64748b',
-    marginBottom: 28,
+    marginBottom: 20,
     textAlign: 'center',
   },
   randomButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#ec4899',
-    paddingVertical: 16,
-    paddingHorizontal: 28,
+    backgroundColor: '#0f172a',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
     borderRadius: 16,
     marginTop: 28,
     gap: 10,
@@ -1159,72 +1272,37 @@ const styles = StyleSheet.create({
   jarContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 24,
+    paddingVertical: 18,
   },
-  jarOuter: {
-    shadowColor: '#ec4899',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 6,
-  },
-  jar: {
-    width: 140,
-    height: 200,
-    borderRadius: 70,
-    borderWidth: 4,
-    borderColor: '#fbcfe8',
-    backgroundColor: '#fdf2f8',
-    overflow: 'hidden',
-    position: 'relative',
-    justifyContent: 'flex-end',
-  },
-  jarFill: {
+  jarBarBackground: {
     width: '100%',
-    borderBottomLeftRadius: 66,
-    borderBottomRightRadius: 66,
-    position: 'relative',
-    backgroundColor: '#f9a8d4',
-    minHeight: 10,
-  },
-  jarFillGradient: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '40%',
-    backgroundColor: '#ec4899',
-    opacity: 0.4,
-  },
-  jarLid: {
-    position: 'absolute',
-    top: -6,
-    left: -4,
-    right: -4,
+    maxWidth: 260,
     height: 18,
-    backgroundColor: '#fbcfe8',
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#f9a8d4',
-    zIndex: 10,
+    borderRadius: 999,
+    backgroundColor: '#e5e7eb',
+    overflow: 'hidden',
   },
-  jarCountContainer: {
-    position: 'absolute',
-    top: '45%',
-    left: '50%',
-    transform: [{ translateX: -40 }, { translateY: -20 }],
-    alignItems: 'center',
-    zIndex: 5,
+  jarBarFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#60a5fa',
+  },
+  jarCountRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+    marginTop: 12,
+    gap: 6,
   },
   jarCount: {
     fontSize: 32,
     fontWeight: '900',
-    color: '#be185d',
+    color: '#0f172a',
   },
   jarCountLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#9d174d',
+    color: '#6b7280',
     marginTop: 2,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -1442,5 +1520,90 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6b7280',
     marginBottom: 24,
+  },
+  // Future You styles
+  futureCard: {
+    backgroundColor: '#ffffff',
+    marginHorizontal: 24,
+    marginBottom: 24,
+    borderRadius: 24,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  futureHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  futureTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  futureTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  futureBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#eff6ff',
+  },
+  futureBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1d4ed8',
+  },
+  futureSubtitle: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginBottom: 14,
+  },
+  futureCurrent: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 14,
+  },
+  futureCurrentLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6b7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+  futureCurrentTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  futureCurrentNote: {
+    fontSize: 13,
+    color: '#6b7280',
+  },
+  futureButton: {
+    marginTop: 4,
+    backgroundColor: '#0f172a',
+    borderRadius: 999,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  futureButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

@@ -13,10 +13,13 @@ import {
   Text,
   TextInput,
   View,
+  Modal,
+  ScrollView,
 } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { auth } from '../lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { auth, functions } from '../lib/firebase';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -24,6 +27,15 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showStopTouching, setShowStopTouching] = useState(false);
+  const [showTherapistApply, setShowTherapistApply] = useState(false);
+  const [showTherapistCode, setShowTherapistCode] = useState(false);
+  const [therapistName, setTherapistName] = useState('');
+  const [therapistEmail, setTherapistEmail] = useState('');
+  const [therapistSpecialization, setTherapistSpecialization] = useState('');
+  const [therapistNote, setTherapistNote] = useState('');
+  const [therapistSubmitting, setTherapistSubmitting] = useState(false);
+  const [therapistCode, setTherapistCode] = useState('');
+  const [verifyingCode, setVerifyingCode] = useState(false);
   const logoScale = useSharedValue(1);
   const router = useRouter();
 
@@ -67,6 +79,87 @@ export default function Login() {
     },
     [email, password, loading, router]
   );
+
+  const handleSubmitTherapistRequest = useCallback(async () => {
+    if (therapistSubmitting) return;
+    if (!therapistName.trim() || !therapistEmail.trim()) {
+      Alert.alert('Missing info', 'Please enter your name and email.');
+      return;
+    }
+    setTherapistSubmitting(true);
+    try {
+      const submitFn = httpsCallable<
+        { name: string; email: string; specialization?: string; note?: string },
+        { ok: boolean; requestId: string }
+      >(functions, 'submitTherapistRequest');
+      const res = await submitFn({
+        name: therapistName.trim(),
+        email: therapistEmail.trim(),
+        specialization: therapistSpecialization.trim() || undefined,
+        note: therapistNote.trim() || undefined,
+      });
+      if (res.data?.ok) {
+        Alert.alert(
+          'Request received',
+          'We received your therapist onboarding request. Our team will review it and email you next steps.'
+        );
+        setShowTherapistApply(false);
+        setTherapistName('');
+        setTherapistEmail('');
+        setTherapistSpecialization('');
+        setTherapistNote('');
+      } else {
+        Alert.alert('Error', 'Could not submit your request. Please try again later.');
+      }
+    } catch (err: any) {
+      const code = err?.code ?? '';
+      const msg = err?.message ?? '';
+      if (code === 'functions/not-found' || msg.toLowerCase().includes('not found')) {
+        Alert.alert(
+          'Feature not available',
+          'Therapist onboarding is not set up yet. Please ask the admin to deploy the Cloud Functions (submitTherapistRequest).'
+        );
+      } else {
+        Alert.alert('Error', msg || 'Could not submit your request.');
+      }
+    } finally {
+      setTherapistSubmitting(false);
+    }
+  }, [therapistSubmitting, therapistName, therapistEmail, therapistSpecialization, therapistNote]);
+
+  const handleVerifyTherapistCode = useCallback(async () => {
+    if (verifyingCode) return;
+    if (!therapistCode.trim()) {
+      Alert.alert('Missing code', 'Please enter the therapist code from your email.');
+      return;
+    }
+    setVerifyingCode(true);
+    try {
+      const verifyFn = httpsCallable<{ code: string }, { ok: boolean; requestId: string; email?: string | null }>(
+        functions,
+        'verifyTherapistCode'
+      );
+      const res = await verifyFn({ code: therapistCode.trim() });
+      if (res.data?.ok && res.data.requestId) {
+        setShowTherapistCode(false);
+        setTherapistCode('');
+        router.push({
+          pathname: '/therapist/signup',
+          params: { requestId: res.data.requestId, email: res.data.email ?? '' },
+        } as any);
+      } else {
+        Alert.alert('Invalid code', 'That code is invalid or expired.');
+      }
+    } catch (err: any) {
+      const msg =
+        err?.code === 'functions/not-found'
+          ? 'That code is invalid or expired.'
+          : err?.message || 'Could not verify code.';
+      Alert.alert('Error', msg);
+    } finally {
+      setVerifyingCode(false);
+    }
+  }, [therapistCode, verifyingCode, router]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#ec4899' }}>
@@ -158,6 +251,28 @@ export default function Login() {
                   {loading ? 'Logging In...' : 'Log In'}
                 </Text>
               </Pressable>
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowTherapistCode(true);
+                }}
+                style={{ paddingVertical: 8, alignItems: 'center', marginTop: 4 }}
+              >
+                <Text style={{ color: '#ec4899', fontSize: 14, fontWeight: '600', textDecorationLine: 'underline' }}>
+                  I have a therapist code
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowTherapistApply(true);
+                }}
+                style={{ paddingVertical: 6, alignItems: 'center', marginTop: 2 }}
+              >
+                <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: '600' }}>
+                  Apply as a therapist
+                </Text>
+              </Pressable>
             </View>
 
             <View>
@@ -177,6 +292,160 @@ export default function Login() {
             </View>
           </View>
         </KeyboardAvoidingView>
+
+        {/* Apply as therapist modal */}
+        <Modal visible={showTherapistApply} animationType="slide" transparent onRequestClose={() => setShowTherapistApply(false)}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', paddingHorizontal: 16 }}>
+            <View
+              style={{
+                backgroundColor: '#fff',
+                borderRadius: 18,
+                padding: 20,
+                maxHeight: '80%',
+              }}
+            >
+              <ScrollView showsVerticalScrollIndicator={false}>
+                <Text style={{ fontSize: 18, fontWeight: '800', color: '#111827', marginBottom: 8, textAlign: 'center' }}>
+                  Apply as therapist
+                </Text>
+                <Text style={{ fontSize: 13, color: '#6b7280', marginBottom: 16, textAlign: 'center' }}>
+                  Tell us who you are and how you practice. Our team will review and email next steps.
+                </Text>
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Name</Text>
+                  <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
+                    <TextInput
+                      style={{ paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111827' }}
+                      value={therapistName}
+                      onChangeText={setTherapistName}
+                      placeholder="Your full name"
+                      placeholderTextColor="#9CA3AF"
+                    />
+                  </View>
+                </View>
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Email</Text>
+                  <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
+                    <TextInput
+                      style={{ paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111827' }}
+                      value={therapistEmail}
+                      onChangeText={setTherapistEmail}
+                      placeholder="you@example.com"
+                      placeholderTextColor="#9CA3AF"
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                  </View>
+                </View>
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Specialization (optional)</Text>
+                  <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
+                    <TextInput
+                      style={{ paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111827' }}
+                      value={therapistSpecialization}
+                      onChangeText={setTherapistSpecialization}
+                      placeholder="e.g. CBT, couples therapy"
+                      placeholderTextColor="#9CA3AF"
+                    />
+                  </View>
+                </View>
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Anything else (optional)</Text>
+                  <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
+                    <TextInput
+                      style={{
+                        paddingHorizontal: 12,
+                        paddingVertical: 10,
+                        fontSize: 15,
+                        color: '#111827',
+                        minHeight: 80,
+                        textAlignVertical: 'top',
+                      }}
+                      multiline
+                      value={therapistNote}
+                      onChangeText={setTherapistNote}
+                      placeholder="Share your experience, license, or how you want to use Spill."
+                      placeholderTextColor="#9CA3AF"
+                    />
+                  </View>
+                </View>
+              </ScrollView>
+              <View style={{ flexDirection: 'row', marginTop: 12, justifyContent: 'flex-end' }}>
+                <Pressable
+                  onPress={() => setShowTherapistApply(false)}
+                  style={{ paddingVertical: 10, paddingHorizontal: 14, marginRight: 8 }}
+                >
+                  <Text style={{ color: '#6b7280', fontWeight: '600' }}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleSubmitTherapistRequest}
+                  disabled={therapistSubmitting}
+                  style={{
+                    backgroundColor: therapistSubmitting ? '#c4b5fd' : '#ec4899',
+                    paddingVertical: 10,
+                    paddingHorizontal: 18,
+                    borderRadius: 999,
+                    opacity: therapistSubmitting ? 0.7 : 1,
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontWeight: '800' }}>
+                    {therapistSubmitting ? 'Sending...' : 'Submit request'}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Therapist code modal */}
+        <Modal visible={showTherapistCode} animationType="slide" transparent onRequestClose={() => setShowTherapistCode(false)}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', paddingHorizontal: 16 }}>
+            <View
+              style={{
+                backgroundColor: '#fff',
+                borderRadius: 18,
+                padding: 20,
+              }}
+            >
+              <Text style={{ fontSize: 18, fontWeight: '800', color: '#111827', marginBottom: 8, textAlign: 'center' }}>
+                Enter therapist code
+              </Text>
+              <Text style={{ fontSize: 13, color: '#6b7280', marginBottom: 16, textAlign: 'center' }}>
+                Paste the code you received in your email to continue onboarding.
+              </Text>
+              <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', marginBottom: 16 }}>
+                <TextInput
+                  style={{ paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111827' }}
+                  value={therapistCode}
+                  onChangeText={setTherapistCode}
+                  placeholder="74DCB21B-12E0-4103-BB81-86B1284EFAB"
+                  placeholderTextColor="#9CA3AF"
+                  autoCapitalize="characters"
+                />
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                <Pressable onPress={() => setShowTherapistCode(false)} style={{ paddingVertical: 10, paddingHorizontal: 14, marginRight: 8 }}>
+                  <Text style={{ color: '#6b7280', fontWeight: '600' }}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleVerifyTherapistCode}
+                  disabled={verifyingCode}
+                  style={{
+                    backgroundColor: verifyingCode ? '#c4b5fd' : '#ec4899',
+                    paddingVertical: 10,
+                    paddingHorizontal: 18,
+                    borderRadius: 999,
+                    opacity: verifyingCode ? 0.7 : 1,
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontWeight: '800' }}>
+                    {verifyingCode ? 'Checking...' : 'Continue'}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </View>
     </SafeAreaView>
   );

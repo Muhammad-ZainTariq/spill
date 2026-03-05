@@ -35,10 +35,12 @@ export default function TabLayout() {
 
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const d = response.notification.request.content.data as { type?: string; match_id?: string; game_type?: string };
+      const d = response.notification.request.content.data as { type?: string; match_id?: string; game_type?: string; group_id?: string };
       if (d?.type === 'game_invite' && d?.match_id) {
         const gameType = (d?.game_type || 'tictactoe').toLowerCase();
         router.push({ pathname: '/game-webview', params: { room: d.match_id, gameType } } as any);
+      } else if (d?.type === 'group_streak' && d?.group_id) {
+        router.push(`/group?groupId=${d.group_id}` as any);
       } else if (d?.type === 'match_accepted') {
         router.replace('/(tabs)/matches' as any);
       }

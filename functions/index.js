@@ -1,7 +1,30 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
+const { randomUUID } = require('crypto');
+
 admin.initializeApp();
+
+const db = admin.firestore();
+
+// Shared Gmail transport for therapist onboarding emails and internal alerts.
+// Trim and normalize: Gmail app passwords are 16 chars, sometimes stored with spaces.
+const gmailUser = typeof functions.config().gmail?.user === 'string' ? functions.config().gmail.user.trim() : '';
+const gmailPassRaw = typeof functions.config().gmail?.app_password === 'string' ? functions.config().gmail.app_password.trim() : '';
+const gmailPass = gmailPassRaw ? gmailPassRaw.replace(/\s+/g, '') : ''; // Gmail expects no spaces
+
+let gmailTransport = null;
+if (gmailUser && gmailPass) {
+  gmailTransport = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: gmailUser,
+      pass: gmailPass,
+    },
+  });
+} else {
+  console.warn('Gmail config not set in functions config. Therapist onboarding emails will be skipped.');
+}
 
 // Threshold for auto-flagging based on Perspective TOXICITY score (0–1).
 // Lower values = more aggressive flagging.
@@ -67,7 +90,7 @@ exports.checkPostToxicity = functions
         flagged_at: now,
       });
 
-      await admin.firestore().collection('reports').add({
+      await db.collection('reports').add({
         post_id: postId,
         post_owner_uid: postOwnerUid,
         reporter_uid: 'system',
@@ -77,14 +100,13 @@ exports.checkPostToxicity = functions
       });
 
       if (postOwnerUid) {
-        const userRef = admin.firestore().collection('users').doc(postOwnerUid);
+        const userRef = db.collection('users').doc(postOwnerUid);
         await userRef.update({
           reports_received_count: admin.firestore.FieldValue.increment(1),
         });
 
         // Notify all admins that a post was auto-flagged
         try {
-          const db = admin.firestore();
           const adminsSnap = await db.collection('users').where('is_admin', '==', true).get();
           const notifBatch = db.batch();
           const adminIds = adminsSnap.docs.map((d) => d.id);
@@ -163,7 +185,7 @@ exports.approvePostAsSafe = functions
       throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
     }
     const adminUid = context.auth.uid;
-    const adminDoc = await admin.firestore().collection('users').doc(adminUid).get();
+    const adminDoc = await db.collection('users').doc(adminUid).get();
     if (!adminDoc.exists || !adminDoc.data().is_admin) {
       throw new functions.https.HttpsError('permission-denied', 'Only admins can approve posts.');
     }
@@ -171,7 +193,6 @@ exports.approvePostAsSafe = functions
     if (!postId || typeof postId !== 'string' || !postId.trim()) {
       throw new functions.https.HttpsError('invalid-argument', 'postId is required.');
     }
-    const db = admin.firestore();
     const postRef = db.collection('posts').doc(postId.trim());
     const postSnap = await postRef.get();
     if (!postSnap.exists) {
@@ -182,7 +203,7 @@ exports.approvePostAsSafe = functions
     const now = new Date().toISOString();
     await postRef.update({ approved_safe_at: now });
     if (reportId && typeof reportId === 'string' && reportId.trim()) {
-      await admin.firestore().collection('reports').doc(reportId.trim()).update({
+      await db.collection('reports').doc(reportId.trim()).update({
         status: 'resolved',
         resolved_at: now,
         resolved_by: adminUid,
@@ -278,8 +299,220 @@ exports.createStaffUser = functions.region('us-central1').https.onCall(async (da
   }
 });
 
+// Public callable: submit a therapist onboarding request. No auth required.
+// Body: { name, email, specialization, note }
+exports.submitTherapistRequest = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const { name, email, specialization, note } = data || {};
+
+    const trimmedName = typeof name === 'string' ? name.trim() : '';
+    const trimmedEmail = typeof email === 'string' ? email.trim() : '';
+    const trimmedSpec = typeof specialization === 'string' ? specialization.trim() : '';
+    const trimmedNote = typeof note === 'string' ? note.trim() : '';
+
+    if (!trimmedName || !trimmedEmail) {
+      throw new functions.https.HttpsError('invalid-argument', 'Name and email are required.');
+    }
+
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    try {
+      const docRef = await db.collection('therapist_onboarding_requests').add({
+        name: trimmedName,
+        email: trimmedEmail.toLowerCase(),
+        specialization: trimmedSpec || null,
+        note: trimmedNote || null,
+        status: 'pending',
+        therapist_code: null,
+        created_at: now,
+        updated_at: now,
+        processed_by: null,
+      });
+
+      // Optional internal email to notify admin of new request.
+      if (gmailTransport && gmailUser) {
+        try {
+          await gmailTransport.sendMail({
+            from: `"Spill" <${gmailUser}>`,
+            to: gmailUser,
+            subject: 'New therapist onboarding request',
+            text: [
+              `New therapist request received:`,
+              ``,
+              `Name: ${trimmedName}`,
+              `Email: ${trimmedEmail}`,
+              trimmedSpec ? `Specialization: ${trimmedSpec}` : '',
+              trimmedNote ? `Note: ${trimmedNote}` : '',
+              ``,
+              `Request ID: ${docRef.id}`,
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          });
+        } catch (mailErr) {
+          console.warn('submitTherapistRequest: failed to send internal email', mailErr);
+        }
+      }
+
+      return { ok: true, requestId: docRef.id };
+    } catch (err) {
+      console.error('submitTherapistRequest failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Failed to submit request.');
+    }
+  });
+
+// Admin-only callable: generate a therapist code and send invite email.
+// Body: { requestId, customMessage }
+exports.sendTherapistInvite = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+    }
+
+    const adminUid = context.auth.uid;
+    const adminDoc = await db.collection('users').doc(adminUid).get();
+    if (!adminDoc.exists || !adminDoc.data().is_admin) {
+      throw new functions.https.HttpsError('permission-denied', 'Only admins can send therapist invites.');
+    }
+
+    const { requestId, customMessage } = data || {};
+    if (!requestId || typeof requestId !== 'string' || !requestId.trim()) {
+      throw new functions.https.HttpsError('invalid-argument', 'requestId is required.');
+    }
+
+    if (!gmailTransport || !gmailUser) {
+      console.warn('sendTherapistInvite: Gmail transport not configured.');
+      throw new functions.https.HttpsError('failed-precondition', 'Email sending is not configured.');
+    }
+
+    const trimmedId = requestId.trim();
+
+    try {
+      const reqRef = db.collection('therapist_onboarding_requests').doc(trimmedId);
+      const reqSnap = await reqRef.get();
+      if (!reqSnap.exists) {
+        throw new functions.https.HttpsError('not-found', 'Request not found.');
+      }
+
+      const reqData = reqSnap.data() || {};
+      const email = typeof reqData.email === 'string' ? reqData.email.trim() : '';
+      const name = typeof reqData.name === 'string' ? reqData.name.trim() : '';
+      const currentStatus = reqData.status || 'pending';
+
+      if (!email) {
+        throw new functions.https.HttpsError('failed-precondition', 'Request is missing email.');
+      }
+
+      // Generate a new code if there isn't one yet.
+      let code =
+        typeof reqData.therapist_code === 'string' && reqData.therapist_code.trim()
+          ? reqData.therapist_code.trim()
+          : randomUUID().toUpperCase();
+
+      const nowTs = admin.firestore.FieldValue.serverTimestamp();
+
+      await reqRef.update({
+        therapist_code: code,
+        status: 'invited',
+        updated_at: nowTs,
+        processed_by: adminUid,
+      });
+
+      const custom = typeof customMessage === 'string' && customMessage.trim() ? customMessage.trim() : '';
+
+      const lines = [
+        name ? `Hi ${name},` : 'Hi,',
+        '',
+        'Thanks for applying to join Spill as a therapist.',
+        '',
+        'Here is your one‑time therapist onboarding code (long‑press to copy):',
+        '',
+        '────────────────────',
+        code,
+        '────────────────────',
+        '',
+        'To continue your onboarding:',
+        '1. Open the Spill app.',
+        '2. On the login screen, tap \"I have a therapist code\".',
+        '3. Paste this code and follow the steps to upload your documents.',
+      ];
+
+      if (custom) {
+        lines.push('', 'Additional note from the team:', custom);
+      }
+
+      lines.push(
+        '',
+        'If you did not request this, you can ignore this email.',
+        '',
+        'With care,',
+        'The Spill team'
+      );
+
+      await gmailTransport.sendMail({
+        from: `"Spill" <${gmailUser}>`,
+        to: email,
+        subject: 'Your Spill therapist onboarding code',
+        text: lines.join('\n'),
+      });
+
+      console.log('sendTherapistInvite: sent invite email', {
+        requestId: trimmedId,
+        email,
+        statusBefore: currentStatus,
+      });
+
+      return { ok: true, requestId: trimmedId, code };
+    } catch (err) {
+      console.error('sendTherapistInvite failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Failed to send invite.');
+    }
+  });
+
+// Public callable: verify a therapist code before signup.
+// Body: { code }
+exports.verifyTherapistCode = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const { code } = data || {};
+    const trimmedCode = typeof code === 'string' ? code.trim() : '';
+    if (!trimmedCode) {
+      throw new functions.https.HttpsError('invalid-argument', 'Code is required.');
+    }
+
+    try {
+      const snap = await db
+        .collection('therapist_onboarding_requests')
+        .where('therapist_code', '==', trimmedCode)
+        .where('status', '==', 'invited')
+        .limit(1)
+        .get();
+
+      if (snap.empty) {
+        throw new functions.https.HttpsError('not-found', 'Invalid or expired code.');
+      }
+
+      const doc = snap.docs[0];
+      const dataOut = doc.data() || {};
+
+      return {
+        ok: true,
+        requestId: doc.id,
+        email: dataOut.email || null,
+        name: dataOut.name || null,
+      };
+    } catch (err) {
+      if (err instanceof functions.https.HttpsError) {
+        throw err;
+      }
+      console.error('verifyTherapistCode failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Failed to verify code.');
+    }
+  });
+
 async function sendPushToUser(recipientId, title, body, payload) {
-  const db = admin.firestore();
   const userId = recipientId.trim();
   const userSnap = await db.collection('users').doc(userId).get();
   if (!userSnap.exists) {

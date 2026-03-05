@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
-import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -17,7 +17,7 @@ import { auth } from '../lib/firebase';
 
 interface Notification {
   id: string;
-  type: 'follow' | 'like' | 'comment' | 'new_post' | 'message' | 'group_message' | 'match_accepted' | 'game_invite';
+  type: 'follow' | 'like' | 'comment' | 'new_post' | 'message' | 'group_message' | 'group_streak' | 'match_accepted' | 'game_invite' | 'post_flagged' | 'post_approved_safe';
   created_at: string;
   read: boolean;
   profiles: {
@@ -29,6 +29,9 @@ interface Notification {
   match_id?: string;
   from_user_id?: string;
   game_type?: string;
+  post_id?: string;
+  post_owner_uid?: string;
+  toxicity_score?: number;
   posts?: {
     id: string;
     content: string;
@@ -49,6 +52,9 @@ interface Notification {
     group_id: string;
     group_name?: string;
   };
+  group_id?: string;
+  group_name?: string;
+  caption?: string | null;
 }
 
 export default function NotificationsScreen() {
@@ -62,6 +68,13 @@ export default function NotificationsScreen() {
   useEffect(() => {
     loadNotifications();
   }, []);
+
+  // Also refresh whenever this screen gains focus (e.g. after a flag event)
+  useFocusEffect(
+    useCallback(() => {
+      loadNotifications();
+    }, [])
+  );
 
   const loadNotifications = async () => {
     try {
@@ -113,12 +126,18 @@ export default function NotificationsScreen() {
         return `${username} sent you a message`;
       case 'group_message':
         return `${username} sent a message in ${notification.group_messages?.group_name || 'a group'}`;
+      case 'group_streak':
+        return `${username} posted a streak in ${notification.group_name || 'a group'}`;
       case 'match_accepted':
         return `${username} accepted your match request. Tap to open the chat!`;
       case 'game_invite': {
         const gameLabel = { tictactoe: 'Tic-Tac-Toe', chess: 'Chess' }[notification.game_type || ''] || notification.game_type || 'a game';
         return `${username} invited you to play ${gameLabel}. Tap to join!`;
       }
+      case 'post_flagged':
+        return 'A post was auto-flagged for review. Tap to open Flagged stuff.';
+      case 'post_approved_safe':
+        return 'Your flagged post was approved as safe. It’s visible on the feed again.';
       default:
         return 'New notification';
     }
@@ -137,6 +156,8 @@ export default function NotificationsScreen() {
       router.push(`/(tabs)/messages` as any);
     } else if (notification.type === 'group_message' && notification.group_messages) {
       router.push(`/group?groupId=${notification.group_messages.group_id}` as any);
+    } else if (notification.type === 'group_streak' && notification.group_id) {
+      router.push(`/group?groupId=${notification.group_id}` as any);
     } else if (notification.posts) {
       router.push(`/comments?postId=${notification.posts.id}` as any);
     } else if (notification.type === 'match_accepted') {
@@ -144,11 +165,15 @@ export default function NotificationsScreen() {
     } else if (notification.type === 'game_invite' && notification.match_id) {
       const gameType = (notification.game_type || 'tictactoe').toLowerCase();
       router.push({ pathname: '/game-webview', params: { room: notification.match_id, gameType } } as any);
+    } else if (notification.type === 'post_flagged') {
+      router.push('/admin/flagged' as any);
+    } else if (notification.type === 'post_approved_safe' && notification.post_id) {
+      router.push(`/comments?postId=${notification.post_id}` as any);
     }
   };
 
   const renderNotification = ({ item }: { item: Notification }) => {
-    const username = item.profiles.display_name || item.profiles.anonymous_username || 'Someone';
+    const username = item.profiles?.display_name || item.profiles?.anonymous_username || 'Someone';
     
     return (
       <Pressable 

@@ -1,4 +1,4 @@
-import { auth, storage, ref, uploadBytes, getDownloadURL } from '@/lib/firebase';
+import { auth, storage, ref, uploadString, getDownloadURL } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
 import { Buffer } from 'buffer';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -102,11 +102,9 @@ export default function SettingsScreen() {
       const base64Data = await FileSystem.readAsStringAsync(asset.uri, { 
         encoding: FileSystem.EncodingType.Base64 
       });
-      const byteArray = Buffer.from(base64Data, 'base64');
-
       const path = `avatars/${user?.id || auth.currentUser?.uid}/${Date.now()}.jpg`;
       const storageRef = ref(storage, path);
-      await uploadBytes(storageRef, byteArray, { contentType: 'image/jpeg' });
+      await uploadString(storageRef, base64Data, 'base64', { contentType: 'image/jpeg' });
       const publicUrl = await getDownloadURL(storageRef);
       setAvatarUrl(publicUrl);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -437,16 +435,6 @@ export default function SettingsScreen() {
           )}
         </Pressable>
 
-        {/* Debug Info */}
-        <View style={styles.debugSection}>
-          <Text style={styles.debugTitle}>Debug Info</Text>
-          <Text style={styles.debugText}>Display Name: {displayName || 'Not set'}</Text>
-          <Text style={styles.debugText}>Anonymous Username: {anonymousUsername || 'Not set'}</Text>
-          <Text style={styles.debugText}>Avatar URL: {avatarUrl ? 'Set' : 'Not set'}</Text>
-          <Pressable onPress={loadUserProfile} style={styles.refreshButton}>
-            <Text style={styles.refreshText}>Refresh Profile Data</Text>
-          </Pressable>
-        </View>
       </ScrollView>
 
       {/* Struggles Selection Modal */}

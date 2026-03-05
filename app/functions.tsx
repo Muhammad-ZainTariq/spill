@@ -24,15 +24,27 @@ import { Alert } from 'react-native';
 
 // Stub for removed Supabase – returns empty data; migrate to Firestore when needed
 const _stub = (out: any) => Promise.resolve(out);
-const _chain = (out: any) => ({
-  select: () => ({ single: () => _stub(out), maybeSingle: () => _stub(out), order: () => ({ ascending: () => ({ limit: () => _stub(out) }), descending: () => _stub(out) }), eq: () => ({ eq: () => ({ single: () => _stub(out), maybeSingle: () => _stub(out) }), order: () => _stub(out), gte: () => ({ lt: () => ({ single: () => _stub(out) }) }), in: () => ({ single: () => _stub(out) }) }), gte: () => ({ order: () => ({ limit: () => _stub(out) }) }) }),
-  insert: (v: any) => ({ select: () => ({ single: () => _stub(v) }) }),
-  update: (v: any) => ({ eq: () => _stub({ error: null }) }),
-  delete: () => ({ eq: () => ({ eq: () => _stub({ error: null }) }) }),
-});
+const _emptyResult = () => _stub({ data: [], error: null });
+const _orderReturn = () => {
+  const p = _emptyResult();
+  (p as any).limit = () => _emptyResult();
+  return p;
+};
+const _chain = (out: any) => {
+  const chainWithOrder = () => ({ order: _orderReturn, limit: () => _emptyResult() });
+  return {
+    select: () => ({ single: () => _stub(out), maybeSingle: () => _stub(out), order: () => ({ ascending: () => ({ limit: () => _stub(out) }), descending: () => _stub(out) }), eq: () => ({ eq: () => ({ single: () => _stub(out), maybeSingle: () => _stub(out) }), order: _orderReturn, gte: () => ({ lt: () => ({ single: () => _stub(out) }) }), in: () => ({ single: () => _stub(out) }) }), gte: chainWithOrder, order: _orderReturn }),
+    eq: () => ({ eq: () => chainWithOrder(), gte: chainWithOrder, order: _orderReturn }),
+    gte: chainWithOrder,
+    order: _orderReturn,
+    insert: (v: any) => ({ select: () => ({ single: () => _stub(v) }) }),
+    update: (v: any) => ({ eq: () => _stub({ error: null }) }),
+    delete: () => ({ eq: () => ({ eq: () => _stub({ error: null }) }) }),
+  };
+};
 const supabase = {
   auth: { getUser: async () => ({ data: { user: auth.currentUser ? { id: auth.currentUser.uid } : null } }) },
-  from: () => ({ select: (...args: any[]) => _chain(args.length ? null : []), insert: (v: any) => ({ select: () => ({ single: () => _stub(v) }) }), update: (v: any) => ({ eq: () => _stub({ error: null }) }), delete: () => ({ eq: () => ({ eq: () => _stub({ error: null }) }) }) }),
+  from: () => ({ select: (...args: any[]) => _chain(args.length ? null : []), insert: (v: any) => ({ select: () => ({ single: () => _stub({ data: v, error: null }) }) }), update: (v: any) => ({ eq: () => _stub({ error: null }) }), delete: () => ({ eq: () => ({ eq: () => _stub({ error: null }) }) }) }),
   storage: { from: () => ({ upload: () => _stub({ error: null }), getPublicUrl: () => ({ data: { publicUrl: '' } }) }) },
 };
 
@@ -142,7 +154,77 @@ export const fetchPosts = async (category?: string): Promise<Post[]> => {
   }
 };
 
+/** Real-time feed: updates when posts change (e.g. flagged_for_toxicity or approved_safe_at). */
+export function subscribeToPosts(
+  callback: (posts: Post[]) => void,
+  category?: string
+): () => void {
+  const now = new Date();
+  const normCreatedAt = (data: any): string => {
+    if (typeof data?.created_at === 'string') return data.created_at;
+    const ts = data?.createdAt;
+    if (ts != null && typeof (ts as Timestamp).toMillis === 'function') return new Date((ts as Timestamp).toMillis()).toISOString();
+    return '';
+  };
 
+  const q = query(
+    collection(db, 'posts'),
+    orderBy('created_at', 'desc'),
+    limit(150)
+  );
+
+  return onSnapshot(q, async (snap) => {
+    try {
+      const uid = auth.currentUser?.uid;
+      let posts: any[] = snap.docs
+        .map((d) => {
+          const data = d.data();
+          return { id: d.id, ...data, created_at: normCreatedAt(data) };
+        })
+        .filter((p: any) => {
+          if (p.is_vent && p.expires_at) return new Date(p.expires_at) > now;
+          return true;
+        });
+      if (category && category !== 'All') posts = posts.filter((p: any) => p.category === category);
+
+      if (uid && posts.length > 0) {
+        const followingIds = await getFollowingIds();
+        const followingSet = new Set(followingIds);
+        const fromFollowed = posts.filter((p: any) => followingSet.has(p.user_id));
+        const discovery = posts.filter((p: any) => !followingSet.has(p.user_id));
+        posts = mergeFollowedAndDiscovery(fromFollowed, discovery).slice(0, 100);
+      } else {
+        posts = posts.slice(0, 100);
+      }
+
+      const withProfiles = await Promise.all(
+        posts.map(async (post: any) => {
+          let profile = null;
+          const userSnap = await getDoc(doc(db, 'users', post.user_id));
+          if (userSnap.exists()) {
+            const d = userSnap.data();
+            profile = { display_name: d?.display_name, anonymous_username: d?.anonymous_username, avatar_url: d?.avatar_url };
+          }
+          const post_stats = {
+            upvotes_count: post.upvotes_count ?? 0,
+            downvotes_count: post.downvotes_count ?? 0,
+            views_count: post.views_count ?? 0,
+            comments_count: post.comments_count ?? 0,
+          };
+          let userVote: 'upvote' | 'downvote' | null = null;
+          if (uid) {
+            const voteSnap = await getDocs(query(collection(db, 'postVotes'), where('post_id', '==', post.id), where('user_id', '==', uid), limit(1)));
+            if (!voteSnap.empty) userVote = (voteSnap.docs[0].data().vote_type as 'upvote' | 'downvote') || null;
+          }
+          return { ...post, profiles: profile, post_stats, user_vote: userVote };
+        })
+      );
+      callback(withProfiles);
+    } catch (error) {
+      console.error('subscribeToPosts enrichment error:', error);
+    }
+  });
+}
 
 export const createPost = async (content: string, mediaUrl?: string) => {
   const user = auth.currentUser;
@@ -480,13 +562,44 @@ Never use: "That's so valid", "Thank you for sharing", "It's great that you're",
   }
 };
 
-/** Generate a playful challenge idea: name, goal, description, duration. Returns null if no API key or parse fails. */
-export const generateChallengeIdeas = async (): Promise<{ name: string; goal: string; description: string; duration: number } | null> => {
+/** Fetch challenge names (and goals) already used in the app so AI won't suggest them again. */
+export const getUsedChallengeNames = async (): Promise<string[]> => {
+  try {
+    const q = query(
+      collection(db, 'used_challenge_ideas'),
+      orderBy('created_at', 'desc'),
+      limit(300)
+    );
+    const snap = await getDocs(q);
+    const names: string[] = [];
+    snap.docs.forEach((d) => {
+      const n = d.data().name;
+      if (typeof n === 'string' && n.trim()) names.push(n.trim());
+    });
+    return names;
+  } catch (e) {
+    console.error('getUsedChallengeNames', e);
+    return [];
+  }
+};
+
+/** Generate a challenge idea for the given category. Excludes already-used names so we don't suggest the same idea again. */
+export const generateChallengeIdeas = async (
+  category: string,
+  excludeNames: string[] = []
+): Promise<{ name: string; goal: string; description: string; duration: number } | null> => {
   try {
     const apiKey =
       (Constants as any)?.expoConfig?.extra?.openaiApiKey ||
       (Constants as any)?.manifest?.extra?.openaiApiKey;
     if (!apiKey) return null;
+
+    const categoryLabel =
+      CHALLENGE_CATEGORIES.find((c) => c.value === category)?.label ?? category;
+    const excludeHint =
+      excludeNames.length > 0
+        ? ` Do NOT suggest any of these already-used challenge names (or anything very similar): ${excludeNames.slice(0, 50).join(', ')}.`
+        : '';
 
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -501,14 +614,15 @@ export const generateChallengeIdeas = async (): Promise<{ name: string; goal: st
             role: 'system',
             content: `You're a hype-person for a fun streak app. You ONLY respond with valid JSON. Format: {"name":"...","goal":"...","description":"...","duration":N}
 
-name = short, punchy, memorable (like a band name or a dare). Be playful, weird, catchy—zero corporate speak. Examples: "No Screens Before Beams", "Chaos Mode", "Mismatched Socks Week".
-goal = what people actually do daily, specific and a bit silly or wholesome.
-description = 1-3 sentences that explain what the challenge is and what you do. Keep it direct and neutral—no cutesy stuff like "unleash your inner", "embrace the quirkiness", "giggle", "step into fun", or inspirational fluff. Just the facts with a bit of vibe.
+IMPORTANT: The idea MUST fit the category the user chose. Match the theme and tone of that category.
+name = short, punchy, memorable (like a band name or a dare). Be playful, weird, catchy—zero corporate speak.
+goal = what people actually do daily, specific and a bit silly or wholesome—must align with the chosen category.
+description = 1-3 sentences that explain what the challenge is and what you do. Keep it direct and neutral—no cutesy fluff. Just the facts with a bit of vibe.
 duration = number of days (between 3 and 21).`,
           },
           {
             role: 'user',
-            content: 'Give me one random challenge idea. JSON only.',
+            content: `Give me ONE challenge idea that fits this category only: "${categoryLabel}". The idea must be clearly about ${categoryLabel} (e.g. for Fitness: workouts, steps, exercise; for Chaos & silly: fun dares, randomness; for Mindfulness: meditation, breathing; etc.).${excludeHint} Respond with JSON only.`,
           },
         ],
         max_tokens: 220,
@@ -532,6 +646,61 @@ duration = number of days (between 3 and 21).`,
     return { name, goal, description: description || goal, duration };
   } catch (e) {
     console.error('generateChallengeIdeas', e);
+    return null;
+  }
+};
+
+/** Suggest what counts as valid streak proof (photo + caption). */
+export const generateProofRequirements = async (
+  category: string,
+  goal: string
+): Promise<string | null> => {
+  try {
+    const apiKey =
+      (Constants as any)?.expoConfig?.extra?.openaiApiKey ||
+      (Constants as any)?.manifest?.extra?.openaiApiKey;
+    if (!apiKey) return null;
+    const categoryLabel =
+      CHALLENGE_CATEGORIES.find((c) => c.value === category)?.label ?? category;
+    const g = String(goal || '').trim();
+    if (!g) return null;
+
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content:
+              `You help define streak-proof rules for a streak app.
+Write a short, clear "valid proof" description for a group challenge.
+Constraints:
+- 1-3 sentences max
+- must be doable daily with a phone camera
+- be specific: what should be visible in the photo
+- include 1 example of an INVALID proof (one short sentence starting with "Not valid:")
+Return plain text only.`,
+          },
+          {
+            role: 'user',
+            content: `Category: ${categoryLabel}\nGoal: ${g}\n\nWrite what counts as valid proof for this streak.`,
+          },
+        ],
+        max_tokens: 180,
+        temperature: 0.6,
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const txt = String(data?.choices?.[0]?.message?.content || '').trim();
+    return txt || null;
+  } catch (e) {
+    console.error('generateProofRequirements', e);
     return null;
   }
 };
@@ -662,18 +831,20 @@ export const getFollowingIds = async (): Promise<string[]> => {
 // ADMIN / STAFF
 // ========================================
 /** Returns { is_admin, is_staff } for the current user. Defaults to false if missing (e.g. existing docs). */
-export const getCurrentUserRole = async (): Promise<{ is_admin: boolean; is_staff: boolean }> => {
+export const getCurrentUserRole = async (): Promise<{ is_admin: boolean; is_staff: boolean; role?: string; is_therapist_verified?: boolean }> => {
   const user = auth.currentUser;
-  if (!user) return { is_admin: false, is_staff: false };
+  if (!user) return { is_admin: false, is_staff: false, role: undefined, is_therapist_verified: undefined };
   try {
     const snap = await getDoc(doc(db, 'users', user.uid));
     const data = snap.data();
     return {
       is_admin: !!data?.is_admin,
       is_staff: !!data?.is_staff,
+      role: data?.role,
+      is_therapist_verified: data?.is_therapist_verified ?? undefined,
     };
   } catch {
-    return { is_admin: false, is_staff: false };
+    return { is_admin: false, is_staff: false, role: undefined, is_therapist_verified: undefined };
   }
 };
 
@@ -1012,6 +1183,12 @@ export const getGroup = async (groupId: string) => {
   }
 };
 
+/** Shareable link for the group. Anyone with this link can open the app and join the group (when app is published). */
+export const getGroupInviteLink = (groupId: string): string => {
+  const scheme = (Constants as any)?.expoConfig?.scheme ?? 'spill';
+  return `${scheme}://group?groupId=${groupId}`;
+};
+
 export const joinGroup = async (groupId: string) => {
   const user = auth.currentUser;
   if (!user) {
@@ -1081,7 +1258,8 @@ export const createChallengeGroup = async (
   durationDays: number,
   description?: string,
   managedByAdmin?: boolean,
-  challengeCategory?: string
+  challengeCategory?: string,
+  proofRequirements?: string
 ): Promise<{ id: string } | null> => {
   const user = auth.currentUser;
   if (!user) return null;
@@ -1107,6 +1285,7 @@ export const createChallengeGroup = async (
       challenge_duration_days: Math.round(durationDays),
       managed_by_admin: setManagedByAdmin,
       challenge_category: categoryValue,
+      proof_requirements: (proofRequirements || '').trim() || null,
     });
     const groupId = groupRef.id;
     await setDoc(doc(db, 'group_members', `${groupId}_${user.uid}`), {
@@ -1117,6 +1296,16 @@ export const createChallengeGroup = async (
       last_proof_date: null,
       completed_at: null,
     });
+    // Store this idea so AI won't suggest it again
+    try {
+      await addDoc(collection(db, 'used_challenge_ideas'), {
+        name: name.trim(),
+        goal: goal.trim(),
+        created_at: now,
+      });
+    } catch (_) {
+      // non-fatal
+    }
     return { id: groupId };
   } catch (error) {
     console.error('Error creating challenge group:', error);
@@ -1124,14 +1313,68 @@ export const createChallengeGroup = async (
   }
 };
 
+async function notifyGroupStreakPosted(params: {
+  groupId: string;
+  groupName: string;
+  fromUserId: string;
+  caption?: string;
+  imageUrl?: string;
+}): Promise<void> {
+  try {
+    const { groupId, groupName, fromUserId, caption, imageUrl } = params;
+    const membersSnap = await getDocs(query(collection(db, 'group_members'), where('group_id', '==', groupId)));
+    const memberIds = membersSnap.docs.map((d) => (d.data() as any).user_id).filter(Boolean) as string[];
+    const recipients = [...new Set(memberIds)].filter((id) => id && id !== fromUserId);
+    if (recipients.length === 0) return;
+
+    const fromSnap = await getDoc(doc(db, 'users', fromUserId));
+    const fromData = fromSnap.data() as any;
+    const fromName = fromData?.display_name || fromData?.anonymous_username || 'Someone';
+    const now = new Date().toISOString();
+
+    // In-app notifications + push (best effort)
+    const notifRef = collection(db, 'notifications');
+    for (const rid of recipients) {
+      try {
+        await addDoc(notifRef, {
+          recipient_id: rid,
+          type: 'group_streak',
+          created_at: now,
+          read: false,
+          from_user_id: fromUserId,
+          group_id: groupId,
+          group_name: groupName,
+          caption: (caption || '').trim() || null,
+          image_url: imageUrl || null,
+        });
+      } catch (e) {
+        console.warn('Failed to create group_streak notification', e);
+      }
+      // Push: keep data small
+      const captionLine = (caption || '').trim();
+      const body = captionLine
+        ? `${fromName} posted: "${captionLine.slice(0, 80)}"`
+        : `${fromName} posted a new streak.`;
+      await sendPushToUser(rid, groupName || 'New streak', body, { type: 'group_streak', group_id: groupId });
+    }
+  } catch (e) {
+    console.warn('notifyGroupStreakPosted failed', e);
+  }
+}
+
 /** Submit proof for today (image URL after client upload). Updates per-member streak; if streak >= duration, marks completed. */
-export const submitChallengeProof = async (groupId: string, imageUrl: string): Promise<{ current_streak: number; completed: boolean } | null> => {
+export const submitChallengeProof = async (
+  groupId: string,
+  imageUrl: string,
+  caption?: string
+): Promise<{ current_streak: number; completed: boolean } | null> => {
   const user = auth.currentUser;
   if (!user || !imageUrl.trim()) return null;
   try {
     const groupSnap = await getDoc(doc(db, 'groups', groupId));
     if (!groupSnap.exists() || !groupSnap.data()?.is_challenge) return null;
     const duration = groupSnap.data()?.challenge_duration_days ?? 7;
+    const groupName = String((groupSnap.data() as any)?.name || 'Group');
     const memberId = `${groupId}_${user.uid}`;
     const memberSnap = await getDoc(doc(db, 'group_members', memberId));
     if (!memberSnap.exists()) return null;
@@ -1146,7 +1389,16 @@ export const submitChallengeProof = async (groupId: string, imageUrl: string): P
       user_id: user.uid,
       date: today,
       image_url: imageUrl.trim(),
+      caption: (caption || '').trim() || null,
       created_at: new Date().toISOString(),
+    });
+    // Notify other group members (best-effort)
+    notifyGroupStreakPosted({
+      groupId,
+      groupName,
+      fromUserId: user.uid,
+      caption,
+      imageUrl: imageUrl.trim(),
     });
     const data = memberSnap.data()!;
     const last = data.last_proof_date || null;
@@ -1294,6 +1546,119 @@ export const hasProofToday = async (groupId: string): Promise<boolean> => {
     )
   );
   return !snap.empty;
+};
+
+export interface TodayProof {
+  id: string;
+  user_id: string;
+  display_name?: string;
+  anonymous_username?: string;
+  image_url: string;
+  caption?: string | null;
+  created_at: string;
+  date: string;
+}
+
+/** Get today's proofs for a challenge group (with display names). */
+export const getTodayProofsForGroup = async (groupId: string): Promise<TodayProof[]> => {
+  const today = new Date().toISOString().slice(0, 10);
+  const q = query(
+    collection(db, 'group_streak_proofs'),
+    where('group_id', '==', groupId),
+    where('date', '==', today)
+  );
+  const snap = await getDocs(q);
+  const proofs: TodayProof[] = [];
+  for (const d of snap.docs) {
+    const data = d.data();
+    const profileSnap = await getDoc(doc(db, 'users', data.user_id));
+    const p = profileSnap.data() || {};
+    proofs.push({
+      id: d.id,
+      user_id: data.user_id,
+      display_name: p.display_name,
+      anonymous_username: p.anonymous_username,
+      image_url: data.image_url || '',
+      caption: data.caption ?? null,
+      created_at: data.created_at || '',
+      date: data.date || today,
+    });
+  }
+  proofs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  return proofs;
+};
+
+/** Subscribe to today's proofs in real time so the group sees new proofs instantly (Snapchat-style). */
+export const subscribeToTodayProofs = (
+  groupId: string,
+  onProofs: (proofs: TodayProof[]) => void
+): (() => void) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const q = query(
+    collection(db, 'group_streak_proofs'),
+    where('group_id', '==', groupId),
+    where('date', '==', today)
+  );
+  const unsub = onSnapshot(
+    q,
+    async (snap) => {
+      const proofs: TodayProof[] = [];
+      for (const d of snap.docs) {
+        const data = d.data();
+        const profileSnap = await getDoc(doc(db, 'users', data.user_id));
+        const p = profileSnap.data() || {};
+        proofs.push({
+          id: d.id,
+          user_id: data.user_id,
+          display_name: p.display_name,
+          anonymous_username: p.anonymous_username,
+          image_url: data.image_url || '',
+          caption: data.caption ?? null,
+          created_at: data.created_at || '',
+          date: data.date || today,
+        });
+      }
+      proofs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      onProofs(proofs);
+    },
+    (err) => console.error('subscribeToTodayProofs', err)
+  );
+  return unsub;
+};
+
+/** Subscribe to recent streak posts (no orderBy to avoid composite index; sorts in memory). */
+export const subscribeToGroupStreakFeed = (
+  groupId: string,
+  onPosts: (posts: TodayProof[]) => void
+): (() => void) => {
+  const q = query(collection(db, 'group_streak_proofs'), where('group_id', '==', groupId), limit(200));
+  const unsub = onSnapshot(
+    q,
+    async (snap) => {
+      const docs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      // sort newest first
+      docs.sort((a: any, b: any) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      const userIds = [...new Set(docs.map((d: any) => d.user_id).filter(Boolean))] as string[];
+      const profiles: Record<string, any> = {};
+      for (const uid of userIds) {
+        const ps = await getDoc(doc(db, 'users', uid));
+        if (ps.exists()) profiles[uid] = ps.data();
+      }
+      const posts: TodayProof[] = docs.map((d: any) => ({
+        id: d.id,
+        user_id: d.user_id,
+        display_name: profiles[d.user_id]?.display_name,
+        anonymous_username: profiles[d.user_id]?.anonymous_username,
+        image_url: d.image_url || '',
+        caption: d.caption ?? null,
+        created_at: d.created_at || '',
+        date: d.date || '',
+      }));
+      onPosts(posts);
+    },
+    (err) => console.error('subscribeToGroupStreakFeed', err)
+  );
+  return unsub;
 };
 
 // Create a new streak (activity) in a group
@@ -1793,38 +2158,21 @@ export const inviteUserToGroup = async (groupId: string, inviteeEmail: string) =
 // ========================================
 
 // Check if user is admin/creator of group
-export const isGroupAdmin = async (groupId: string) => {
+/** Check if the current user is group creator or has admin role (Firestore). */
+export const isGroupAdmin = async (groupId: string): Promise<boolean> => {
+  const user = auth.currentUser;
+  if (!user) return false;
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
+    const groupSnap = await getDoc(doc(db, 'groups', groupId));
+    if (!groupSnap.exists()) return false;
+    const groupData = groupSnap.data();
+    if (groupData?.creator_id === user.uid) return true;
 
-    // First check if user is creator (from groups table to avoid RLS recursion)
-    const { data: group } = await supabase
-      .from('groups')
-      .select('creator_id')
-      .eq('id', groupId)
-      .single();
-
-    if (group && group.creator_id === user.id) {
-      return true;
-    }
-
-    // Then check if user is admin in group_members
-    const { data: member } = await supabase
-      .from('group_members')
-      .select('role, can_remove_members, can_add_members, can_delete_group, can_manage_settings')
-      .eq('group_id', groupId)
-      .eq('user_id', user.id)
-      .maybeSingle();
-
-    if (!member) return false;
-    
-    return member.role === 'creator' || 
-           member.role === 'admin' || 
-           member.can_remove_members === true ||
-           member.can_add_members === true ||
-           member.can_delete_group === true ||
-           member.can_manage_settings === true;
+    const memberId = `${groupId}_${user.uid}`;
+    const memberSnap = await getDoc(doc(db, 'group_members', memberId));
+    if (!memberSnap.exists()) return false;
+    const member = memberSnap.data();
+    return member?.role === 'creator' || member?.role === 'admin';
   } catch (error) {
     console.error('Error checking admin status:', error);
     return false;
@@ -2134,7 +2482,7 @@ export const promoteMemberToAdmin = async (groupId: string, userId: string) => {
 };
 
 // ========================================
-// GROUP MESSAGING FUNCTIONS
+// GROUP MESSAGING FUNCTIONS (Firestore)
 // ========================================
 
 export interface GroupMessage {
@@ -2148,104 +2496,106 @@ export interface GroupMessage {
     display_name?: string;
     anonymous_username?: string;
     avatar_url?: string;
-  };
+  } | null;
 }
 
-// Send message to group
-export const sendGroupMessage = async (groupId: string, content: string) => {
+// Send message to group (stored in Firestore)
+export const sendGroupMessage = async (groupId: string, content: string): Promise<GroupMessage | null> => {
+  const user = auth.currentUser;
+  if (!user || !content.trim()) return null;
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return null;
+    const groupSnap = await getDoc(doc(db, 'groups', groupId));
+    if (!groupSnap.exists()) {
+      Alert.alert('Error', 'Group not found');
+      return null;
+    }
+    const group = groupSnap.data();
+    const isCreator = group.creator_id === user.uid;
 
-    // Check if messaging is allowed
-    const { data: group } = await supabase
-      .from('groups')
-      .select('allow_member_messaging, creator_id')
-      .eq('id', groupId)
-      .single();
-
-    if (!group) return null;
-
-    // Creator can always message
-    const isCreator = group.creator_id === user.id;
-    
     if (!isCreator) {
-      // Check if user is member first
-      const { data: member } = await supabase
-        .from('group_members')
-        .select('id')
-        .eq('group_id', groupId)
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      if (!member) {
+      const memberSnap = await getDoc(doc(db, 'group_members', `${groupId}_${user.uid}`));
+      if (!memberSnap.exists()) {
         Alert.alert('Error', 'You must be a member to send messages');
         return null;
       }
-
-      // Check if messaging is allowed for members
       const isAdminCheck = await isGroupAdmin(groupId);
-      
-      if (!isAdminCheck && !group.allow_member_messaging) {
+      if (!isAdminCheck && group.allow_member_messaging === false) {
         Alert.alert('Error', 'Messaging is disabled in this group');
         return null;
       }
     }
 
-    const { data, error } = await supabase
-      .from('group_messages')
-      .insert({
-        group_id: groupId,
-        user_id: user.id,
-        content: content.trim(),
-      })
-      .select()
-      .single();
+    const now = new Date().toISOString();
+    const msgRef = await addDoc(collection(db, 'group_messages'), {
+      group_id: groupId,
+      user_id: user.uid,
+      content: content.trim(),
+      created_at: now,
+    });
 
-    if (error) {
-      console.error('Error sending group message:', error);
-      return null;
-    }
-
-    return data;
+    const profileSnap = await getDoc(doc(db, 'users', user.uid));
+    const p = profileSnap.exists() ? profileSnap.data() : null;
+    const message: GroupMessage = {
+      id: msgRef.id,
+      group_id: groupId,
+      user_id: user.uid,
+      content: content.trim(),
+      created_at: now,
+      user: p
+        ? {
+            id: user.uid,
+            display_name: p.display_name,
+            anonymous_username: p.anonymous_username,
+            avatar_url: p.avatar_url,
+          }
+        : null,
+    };
+    return message;
   } catch (error) {
     console.error('Error sending group message:', error);
+    Alert.alert('Error', 'Failed to send message. Please try again.');
     return null;
   }
 };
 
-// Get group messages
-export const getGroupMessages = async (groupId: string, limit: number = 50) => {
+// Get group messages (from Firestore)
+export const getGroupMessages = async (groupId: string, limitCount: number = 50): Promise<GroupMessage[]> => {
+  if (!auth.currentUser) {
+    return [];
+  }
   try {
-    const { data, error } = await supabase
-      .from('group_messages')
-      .select('*')
-      .eq('group_id', groupId)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-
-    if (error) {
-      console.error('Error fetching group messages:', error);
-      return [];
-    }
-
-    // Get user profiles for messages
-    const messagesWithUsers = await Promise.all(
-      (data || []).map(async (message: any) => {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('id, display_name, anonymous_username, avatar_url')
-          .eq('id', message.user_id)
-          .single();
-
-        return {
-          ...message,
-          user: profile || null,
-        };
-      })
+    const q = query(
+      collection(db, 'group_messages'),
+      where('group_id', '==', groupId),
+      limit(limitCount)
     );
-
-    return messagesWithUsers.reverse();
+    const snap = await getDocs(q);
+    const messages: GroupMessage[] = [];
+    for (const d of snap.docs) {
+      const data = d.data() as any;
+      const profileSnap = await getDoc(doc(db, 'users', data.user_id));
+      const p = profileSnap.exists() ? profileSnap.data() : null;
+      messages.push({
+        id: d.id,
+        group_id: data.group_id,
+        user_id: data.user_id,
+        content: data.content,
+        created_at: data.created_at,
+        user: p
+          ? {
+              id: data.user_id,
+              display_name: p.display_name,
+              anonymous_username: p.anonymous_username,
+              avatar_url: p.avatar_url,
+            }
+          : null,
+      });
+    }
+    // Sort oldest → newest for chat UI
+    messages.sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    return messages;
   } catch (error) {
     console.error('Error getting group messages:', error);
     return [];

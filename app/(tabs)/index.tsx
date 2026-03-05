@@ -41,6 +41,7 @@ import {
   handleScroll,
   Post,
   removeVote,
+  subscribeToPosts,
   upvotePost
 } from '../functions';
 
@@ -121,7 +122,7 @@ function VoteButton({
   onPress: (postId: string) => void;
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
-  const iconName = type === 'upvote' ? 'heart' : 'thumbs-down';
+  const iconName = type === 'upvote' ? 'heart' : 'frown';
   const activeColor = type === 'upvote' ? '#ec4899' : '#64748b';
 
   const handlePress = () => {
@@ -141,10 +142,10 @@ function VoteButton({
       <Animated.View style={[styles.actionIconWrap, { transform: [{ scale: scaleAnim }] }]}>
         <Feather
           name={iconName}
-          size={22}
+          size={16}
           color={isActive ? activeColor : '#94a3b8'}
           fill={isActive ? activeColor : 'none'}
-          strokeWidth={2.2}
+          strokeWidth={1.8}
         />
       </Animated.View>
       <Text style={[styles.actionCount, isActive && { color: activeColor }]}>{count}</Text>
@@ -316,15 +317,19 @@ export default function HomeScreen() {
     handleScroll(event, posts, visibleVideoId, setVisibleVideoId);
   };
 
+  // Real-time feed: updates when posts are flagged or approved without refresh
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-      await Promise.all([loadPosts(), loadUserProfile()]);
-      const premium = await checkPremiumStatus();
-      setIsPremium(premium);
-      setLoading(false);
-    };
-    loadData();
+    setLoading(true);
+    const unsub = subscribeToPosts(
+      (postsData) => {
+        setPosts(postsData);
+        setLoading(false);
+      },
+      selectedCategory === 'All' ? undefined : selectedCategory
+    );
+    loadUserProfile().then(setUserProfile);
+    checkPremiumStatus().then(setIsPremium);
+    return () => unsub();
   }, [selectedCategory]);
 
   useEffect(() => {
@@ -396,82 +401,74 @@ export default function HomeScreen() {
   };
 
   const onUpvote = async (postId: string) => {
-    try {
-      const current = posts.find(p => p.id === postId);
-      if (!current) return;
-      if (current.user_vote === 'upvote') {
-        const success = await removeVote(postId);
-        if (success) {
-          setPosts(prev => prev.map(post => post.id === postId ? {
-            ...post,
-            user_vote: null,
-            post_stats: {
-              ...post.post_stats,
-              upvotes_count: Math.max(0, (post.post_stats?.upvotes_count || 0) - 1),
-              downvotes_count: post.post_stats?.downvotes_count || 0,
-              views_count: post.post_stats?.views_count || 0,
-              comments_count: post.post_stats?.comments_count || 0,
-            }
-          } as Post : post));
+    const current = posts.find(p => p.id === postId);
+    if (!current) return;
+
+    // Optimistic UI update: apply locally first for instant feedback
+    if (current.user_vote === 'upvote') {
+      setPosts(prev => prev.map(post => post.id === postId ? {
+        ...post,
+        user_vote: null,
+        post_stats: {
+          ...post.post_stats,
+          upvotes_count: Math.max(0, (post.post_stats?.upvotes_count || 0) - 1),
+          downvotes_count: post.post_stats?.downvotes_count || 0,
+          views_count: post.post_stats?.views_count || 0,
+          comments_count: post.post_stats?.comments_count || 0,
         }
-      } else {
-        const success = await upvotePost(postId);
-        if (success) {
-          setPosts(prev => prev.map(post => post.id === postId ? {
-            ...post,
-            user_vote: 'upvote',
-            post_stats: {
-              ...post.post_stats,
-              upvotes_count: (post.post_stats?.upvotes_count || 0) + 1,
-              downvotes_count: current.user_vote === 'downvote' ? Math.max(0, (post.post_stats?.downvotes_count || 0) - 1) : (post.post_stats?.downvotes_count || 0),
-              views_count: post.post_stats?.views_count || 0,
-              comments_count: post.post_stats?.comments_count || 0,
-            }
-          } as Post : post));
+      } as Post : post));
+      // Fire-and-forget server update; subscribeToPosts will reconcile
+      removeVote(postId).catch((error) => console.error('Error removing upvote:', error));
+    } else {
+      setPosts(prev => prev.map(post => post.id === postId ? {
+        ...post,
+        user_vote: 'upvote',
+        post_stats: {
+          ...post.post_stats,
+          upvotes_count: (post.post_stats?.upvotes_count || 0) + 1,
+          downvotes_count: current.user_vote === 'downvote'
+            ? Math.max(0, (post.post_stats?.downvotes_count || 0) - 1)
+            : (post.post_stats?.downvotes_count || 0),
+          views_count: post.post_stats?.views_count || 0,
+          comments_count: post.post_stats?.comments_count || 0,
         }
-      }
-    } catch (error) {
-      console.error('Error upvoting:', error);
+      } as Post : post));
+      upvotePost(postId).catch((error) => console.error('Error upvoting:', error));
     }
   };
 
   const onDownvote = async (postId: string) => {
-    try {
-      const current = posts.find(p => p.id === postId);
-      if (!current) return;
-      if (current.user_vote === 'downvote') {
-        const success = await removeVote(postId);
-        if (success) {
-          setPosts(prev => prev.map(post => post.id === postId ? {
-            ...post,
-            user_vote: null,
-            post_stats: {
-              ...post.post_stats,
-              downvotes_count: Math.max(0, (post.post_stats?.downvotes_count || 0) - 1),
-              upvotes_count: post.post_stats?.upvotes_count || 0,
-              views_count: post.post_stats?.views_count || 0,
-              comments_count: post.post_stats?.comments_count || 0,
-            }
-          } as Post : post));
+    const current = posts.find(p => p.id === postId);
+    if (!current) return;
+
+    if (current.user_vote === 'downvote') {
+      setPosts(prev => prev.map(post => post.id === postId ? {
+        ...post,
+        user_vote: null,
+        post_stats: {
+          ...post.post_stats,
+          downvotes_count: Math.max(0, (post.post_stats?.downvotes_count || 0) - 1),
+          upvotes_count: post.post_stats?.upvotes_count || 0,
+          views_count: post.post_stats?.views_count || 0,
+          comments_count: post.post_stats?.comments_count || 0,
         }
-      } else {
-        const success = await downvotePost(postId);
-        if (success) {
-          setPosts(prev => prev.map(post => post.id === postId ? {
-            ...post,
-            user_vote: 'downvote',
-            post_stats: {
-              ...post.post_stats,
-              downvotes_count: (post.post_stats?.downvotes_count || 0) + 1,
-              upvotes_count: current.user_vote === 'upvote' ? Math.max(0, (post.post_stats?.upvotes_count || 0) - 1) : (post.post_stats?.upvotes_count || 0),
-              views_count: post.post_stats?.views_count || 0,
-              comments_count: post.post_stats?.comments_count || 0,
-            }
-          } as Post : post));
+      } as Post : post));
+      removeVote(postId).catch((error) => console.error('Error removing downvote:', error));
+    } else {
+      setPosts(prev => prev.map(post => post.id === postId ? {
+        ...post,
+        user_vote: 'downvote',
+        post_stats: {
+          ...post.post_stats,
+          downvotes_count: (post.post_stats?.downvotes_count || 0) + 1,
+          upvotes_count: current.user_vote === 'upvote'
+            ? Math.max(0, (post.post_stats?.upvotes_count || 0) - 1)
+            : (post.post_stats?.upvotes_count || 0),
+          views_count: post.post_stats?.views_count || 0,
+          comments_count: post.post_stats?.comments_count || 0,
         }
-      }
-    } catch (error) {
-      console.error('Error downvoting:', error);
+      } as Post : post));
+      downvotePost(postId).catch((error) => console.error('Error downvoting:', error));
     }
   };
 
@@ -686,7 +683,9 @@ export default function HomeScreen() {
             </Pressable>
           </View>
         ) : (
-          posts.map((post) => (
+          posts.map((post) => {
+            const isFlagged = post.flagged_for_toxicity && !post.approved_safe_at;
+            return (
             <View key={post.id} style={styles.postCard}>
               {/* Post Header */}
               <View style={styles.postHeader}>
@@ -763,23 +762,40 @@ export default function HomeScreen() {
                 </View>
               </View>
 
-              {/* Post Content */}
-              <View style={styles.postContent}>
-                <Text style={styles.postText}>{post.content}</Text>
-                {post.media_url && (
-                  <View style={styles.mediaContainer}>
-                    {post.media_url.includes('video-data') ? (
-                      <TwitterVideo uri={post.media_url} postId={post.id} isVisible={visibleVideoId === post.id} />
-                    ) : (
-                      <Image
-                        source={{ uri: post.media_url }}
-                        style={styles.postMedia}
-                        contentFit="cover"
-                      />
+              {/* Post Content – tap anywhere to open detail + comments */}
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  router.push(`/comments?postId=${post.id}` as any);
+                }}
+                style={styles.postContentPressable}
+              >
+                {isFlagged ? (
+                  <View style={[styles.postContent, styles.flaggedContent]}>
+                    <Text style={styles.flaggedTitle}>This post is under review</Text>
+                    <Text style={styles.flaggedText}>
+                      Our safety system flagged this content as possibly harmful. An admin will review it soon.
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.postContent}>
+                    <Text style={styles.postText}>{post.content}</Text>
+                    {post.media_url && (
+                      <View style={styles.mediaContainer}>
+                        {post.media_url.includes('video-data') ? (
+                          <TwitterVideo uri={post.media_url} postId={post.id} isVisible={visibleVideoId === post.id} />
+                        ) : (
+                          <Image
+                            source={{ uri: post.media_url }}
+                            style={styles.postMedia}
+                            contentFit="cover"
+                          />
+                        )}
+                      </View>
                     )}
                   </View>
                 )}
-              </View>
+              </Pressable>
 
               {/* Post actions: minimal, fast */}
               <View style={styles.postActions}>
@@ -804,7 +820,7 @@ export default function HomeScreen() {
                     setCommentSheetPostId(post.id);
                   }}
                 >
-                  <Feather name="message-circle" size={22} color="#94a3b8" strokeWidth={2.2} />
+                  <Feather name="message-circle" size={18} color="#94a3b8" strokeWidth={2} />
                   <Text style={styles.actionCount}>{post.post_stats?.comments_count || 0}</Text>
                 </Pressable>
                 <Pressable
@@ -814,7 +830,7 @@ export default function HomeScreen() {
                     router.push('/message' as any);
                   }}
                 >
-                  <Feather name="send" size={22} color="#94a3b8" strokeWidth={2.2} />
+                  <Feather name="send" size={18} color="#94a3b8" strokeWidth={2} />
                 </Pressable>
               </View>
 
@@ -832,7 +848,7 @@ export default function HomeScreen() {
                 </View>
               ) : null}
             </View>
-          ))
+          )})
         )}
       </ScrollView>
 
@@ -1141,15 +1157,16 @@ const styles = StyleSheet.create({
   },
   postCard: {
     backgroundColor: '#fff',
-    marginHorizontal: 12,
-    marginVertical: 6,
-    borderRadius: 16,
+    marginHorizontal: 16,
+    marginVertical: 8,
+    borderRadius: 20,
     padding: 16,
+    overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 2,
   },
   postHeader: {
     flexDirection: 'row',
@@ -1182,6 +1199,25 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  // Same look as group streak challenge card (group.tsx challengeCard / challengeGoal / challengeDuration)
+  flaggedContent: {
+    backgroundColor: '#fef3c7',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+  },
+  flaggedTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  flaggedText: {
+    fontSize: 13,
+    color: '#64748b',
+    lineHeight: 18,
   },
   userDetails: {
     flex: 1,
@@ -1249,6 +1285,9 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
   postContent: {
+    marginBottom: 16,
+  },
+  postContentPressable: {
     marginBottom: 16,
   },
   postText: {
@@ -1357,33 +1396,33 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 12,
-    marginTop: 12,
+    paddingTop: 10,
+    marginTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#e2e8f0',
   },
   actionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-    borderRadius: 12,
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+    borderRadius: 8,
   },
   actionItemPressed: {
     opacity: 0.5,
   },
   actionIconWrap: {
-    width: 28,
-    height: 28,
+    width: 22,
+    height: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
   actionCount: {
     color: '#94a3b8',
-    fontSize: 14,
-    fontWeight: '700',
-    minWidth: 18,
+    fontSize: 12,
+    fontWeight: '600',
+    minWidth: 14,
   },
   aiThinkingBar: {
     flexDirection: 'row',

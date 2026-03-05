@@ -3,6 +3,7 @@ import {
   createChallengeGroup,
   generateChallengeIdeas,
   getCurrentUserRole,
+  getUsedChallengeNames,
 } from './functions';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -85,7 +86,8 @@ export default function CreateChallengeScreen() {
   const handleAIIdeas = async () => {
     setGeneratingIdeas(true);
     try {
-      const result = await generateChallengeIdeas();
+      const excludeNames = await getUsedChallengeNames();
+      const result = await generateChallengeIdeas(category, excludeNames);
       if (result) {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         setName(result.name);

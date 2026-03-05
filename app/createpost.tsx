@@ -1,10 +1,10 @@
-import { auth, db, storage, ref, getDownloadURL, functions } from '@/lib/firebase';
-import { collection, addDoc } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { auth, db, functions, getDownloadURL, ref, storage } from '@/lib/firebase';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
+import { addDoc, collection } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { checkPremiumStatus } from './functions';

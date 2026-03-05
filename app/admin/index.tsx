@@ -32,6 +32,20 @@ export default function AdminDashboard() {
           style={styles.card}
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push('/admin/therapists' as any);
+          }}
+        >
+          <Feather name="user-check" size={28} color="#10b981" />
+          <View style={styles.cardText}>
+            <Text style={styles.cardTitle}>Therapist onboarding</Text>
+            <Text style={styles.cardDesc}>Review therapist requests and send invite codes.</Text>
+          </View>
+          <Feather name="chevron-right" size={22} color="#9ca3af" />
+        </Pressable>
+        <Pressable
+          style={styles.card}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             router.push('/create-challenge?official=1' as any);
           }}
         >
@@ -53,6 +67,20 @@ export default function AdminDashboard() {
           <View style={styles.cardText}>
             <Text style={styles.cardTitle}>Login stats</Text>
             <Text style={styles.cardDesc}>View login counts per day in a chart.</Text>
+          </View>
+          <Feather name="chevron-right" size={22} color="#9ca3af" />
+        </Pressable>
+        <Pressable
+          style={styles.card}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push('/admin/flagged' as any);
+          }}
+        >
+          <Feather name="alert-triangle" size={28} color="#b91c1c" />
+          <View style={styles.cardText}>
+            <Text style={styles.cardTitle}>Flagged stuff</Text>
+            <Text style={styles.cardDesc}>See posts auto-flagged by moderation and review them.</Text>
           </View>
           <Feather name="chevron-right" size={22} color="#9ca3af" />
         </Pressable>
