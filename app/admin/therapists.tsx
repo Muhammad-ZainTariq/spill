@@ -8,6 +8,8 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
+  Linking,
   Modal,
   Pressable,
   SafeAreaView,
@@ -27,6 +29,7 @@ interface TherapistRequest {
   note?: string | null;
   status: 'pending' | 'invited' | 'completed' | 'rejected' | string;
   created_at?: any;
+  document_url?: string | null;
 }
 
 export default function TherapistOnboardingScreen() {
@@ -217,6 +220,23 @@ export default function TherapistOnboardingScreen() {
                 {selected.note ? (
                   <Text style={styles.detailNote}>{selected.note}</Text>
                 ) : null}
+                {selected.document_url ? (
+                  <>
+                    <Text style={styles.detailLabel}>Uploaded document</Text>
+                    <View style={styles.docRow}>
+                      <Image
+                        source={{ uri: selected.document_url }}
+                        style={styles.docPreview}
+                      />
+                      <Pressable
+                        onPress={() => Linking.openURL(selected.document_url!)}
+                        style={styles.docButton}
+                      >
+                        <Text style={styles.docButtonText}>Open full document</Text>
+                      </Pressable>
+                    </View>
+                  </>
+                ) : null}
                 <Text style={styles.detailLabel}>Email message (optional)</Text>
                 <View style={styles.messageBox}>
                   <TextInput
@@ -331,6 +351,30 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     fontSize: 14,
     color: '#111827',
+  },
+  docRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  docPreview: {
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+    backgroundColor: '#e5e7eb',
+  },
+  docButton: {
+    marginLeft: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: '#111827',
+  },
+  docButtonText: {
+    color: '#f9fafb',
+    fontSize: 13,
+    fontWeight: '700',
   },
   inviteButton: {
     marginTop: 12,
