@@ -54,7 +54,7 @@ export default function Login() {
           const { db } = await import('@/lib/firebase');
           const userSnap = await getDoc(doc(db, 'users', user.uid));
           const data = userSnap.data();
-          const exempt = data?.is_admin === true || data?.is_staff === true;
+          const exempt = data?.is_admin === true || data?.is_staff === true || data?.role === 'therapist';
           if (!exempt) {
             const { signOut } = await import('firebase/auth');
             await signOut(auth);

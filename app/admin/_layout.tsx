@@ -40,6 +40,10 @@ export default function AdminLayout() {
       <Stack.Screen name="index" />
       <Stack.Screen name="add-staff" />
       <Stack.Screen name="login-stats" />
+      <Stack.Screen name="therapists" />
+      <Stack.Screen name="therapist-request" />
+      <Stack.Screen name="flagged" />
+      <Stack.Screen name="reports" />
     </Stack>
   );
 }

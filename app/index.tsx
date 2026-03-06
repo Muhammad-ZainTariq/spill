@@ -20,7 +20,7 @@ export default function Index() {
       } else if (role.role === 'therapist') {
         // Therapists must be verified before using therapist access.
         // If not verified (or verification pending), route them to the verification status screen.
-        if (role.is_therapist_verified) router.replace('/(tabs)');
+        if (role.is_therapist_verified) router.replace(`/therapist/${user.uid}` as any);
         else router.replace('/therapist/verification' as any);
       } else {
         router.replace('/(tabs)');

@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import { View } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
+import { auth } from '@/lib/firebase';
 import { getCurrentUserRole } from './functions';
 
 export default function Success() {
@@ -21,6 +22,10 @@ export default function Success() {
       const role = await getCurrentUserRole();
       if (role.is_admin) {
         router.replace('/admin');
+      } else if (role.role === 'therapist') {
+        const uid = auth.currentUser?.uid;
+        if (role.is_therapist_verified && uid) router.replace(`/therapist/${uid}` as any);
+        else router.replace('/therapist/verification' as any);
       } else {
         router.replace('/(tabs)');
       }
