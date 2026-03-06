@@ -848,6 +848,86 @@ export const getCurrentUserRole = async (): Promise<{ is_admin: boolean; is_staf
   }
 };
 
+// ========================================
+// THERAPIST VERIFICATION (UK demo checklist)
+// ========================================
+export type TherapistVerificationRequirementItem = {
+  id: string;
+  title: string;
+  description: string;
+  examples?: string[];
+  /** For dissertation/demo: items we explicitly request in the email. */
+  requiredForDemo?: boolean;
+};
+
+export const UK_DEFAULT_THERAPIST_VERIFICATION_REQUIREMENTS: TherapistVerificationRequirementItem[] = [
+  {
+    id: 'identity_photo_id',
+    title: 'Photo ID',
+    description: 'A clear photo of a valid passport or UK driving licence.',
+    examples: ['Passport', 'UK driving licence'],
+    requiredForDemo: true,
+  },
+  {
+    id: 'proof_of_qualification',
+    title: 'Qualification / training certificate',
+    description: 'Proof of relevant training in counselling/psychotherapy/mental health support.',
+    examples: ['Degree/diploma certificate', 'Training completion certificate', 'Transcript (if available)'],
+    requiredForDemo: true,
+  },
+  {
+    id: 'professional_registration_optional',
+    title: 'Professional body membership / registration (if applicable)',
+    description:
+      'If you are registered/accredited, provide evidence (not mandatory for demo).',
+    examples: ['BACP / UKCP / NCS', 'BABCP (CBT)', 'HCPC (practitioner psychologists)', 'GMC (psychiatrists)'],
+    requiredForDemo: false,
+  },
+  {
+    id: 'insurance_indemnity',
+    title: 'Professional indemnity insurance',
+    description: 'A certificate showing current professional indemnity cover.',
+    examples: ['Insurance certificate PDF/screenshot'],
+    requiredForDemo: true,
+  },
+  {
+    id: 'dbs_optional',
+    title: 'DBS check (if applicable)',
+    description:
+      'If you work with children or vulnerable adults, an Enhanced DBS is commonly expected. For demo, optional but preferred.',
+    examples: ['Enhanced DBS certificate', 'DBS Update Service status (if available)'],
+    requiredForDemo: false,
+  },
+  {
+    id: 'safeguarding_optional',
+    title: 'Safeguarding / confidentiality training (optional)',
+    description: 'Any safeguarding training certificate or policy statement you have.',
+    examples: ['Safeguarding certificate', 'Confidentiality policy', 'GDPR awareness note'],
+    requiredForDemo: false,
+  },
+];
+
+export type TherapistVerificationRequirementsTemplate = {
+  templateId: string;
+  items: TherapistVerificationRequirementItem[];
+};
+
+export const getTherapistVerificationRequirements = async (
+  templateId: string = 'uk_default'
+): Promise<TherapistVerificationRequirementsTemplate> => {
+  try {
+    const snap = await getDoc(doc(db, 'therapist_verification_requirements', templateId));
+    const data = snap.data() as any;
+    const items = Array.isArray(data?.items) ? (data.items as TherapistVerificationRequirementItem[]) : null;
+    if (items && items.length) {
+      return { templateId, items };
+    }
+  } catch {
+    // fall back
+  }
+  return { templateId, items: UK_DEFAULT_THERAPIST_VERIFICATION_REQUIREMENTS };
+};
+
 /** Admin-only: create a staff account via Cloud Function. Staff get emailVerified: true automatically. */
 export const createStaffUser = async (
   staffEmail: string,
@@ -932,9 +1012,79 @@ function conversationId(a: string, b: string) {
   return a < b ? `${a}_${b}` : `${b}_${a}`;
 }
 
+function blockDocId(blockerUid: string, blockedUid: string) {
+  return `${blockerUid}_${blockedUid}`;
+}
+
+export const isBlockedBetween = async (uidA: string, uidB: string): Promise<boolean> => {
+  const u = auth.currentUser;
+  if (!u) return false;
+  const aBlocksB = await getDoc(doc(db, 'user_blocks', blockDocId(uidA, uidB)));
+  if (aBlocksB.exists()) return true;
+  const bBlocksA = await getDoc(doc(db, 'user_blocks', blockDocId(uidB, uidA)));
+  return bBlocksA.exists();
+};
+
+export const blockUser = async (targetUid: string, source: string = 'dm'): Promise<boolean> => {
+  const u = auth.currentUser;
+  if (!u) return false;
+  const me = u.uid;
+  const other = String(targetUid || '').trim();
+  if (!other || other === me) return false;
+  const now = new Date().toISOString();
+  await setDoc(doc(db, 'user_blocks', blockDocId(me, other)), {
+    blocker_uid: me,
+    blocked_uid: other,
+    source,
+    created_at: now,
+  });
+  return true;
+};
+
+export const unblockUser = async (targetUid: string): Promise<boolean> => {
+  const u = auth.currentUser;
+  if (!u) return false;
+  const me = u.uid;
+  const other = String(targetUid || '').trim();
+  if (!other || other === me) return false;
+  await deleteDoc(doc(db, 'user_blocks', blockDocId(me, other)));
+  return true;
+};
+
+export const reportDmUser = async (params: {
+  targetUid: string;
+  conversationId: string;
+  reason: string;
+  messageId?: string | null;
+  details?: string | null;
+}) => {
+  const u = auth.currentUser;
+  if (!u) throw new Error('Not authenticated');
+  const now = new Date().toISOString();
+  const targetUid = String(params?.targetUid || '').trim();
+  const conversationId = String(params?.conversationId || '').trim();
+  const reason = String(params?.reason || '').trim() || 'other';
+  const messageId = params?.messageId ? String(params.messageId).trim() : null;
+  const details = params?.details ? String(params.details) : null;
+  if (!targetUid || !conversationId) throw new Error('Missing target.');
+  await addDoc(collection(db, 'reports'), {
+    reporter_uid: u.uid,
+    target_uid: targetUid,
+    type: 'user_dm',
+    conversation_id: conversationId,
+    message_id: messageId,
+    reason,
+    details,
+    created_at: now,
+    status: 'pending',
+  });
+  return true;
+};
+
 export const getOrCreateConversation = async (userId: string) => {
   const user = auth.currentUser;
   if (!user) throw new Error('Not authenticated');
+  if (await isBlockedBetween(user.uid, userId)) throw new Error('You cannot message this user.');
   const recipientSnap = await getDoc(doc(db, 'users', userId));
   const messagePreference = recipientSnap.data()?.message_preference;
   if (messagePreference === 'none') throw new Error('This user is not accepting messages');
@@ -953,6 +1103,17 @@ export const getOrCreateConversation = async (userId: string) => {
 export const sendMessage = async (conversationId: string, content: string) => {
   const user = auth.currentUser;
   if (!user) throw new Error('Not authenticated');
+  const convSnap = await getDoc(doc(db, 'conversations', conversationId));
+  if (!convSnap.exists()) throw new Error('Conversation not found.');
+  const c: any = convSnap.data() || {};
+  const p1 = String(c.participant1_id || '');
+  const p2 = String(c.participant2_id || '');
+  if (c.status !== 'accepted') throw new Error('This conversation is not active yet.');
+  if (user.uid !== p1 && user.uid !== p2) throw new Error('Not allowed.');
+  const otherId = user.uid === p1 ? p2 : p1;
+  if (otherId && (await isBlockedBetween(user.uid, otherId))) {
+    throw new Error('You cannot message this user.');
+  }
   const now = new Date().toISOString();
   const ref = await addDoc(collection(db, 'messages'), { conversation_id: conversationId, sender_id: user.uid, content, created_at: now });
   await updateDoc(doc(db, 'conversations', conversationId), { updated_at: now });
@@ -996,6 +1157,7 @@ export const getConversations = async () => {
         seen.add(d.id);
         const data = d.data();
         const otherId = data.participant1_id === user.uid ? data.participant2_id : data.participant1_id;
+        if (otherId && (await isBlockedBetween(user.uid, otherId))) continue;
         const otherSnap = await getDoc(doc(db, 'users', otherId));
         const other = otherSnap.data();
         const otherUser = other ? { id: otherId, display_name: other.display_name, anonymous_username: other.anonymous_username, avatar_url: other.avatar_url } : null;

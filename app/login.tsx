@@ -135,7 +135,10 @@ export default function Login() {
     }
     setVerifyingCode(true);
     try {
-      const verifyFn = httpsCallable<{ code: string }, { ok: boolean; requestId: string; email?: string | null }>(
+      const verifyFn = httpsCallable<
+        { code: string },
+        { ok: boolean; requestId: string; email?: string | null; name?: string | null; specialization?: string | null }
+      >(
         functions,
         'verifyTherapistCode'
       );
@@ -145,7 +148,12 @@ export default function Login() {
         setTherapistCode('');
         router.push({
           pathname: '/therapist/signup',
-          params: { requestId: res.data.requestId, email: res.data.email ?? '' },
+          params: {
+            requestId: res.data.requestId,
+            email: res.data.email ?? '',
+            name: res.data.name ?? '',
+            specialization: res.data.specialization ?? '',
+          },
         } as any);
       } else {
         Alert.alert('Invalid code', 'That code is invalid or expired.');

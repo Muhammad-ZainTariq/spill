@@ -7,6 +7,74 @@ admin.initializeApp();
 
 const db = admin.firestore();
 
+const UK_DEFAULT_THERAPIST_REQUIREMENTS = [
+  {
+    id: 'identity_photo_id',
+    title: 'Photo ID',
+    description: 'A clear photo of a valid passport or UK driving licence.',
+    examples: ['Passport', 'UK driving licence'],
+    requiredForDemo: true,
+  },
+  {
+    id: 'proof_of_qualification',
+    title: 'Qualification / training certificate',
+    description: 'Proof of relevant training in counselling/psychotherapy/mental health support.',
+    examples: ['Degree/diploma certificate', 'Training completion certificate', 'Transcript (if available)'],
+    requiredForDemo: true,
+  },
+  {
+    id: 'professional_registration_optional',
+    title: 'Professional body membership / registration (if applicable)',
+    description: 'If you are registered/accredited, provide evidence (not mandatory for demo).',
+    examples: ['BACP / UKCP / NCS', 'BABCP (CBT)', 'HCPC (practitioner psychologists)', 'GMC (psychiatrists)'],
+    requiredForDemo: false,
+  },
+  {
+    id: 'insurance_indemnity',
+    title: 'Professional indemnity insurance',
+    description: 'A certificate showing current professional indemnity cover.',
+    examples: ['Insurance certificate PDF/screenshot'],
+    requiredForDemo: true,
+  },
+  {
+    id: 'dbs_optional',
+    title: 'DBS check (if applicable)',
+    description:
+      'If you work with children or vulnerable adults, an Enhanced DBS is commonly expected. For demo, optional but preferred.',
+    examples: ['Enhanced DBS certificate', 'DBS Update Service status (if available)'],
+    requiredForDemo: false,
+  },
+  {
+    id: 'safeguarding_optional',
+    title: 'Safeguarding / confidentiality training (optional)',
+    description: 'Any safeguarding training certificate or policy statement you have.',
+    examples: ['Safeguarding certificate', 'Confidentiality policy', 'GDPR awareness note'],
+    requiredForDemo: false,
+  },
+];
+
+async function getTherapistRequirementsTemplate(templateId = 'uk_default') {
+  const ref = db.collection('therapist_verification_requirements').doc(templateId);
+  const snap = await ref.get();
+  if (snap.exists) {
+    const data = snap.data() || {};
+    if (Array.isArray(data.items) && data.items.length) {
+      return { templateId, items: data.items };
+    }
+  }
+  // Create a default template if missing. This lets you tweak it later in Firestore without code changes.
+  await ref.set(
+    {
+      template_id: templateId,
+      created_at: admin.firestore.FieldValue.serverTimestamp(),
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+      items: UK_DEFAULT_THERAPIST_REQUIREMENTS,
+    },
+    { merge: true }
+  );
+  return { templateId, items: UK_DEFAULT_THERAPIST_REQUIREMENTS };
+}
+
 // Shared Gmail transport for therapist onboarding emails and internal alerts.
 // Trim and normalize: Gmail app passwords are 16 chars, sometimes stored with spaces.
 const gmailUser = typeof functions.config().gmail?.user === 'string' ? functions.config().gmail.user.trim() : '';
@@ -411,16 +479,40 @@ exports.sendTherapistInvite = functions
           ? reqData.therapist_code.trim()
           : randomUUID().toUpperCase();
 
+      const { templateId, items } = await getTherapistRequirementsTemplate('uk_default');
+      const requestedItemIds = (items || [])
+        .filter((it) => it && (it.requiredForDemo === true || it.requiredForDemo === 'true'))
+        .map((it) => it.id)
+        .filter(Boolean);
+
       const nowTs = admin.firestore.FieldValue.serverTimestamp();
 
       await reqRef.update({
         therapist_code: code,
         status: 'invited',
+        requirements_template_id: templateId,
+        requested_item_ids: requestedItemIds,
         updated_at: nowTs,
         processed_by: adminUid,
       });
 
       const custom = typeof customMessage === 'string' && customMessage.trim() ? customMessage.trim() : '';
+
+      const checklistLines = [];
+      if (Array.isArray(items) && items.length) {
+        checklistLines.push('What to upload (UK-focused checklist):', '');
+        for (const it of items) {
+          if (!it || !it.title) continue;
+          const title = String(it.title).trim();
+          const desc = String(it.description || '').trim();
+          const examples = Array.isArray(it.examples) ? it.examples.filter(Boolean).slice(0, 4) : [];
+          const mark = it.requiredForDemo ? '(requested)' : '(optional)';
+          checklistLines.push(`- ${title} ${mark}`);
+          if (desc) checklistLines.push(`  ${desc}`);
+          if (examples.length) checklistLines.push(`  Examples: ${examples.join(', ')}`);
+          checklistLines.push('');
+        }
+      }
 
       const lines = [
         name ? `Hi ${name},` : 'Hi,',
@@ -437,6 +529,10 @@ exports.sendTherapistInvite = functions
         '1. Open the Spill app.',
         '2. On the login screen, tap \"I have a therapist code\".',
         '3. Paste this code and follow the steps to upload your documents.',
+        '',
+        'For our dissertation/demo version of Spill, you can upload what you have — our admin team will manually review and verify your submission.',
+        '',
+        ...checklistLines,
       ];
 
       if (custom) {
@@ -502,6 +598,7 @@ exports.verifyTherapistCode = functions
         requestId: doc.id,
         email: dataOut.email || null,
         name: dataOut.name || null,
+        specialization: dataOut.specialization || null,
       };
     } catch (err) {
       if (err instanceof functions.https.HttpsError) {
@@ -509,6 +606,114 @@ exports.verifyTherapistCode = functions
       }
       console.error('verifyTherapistCode failed', err);
       throw new functions.https.HttpsError('internal', err.message || 'Failed to verify code.');
+    }
+  });
+
+// Premium-only callable: book a therapist slot.
+// Body: { slotId }
+exports.bookTherapistSlot = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const uid = context?.auth?.uid;
+    if (!uid) {
+      throw new functions.https.HttpsError('unauthenticated', 'You must be logged in.');
+    }
+
+    const slotId = typeof data?.slotId === 'string' ? data.slotId.trim() : '';
+    if (!slotId) {
+      throw new functions.https.HttpsError('invalid-argument', 'slotId is required.');
+    }
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+
+    // Premium gate (demo-friendly)
+    const userSnap = await db.collection('users').doc(uid).get();
+    const userData = userSnap.exists ? userSnap.data() || {} : {};
+    const isPremium = userData.is_premium === true;
+    const exp = userData.premium_expires_at;
+    if (!isPremium) {
+      throw new functions.https.HttpsError('failed-precondition', 'premium-required');
+    }
+    if (typeof exp === 'string' && exp) {
+      const expMs = Date.parse(exp);
+      if (Number.isFinite(expMs) && expMs < Date.now()) {
+        throw new functions.https.HttpsError('failed-precondition', 'premium-expired');
+      }
+    }
+
+    const slotRef = db.collection('therapist_slots').doc(slotId);
+    try {
+      const result = await db.runTransaction(async (tx) => {
+        const slotSnap = await tx.get(slotRef);
+        if (!slotSnap.exists) {
+          throw new functions.https.HttpsError('not-found', 'Slot not found.');
+        }
+        const slot = slotSnap.data() || {};
+        const status = String(slot.status || 'open');
+        if (status !== 'open') {
+          throw new functions.https.HttpsError('failed-precondition', 'slot-unavailable');
+        }
+        const therapistUid = String(slot.therapist_uid || '').trim();
+        if (!therapistUid) {
+          throw new functions.https.HttpsError('failed-precondition', 'slot-invalid');
+        }
+        if (therapistUid === uid) {
+          throw new functions.https.HttpsError('failed-precondition', 'cannot-book-own-slot');
+        }
+
+        const startAt = String(slot.start_at || '');
+        const endAt = String(slot.end_at || '');
+        const startMs = Date.parse(startAt);
+        if (!Number.isFinite(startMs)) {
+          throw new functions.https.HttpsError('failed-precondition', 'slot-invalid');
+        }
+        // Prevent booking slots that already started (5 min grace)
+        if (startMs < Date.now() - 5 * 60 * 1000) {
+          throw new functions.https.HttpsError('failed-precondition', 'slot-started');
+        }
+
+        const sessionRef = db.collection('therapist_sessions').doc();
+        tx.update(slotRef, {
+          status: 'booked',
+          booked_by_uid: uid,
+          booked_at: nowIso,
+          session_id: sessionRef.id,
+        });
+        tx.set(sessionRef, {
+          therapist_uid: therapistUid,
+          user_uid: uid,
+          slot_id: slotId,
+          status: 'scheduled',
+          starts_at: startAt,
+          ends_at: endAt,
+          duration_min: Number(slot.duration_min || 0) || null,
+          created_at: nowIso,
+        });
+
+        return { ok: true, sessionId: sessionRef.id, therapistUid };
+      });
+
+      // Best-effort notifications (no transaction required)
+      try {
+        await db.collection('notifications').add({
+          recipient_id: result.therapistUid,
+          type: 'therapist_session_booked',
+          title: 'New session booking',
+          body: 'A premium user booked a private session slot.',
+          read: false,
+          created_at: nowIso,
+          data: { session_id: result.sessionId, slot_id: slotId },
+        });
+      } catch (e) {
+        // ignore
+      }
+
+      return { ok: true, sessionId: result.sessionId };
+    } catch (err) {
+      if (err instanceof functions.https.HttpsError) throw err;
+      console.error('bookTherapistSlot failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Failed to book slot.');
     }
   });
 

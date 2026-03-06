@@ -8,6 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { collection, deleteDoc, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
 import { cancelPremium, checkPremiumStatus, fetchUserProfile, updateUserProfile } from './functions';
 
 export default function SettingsScreen() {
@@ -189,8 +190,36 @@ export default function SettingsScreen() {
       const currentUser = auth.currentUser;
       if (!currentUser) return;
 
-      // Blocked users: add Firestore blocked_users collection later; for now show empty
-      setBlockedAccounts([]);
+      const q = query(
+        collection(db, 'user_blocks'),
+        where('blocker_uid', '==', currentUser.uid),
+        limit(200)
+      );
+      const snap = await getDocs(q);
+      const blocks = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+
+      const enriched = await Promise.all(
+        blocks.map(async (b: any) => {
+          const blockedUid = String(b.blocked_uid || '').trim();
+          let blocked: any = null;
+          if (blockedUid) {
+            try {
+              const us = await getDoc(doc(db, 'users', blockedUid));
+              blocked = us.exists() ? ({ id: blockedUid, ...(us.data() as any) } as any) : { id: blockedUid };
+            } catch {
+              blocked = { id: blockedUid };
+            }
+          }
+          return {
+            blocked_id: blockedUid,
+            blocked_at: String(b.created_at || new Date().toISOString()),
+            blocked,
+          };
+        })
+      );
+
+      enriched.sort((a, b) => String(b.blocked_at).localeCompare(String(a.blocked_at)));
+      setBlockedAccounts(enriched.filter((x) => x.blocked_id));
     } catch (error) {
       console.error('Error loading blocked accounts:', error);
       Alert.alert('Error', 'Could not load blocked accounts.');
@@ -211,7 +240,8 @@ export default function SettingsScreen() {
           onPress: async () => {
             try {
               if (!auth.currentUser) return;
-              // TODO: delete from Firestore blocked_users when you add that collection
+              const me = auth.currentUser.uid;
+              await deleteDoc(doc(db, 'user_blocks', `${me}_${blockedId}`));
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               Alert.alert('Success', `${userName} has been unblocked`);
               loadBlockedAccounts();

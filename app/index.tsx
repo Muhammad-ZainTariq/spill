@@ -17,8 +17,11 @@ export default function Index() {
       const role = await getCurrentUserRole();
       if (role.is_admin) {
         router.replace('/admin');
-      } else if (role.role === 'therapist' && role.is_therapist_verified) {
-        router.replace('/(tabs)');
+      } else if (role.role === 'therapist') {
+        // Therapists must be verified before using therapist access.
+        // If not verified (or verification pending), route them to the verification status screen.
+        if (role.is_therapist_verified) router.replace('/(tabs)');
+        else router.replace('/therapist/verification' as any);
       } else {
         router.replace('/(tabs)');
       }

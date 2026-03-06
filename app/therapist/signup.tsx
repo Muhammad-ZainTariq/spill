@@ -21,10 +21,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, db, functions, getDownloadURL, ref, storage } from '@/lib/firebase';
+import { UK_DEFAULT_THERAPIST_VERIFICATION_REQUIREMENTS } from '@/app/functions';
 
 export default function TherapistSignupScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ requestId?: string; email?: string }>();
+  const params = useLocalSearchParams<{ requestId?: string; email?: string; name?: string; specialization?: string }>();
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -33,6 +34,8 @@ export default function TherapistSignupScreen() {
 
   const email = (params.email || '').toString();
   const requestId = (params.requestId || '').toString();
+  const therapistNameFromInvite = (params.name || '').toString();
+  const therapistSpecFromInvite = (params.specialization || '').toString();
 
   useEffect(() => {
     if (!requestId || !email) {
@@ -139,6 +142,22 @@ export default function TherapistSignupScreen() {
         { merge: true }
       );
 
+      // Create a public therapist profile doc (readable by users). Admin later sets verified=true.
+      await setDoc(
+        doc(db, 'therapist_profiles', uid),
+        {
+          verified: false,
+          display_name: therapistNameFromInvite?.trim() || null,
+          specialization: therapistSpecFromInvite?.trim() || null,
+          languages: [],
+          bio: null,
+          timezone: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+
       await updateDoc(doc(db, 'therapist_onboarding_requests', requestId), {
         status: 'completed',
         completed_uid: uid,
@@ -178,6 +197,28 @@ export default function TherapistSignupScreen() {
           <Text style={styles.subtitle}>
             Create your login and upload at least one document that proves you&apos;re a licensed therapist.
           </Text>
+
+          <View style={styles.infoCard}>
+            <Text style={styles.infoTitle}>Recommended documents (UK-focused)</Text>
+            <Text style={styles.infoSubtitle}>
+              For the dissertation/demo, you can upload what you have — the admin team will review it manually.
+            </Text>
+            <View style={{ marginTop: 10, gap: 8 }}>
+              {UK_DEFAULT_THERAPIST_VERIFICATION_REQUIREMENTS.map((it) => (
+                <View key={it.id} style={styles.infoRow}>
+                  <View style={styles.dot} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.infoRowTitle}>
+                      {it.title}
+                      {it.requiredForDemo ? ' (requested)' : ' (optional)'}
+                    </Text>
+                    <Text style={styles.infoRowText}>{it.description}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+
           <View style={styles.card}>
             <Text style={styles.label}>Email</Text>
             <View style={styles.inputWrapper}>
@@ -272,6 +313,18 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 20,
   },
+  infoCard: {
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 12,
+  },
+  infoTitle: { fontSize: 14, fontWeight: '900', color: '#111827' },
+  infoSubtitle: { marginTop: 6, fontSize: 12, fontWeight: '600', color: '#6b7280', lineHeight: 16 },
+  infoRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
+  dot: { width: 7, height: 7, borderRadius: 999, backgroundColor: '#ec4899', marginTop: 6 },
+  infoRowTitle: { fontSize: 13, fontWeight: '900', color: '#111827' },
+  infoRowText: { marginTop: 2, fontSize: 12, fontWeight: '600', color: '#374151', lineHeight: 16 },
   card: {
     backgroundColor: 'rgba(255,255,255,0.97)',
     borderRadius: 18,

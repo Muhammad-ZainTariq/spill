@@ -2,10 +2,18 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.is_admin == true;
+    }
+
     // Users: anyone authenticated can read (for matching list, profiles); only own doc writable
     match /users/{userId} {
       allow read: if request.auth != null;
-      allow create, update, delete: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      allow delete: if request.auth != null && request.auth.uid == userId;
     }
 
     // Match requests: only sender or receiver can read/write
@@ -95,15 +103,38 @@ service cloud.firestore {
       allow read, create, update, delete: if request.auth != null;
     }
 
+    // Reports (moderation queue):
+    // - system and Cloud Functions can always write
+    // - users can create reports for moderation
+    // - admins can read/update/resolve
+    match /reports/{reportId} {
+      allow create: if request.auth != null
+        && request.resource.data.reporter_uid == request.auth.uid
+        && request.resource.data.created_at is string
+        && request.resource.data.status == 'pending';
+      allow read, update, delete: if isAdmin();
+    }
+
+    // User blocks (DM safety):
+    // doc id convention: "{blockerUid}_{blockedUid}"
+    match /user_blocks/{blockId} {
+      allow create: if request.auth != null
+        && request.resource.data.blocker_uid == request.auth.uid
+        && request.resource.data.blocked_uid is string;
+      allow read: if request.auth != null
+        && resource.data.blocker_uid == request.auth.uid;
+      allow delete: if request.auth != null
+        && resource.data.blocker_uid == request.auth.uid;
+      allow update: if false;
+    }
+
     // Therapist onboarding requests:
     // - Public users create requests via Cloud Functions, not direct writes.
     // - Admins can read/update/delete any request.
     // - Therapists can update their own request (to mark onboarding completed).
     match /therapist_onboarding_requests/{requestId} {
       // Admin powers
-      allow read, update, delete: if request.auth != null
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.is_admin == true;
+      allow read, update, delete: if isAdmin();
 
       // Therapist can update their own request based on email match
       allow update: if request.auth != null
@@ -111,6 +142,76 @@ service cloud.firestore {
 
       // No direct client creates; use submitTherapistRequest callable instead.
       allow create: if false;
+    }
+
+    // Public therapist marketplace
+    match /therapist_profiles/{therapistId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && (request.auth.uid == therapistId || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /therapist_slots/{slotId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.therapist_uid == request.auth.uid;
+      allow update, delete: if request.auth != null
+        && (resource.data.therapist_uid == request.auth.uid || isAdmin());
+    }
+
+    match /therapist_sessions/{sessionId} {
+      allow read: if request.auth != null
+        && (resource.data.user_uid == request.auth.uid
+          || resource.data.therapist_uid == request.auth.uid
+          || isAdmin());
+      allow create, update, delete: if false; // created/managed by Cloud Functions
+    }
+
+    match /therapist_sessions/{sessionId}/messages/{messageId} {
+      allow read: if request.auth != null
+        && exists(/databases/$(database)/documents/therapist_sessions/$(sessionId))
+        && (
+          get(/databases/$(database)/documents/therapist_sessions/$(sessionId)).data.user_uid == request.auth.uid
+          || get(/databases/$(database)/documents/therapist_sessions/$(sessionId)).data.therapist_uid == request.auth.uid
+          || isAdmin()
+        );
+      allow create: if request.auth != null
+        && exists(/databases/$(database)/documents/therapist_sessions/$(sessionId))
+        && (
+          get(/databases/$(database)/documents/therapist_sessions/$(sessionId)).data.user_uid == request.auth.uid
+          || get(/databases/$(database)/documents/therapist_sessions/$(sessionId)).data.therapist_uid == request.auth.uid
+          || isAdmin()
+        )
+        && request.resource.data.sender_uid == request.auth.uid;
+      allow update, delete: if request.auth != null
+        && resource.data.sender_uid == request.auth.uid;
+    }
+
+    match /therapist_sessions/{sessionId}/signals/{signalId} {
+      allow read: if request.auth != null
+        && exists(/databases/$(database)/documents/therapist_sessions/$(sessionId))
+        && (
+          get(/databases/$(database)/documents/therapist_sessions/$(sessionId)).data.user_uid == request.auth.uid
+          || get(/databases/$(database)/documents/therapist_sessions/$(sessionId)).data.therapist_uid == request.auth.uid
+          || isAdmin()
+        );
+
+      // Either participant can set a crisis signal, therapist can clear it.
+      allow create, update: if request.auth != null
+        && exists(/databases/$(database)/documents/therapist_sessions/$(sessionId))
+        && (
+          // patient can activate
+          (
+            get(/databases/$(database)/documents/therapist_sessions/$(sessionId)).data.user_uid == request.auth.uid
+            && request.resource.data.status in ['active','cleared']
+          )
+          // therapist can activate/clear
+          || (
+            get(/databases/$(database)/documents/therapist_sessions/$(sessionId)).data.therapist_uid == request.auth.uid
+            && request.resource.data.status in ['active','cleared']
+          )
+          || isAdmin()
+        );
+      allow delete: if isAdmin();
     }
   }
 }

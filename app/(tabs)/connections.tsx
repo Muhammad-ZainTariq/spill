@@ -26,6 +26,7 @@ import {
     declineMessageRequest,
     fetchMessages,
     formatTimeAgo,
+    blockUser,
     getConversations,
     getCurrentUserRole,
     getGameLeaderboard,
@@ -34,6 +35,7 @@ import {
     getOrCreateConversation,
     getPendingRequests,
     Group,
+    reportDmUser,
     sendMessage
 } from '../functions';
 
@@ -571,6 +573,7 @@ export default function ConnectionsScreen() {
   // If a conversation is selected, show the chat view
   if (selectedConversation) {
     const displayName = selectedConversation.otherUser?.display_name || selectedConversation.otherUser?.anonymous_username || 'Anonymous';
+    const otherUserId = selectedConversation.otherUser?.id;
 
     return (
       <KeyboardAvoidingView
@@ -594,7 +597,82 @@ export default function ConnectionsScreen() {
               )}
               <Text style={styles.chatHeaderTitle}>{displayName}</Text>
             </View>
-            <View style={{ width: 24 }} />
+            <Pressable
+              onPress={() => {
+                if (!selectedConversation?.id || !otherUserId) return;
+                Alert.alert('Options', 'Choose an action', [
+                  {
+                    text: 'Report',
+                    style: 'destructive',
+                    onPress: () => {
+                      Alert.alert('Report user', 'Why are you reporting this user?', [
+                        {
+                          text: 'Harassment',
+                          style: 'destructive',
+                          onPress: async () => {
+                            await reportDmUser({
+                              targetUid: otherUserId,
+                              conversationId: selectedConversation.id,
+                              reason: 'harassment',
+                            });
+                            Alert.alert('Reported', 'Thanks — our team will review this.');
+                          },
+                        },
+                        {
+                          text: 'Self-harm / crisis',
+                          style: 'destructive',
+                          onPress: async () => {
+                            await reportDmUser({
+                              targetUid: otherUserId,
+                              conversationId: selectedConversation.id,
+                              reason: 'self_harm',
+                            });
+                            Alert.alert('Reported', 'Thanks — our team will review this.');
+                          },
+                        },
+                        {
+                          text: 'Spam',
+                          style: 'destructive',
+                          onPress: async () => {
+                            await reportDmUser({
+                              targetUid: otherUserId,
+                              conversationId: selectedConversation.id,
+                              reason: 'spam',
+                            });
+                            Alert.alert('Reported', 'Thanks — our team will review this.');
+                          },
+                        },
+                        { text: 'Cancel', style: 'cancel' },
+                      ]);
+                    },
+                  },
+                  {
+                    text: 'Block',
+                    style: 'destructive',
+                    onPress: () => {
+                      Alert.alert('Block user', 'They will not be able to message you.', [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Block',
+                          style: 'destructive',
+                          onPress: async () => {
+                            await blockUser(otherUserId, 'dm');
+                            Alert.alert('Blocked', 'User blocked.');
+                            setSelectedConversation(null);
+                            loadConversations();
+                          },
+                        },
+                      ]);
+                    },
+                  },
+                  { text: 'Cancel', style: 'cancel' },
+                ]);
+              }}
+              style={styles.chatHeaderMore}
+              hitSlop={10}
+            >
+              <Feather name="more-vertical" size={20} color="#333" />
+            </Pressable>
           </View>
 
           {/* Messages List */}
@@ -703,6 +781,17 @@ export default function ConnectionsScreen() {
           </Pressable>
         </View>
       </View>
+
+      <Pressable
+        style={styles.therapistsCta}
+        onPress={() => router.push('/therapists' as any)}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={styles.therapistsCtaTitle}>Therapists</Text>
+          <Text style={styles.therapistsCtaSubtitle}>Browse verified profiles & book premium sessions</Text>
+        </View>
+        <Feather name="arrow-right" size={18} color="#111827" />
+      </Pressable>
 
       {/* Segmented control: Messages / Groups / Requests / Leaderboard */}
       <View style={styles.segmentRow}>
@@ -1048,6 +1137,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8f9fa',
   },
+  therapistsCta: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 2,
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  therapistsCtaTitle: { fontSize: 15, fontWeight: '900', color: '#111827' },
+  therapistsCtaSubtitle: { marginTop: 4, fontSize: 12, fontWeight: '600', color: '#6b7280' },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1564,6 +1668,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
+  },
+  chatHeaderMore: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   chatHeaderUserInfo: {
     flexDirection: 'row',

@@ -17,7 +17,19 @@ import { auth } from '../lib/firebase';
 
 interface Notification {
   id: string;
-  type: 'follow' | 'like' | 'comment' | 'new_post' | 'message' | 'group_message' | 'group_streak' | 'match_accepted' | 'game_invite' | 'post_flagged' | 'post_approved_safe';
+  type:
+    | 'follow'
+    | 'like'
+    | 'comment'
+    | 'new_post'
+    | 'message'
+    | 'group_message'
+    | 'group_streak'
+    | 'therapist_verification'
+    | 'match_accepted'
+    | 'game_invite'
+    | 'post_flagged'
+    | 'post_approved_safe';
   created_at: string;
   read: boolean;
   profiles: {
@@ -55,6 +67,9 @@ interface Notification {
   group_id?: string;
   group_name?: string;
   caption?: string | null;
+  title?: string;
+  body?: string;
+  data?: Record<string, string>;
 }
 
 export default function NotificationsScreen() {
@@ -128,6 +143,8 @@ export default function NotificationsScreen() {
         return `${username} sent a message in ${notification.group_messages?.group_name || 'a group'}`;
       case 'group_streak':
         return `${username} posted a streak in ${notification.group_name || 'a group'}`;
+      case 'therapist_verification':
+        return notification.title || 'Therapist verification update';
       case 'match_accepted':
         return `${username} accepted your match request. Tap to open the chat!`;
       case 'game_invite': {
@@ -158,6 +175,8 @@ export default function NotificationsScreen() {
       router.push(`/group?groupId=${notification.group_messages.group_id}` as any);
     } else if (notification.type === 'group_streak' && notification.group_id) {
       router.push(`/group?groupId=${notification.group_id}` as any);
+    } else if (notification.type === 'therapist_verification') {
+      router.push('/therapist/verification' as any);
     } else if (notification.posts) {
       router.push(`/comments?postId=${notification.posts.id}` as any);
     } else if (notification.type === 'match_accepted') {
