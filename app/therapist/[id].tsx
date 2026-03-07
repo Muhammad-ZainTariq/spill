@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -16,13 +17,17 @@ import {
 import { auth, db } from '@/lib/firebase';
 import { tokens } from '@/app/ui/tokens';
 import {
+  approveTherapistBookingRequest,
   bookTherapistSlot,
   createTherapistSlot,
   getUserLite,
   getTherapistProfile,
+  listBookingRequestsForTherapist,
   listOpenSlotsForTherapist,
+  rejectTherapistBookingRequest,
   listReviewsForTherapist,
   listSessionsForTherapist,
+  TherapistBookingRequest,
   TherapistProfile,
   TherapistReview,
   TherapistSession,
@@ -58,10 +63,15 @@ export default function TherapistProfileScreen() {
   const [profile, setProfile] = useState<TherapistProfile | null>(null);
   const [slots, setSlots] = useState<TherapistSlot[]>([]);
   const [sessions, setSessions] = useState<TherapistSession[]>([]);
+  const [requests, setRequests] = useState<TherapistBookingRequest[]>([]);
   const [userMap, setUserMap] = useState<Record<string, any>>({});
   const [reviews, setReviews] = useState<TherapistReview[]>([]);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<'appointments' | 'profile'>('appointments');
+  const [tab, setTab] = useState<'appointments' | 'reviews' | 'profile'>('appointments');
+
+  const [showCreateSlot, setShowCreateSlot] = useState(false);
+  const [slotDayIdx, setSlotDayIdx] = useState(0);
+  const [slotTimeIdxs, setSlotTimeIdxs] = useState<number[]>([8]); // multi-select times (defaults to ~12:00)
 
   const [editName, setEditName] = useState('');
   const [editSpec, setEditSpec] = useState('');
@@ -91,25 +101,29 @@ export default function TherapistProfileScreen() {
     if (!therapistId) return;
     setLoading(true);
     try {
-      const [p, s, sess, revs] = await Promise.all([
+      const [p, s, sess, revs, reqs] = await Promise.all([
         getTherapistProfile(therapistId),
         listOpenSlotsForTherapist(therapistId, 25),
         isMe ? listSessionsForTherapist(therapistId, 80) : Promise.resolve([]),
         isMe ? listReviewsForTherapist(therapistId, 30) : Promise.resolve([]),
+        isMe ? listBookingRequestsForTherapist(therapistId, 50) : Promise.resolve([]),
       ]);
       setProfile(p);
       setSlots(s);
       setSessions(sess);
       setReviews(revs);
+      setRequests(reqs);
       if (p) {
         setEditName(String(p.display_name || ''));
         setEditSpec(String(p.specialization || ''));
         setEditLangs(Array.isArray(p.languages) ? p.languages.join(', ') : '');
         setEditBio(String(p.bio || ''));
       }
-      if (isMe && Array.isArray(sess) && sess.length) {
-        // Best-effort hydrate patient display names for the appointments list.
-        const unique = [...new Set(sess.map((x) => String(x.user_uid || '').trim()).filter(Boolean))].slice(0, 80);
+      if (isMe) {
+        // Best-effort hydrate patient display names for appointments + requests.
+        const usersA = Array.isArray(sess) ? sess.map((x) => String(x.user_uid || '').trim()) : [];
+        const usersB = Array.isArray(reqs) ? reqs.map((x) => String(x.requester_uid || '').trim()) : [];
+        const unique = [...new Set([...usersA, ...usersB].filter(Boolean))].slice(0, 120);
         const entries = await Promise.all(unique.map(async (uid) => [uid, await getUserLite(uid)] as const));
         const next: Record<string, any> = {};
         for (const [uid, u] of entries) next[uid] = u || { id: uid };
@@ -152,20 +166,126 @@ export default function TherapistProfileScreen() {
       );
       return;
     }
-    Alert.alert('Book session', 'Confirm booking this slot?', [
+    Alert.alert('Request session length', 'Choose how long you want this session to be.', [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Book',
+        text: '30 min',
         onPress: async () => {
-          const res = await bookTherapistSlot(slotId);
-          if (!res.ok) Alert.alert('Error', res.error || 'Booking failed.');
+          const res = await bookTherapistSlot(slotId, 30);
+          if (!res.ok) Alert.alert('Error', res.error || 'Request failed.');
           else {
-            Alert.alert('Booked', 'Your session was booked.', [
-              { text: 'OK' },
-              res.sessionId ? { text: 'Open chat', onPress: () => router.push(`/therapist-session/${res.sessionId}` as any) } : null,
-            ].filter(Boolean) as any);
+            Alert.alert('Request sent', 'Waiting for therapist approval.');
             load();
           }
+        },
+      },
+      {
+        text: '60 min',
+        onPress: async () => {
+          const res = await bookTherapistSlot(slotId, 60);
+          if (!res.ok) Alert.alert('Error', res.error || 'Request failed.');
+          else {
+            Alert.alert('Request sent', 'Waiting for therapist approval.');
+            load();
+          }
+        },
+      },
+    ]);
+  };
+
+  const dateOptions = useMemo(() => {
+    const out: { label: string; d: Date }[] = [];
+    const now = new Date();
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+      const label = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+      out.push({ label, d });
+    }
+    return out;
+  }, []);
+
+  const timeOptions = useMemo(() => {
+    const out: { label: string; minutes: number }[] = [];
+    const startMin = 8 * 60; // 08:00
+    const endMin = 22 * 60; // 22:00
+    for (let m = startMin; m <= endMin; m += 30) {
+      const hh = Math.floor(m / 60);
+      const mm = m % 60;
+      const label = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+      out.push({ label, minutes: m });
+    }
+    return out;
+  }, []);
+
+  const createSlotFromPicker = async () => {
+    try {
+      const day = dateOptions[Math.max(0, Math.min(dateOptions.length - 1, slotDayIdx))]?.d;
+      if (!day) return;
+      const pickedIdxs = [...new Set((slotTimeIdxs || []).map((n) => Number(n)).filter((n) => Number.isFinite(n)))].sort(
+        (a, b) => a - b
+      );
+      if (!pickedIdxs.length) {
+        Alert.alert('Pick times', 'Select at least one time for this day.');
+        return;
+      }
+
+      const created: string[] = [];
+      const skipped: string[] = [];
+      for (const idx of pickedIdxs) {
+        const t = timeOptions[Math.max(0, Math.min(timeOptions.length - 1, idx))]?.minutes ?? 9 * 60;
+        const hh = Math.floor(t / 60);
+        const mm = t % 60;
+        const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hh, mm, 0, 0);
+        if (start.getTime() < Date.now() + 5 * 60 * 1000) {
+          skipped.push(timeOptions[Math.max(0, Math.min(timeOptions.length - 1, idx))]?.label || '');
+          continue;
+        }
+        try {
+          // Therapist availability is time-only; we store 60-min blocks so users can request 30/60.
+          await createTherapistSlot(60, start.toISOString());
+          created.push(timeOptions[Math.max(0, Math.min(timeOptions.length - 1, idx))]?.label || '');
+        } catch {
+          skipped.push(timeOptions[Math.max(0, Math.min(timeOptions.length - 1, idx))]?.label || '');
+        }
+      }
+
+      setShowCreateSlot(false);
+      Alert.alert(
+        'Created',
+        `${created.length} slot(s) created.${skipped.length ? `\n\nSkipped: ${skipped.filter(Boolean).slice(0, 6).join(', ')}` : ''}`
+      );
+      load();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'Could not create slot.');
+    }
+  };
+
+  const handleApprove = async (requestId: string) => {
+    Alert.alert('Approve request', 'Approve this booking request?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Approve',
+        onPress: async () => {
+          const res = await approveTherapistBookingRequest(requestId);
+          if (!res.ok) Alert.alert('Error', res.error || 'Could not approve.');
+          else Alert.alert('Approved', 'Session scheduled.');
+          load();
+        },
+      },
+    ]);
+  };
+
+  const handleReject = async (requestId: string) => {
+    Alert.alert('Decline request', 'Decline this booking request?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Decline',
+        style: 'destructive',
+        onPress: async () => {
+          const res = await rejectTherapistBookingRequest(requestId);
+          if (!res.ok) Alert.alert('Error', res.error || 'Could not decline.');
+          else Alert.alert('Declined', 'Request declined and slot reopened.');
+          load();
         },
       },
     ]);
@@ -272,17 +392,66 @@ export default function TherapistProfileScreen() {
                   style={[styles.tabBtn, tab === 'appointments' && styles.tabBtnActive]}
                   onPress={() => setTab('appointments')}
                 >
-                  <Text style={[styles.tabText, tab === 'appointments' && styles.tabTextActive]}>Appointments</Text>
+                  <Text
+                    style={[styles.tabText, tab === 'appointments' && styles.tabTextActive]}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {tokens.isSmallDevice ? 'Appts' : 'Appointments'}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.tabBtn, tab === 'reviews' && styles.tabBtnActive]}
+                  onPress={() => setTab('reviews')}
+                >
+                  <Text style={[styles.tabText, tab === 'reviews' && styles.tabTextActive]} numberOfLines={1}>
+                    Reviews
+                  </Text>
                 </Pressable>
                 <Pressable style={[styles.tabBtn, tab === 'profile' && styles.tabBtnActive]} onPress={() => setTab('profile')}>
-                  <Text style={[styles.tabText, tab === 'profile' && styles.tabTextActive]}>Profile</Text>
+                  <Text style={[styles.tabText, tab === 'profile' && styles.tabTextActive]} numberOfLines={1}>
+                    Profile
+                  </Text>
                 </Pressable>
               </View>
 
               {tab === 'appointments' ? (
                 <View style={styles.sectionCard}>
-                  <Text style={styles.sectionTitle}>Appointments</Text>
+                  <View style={styles.sectionHeaderRow}>
+                    <Text style={styles.sectionTitle}>Appointments</Text>
+                    <Pressable style={styles.iconCircle} onPress={() => setShowCreateSlot(true)} hitSlop={10}>
+                      <Feather name="calendar" size={18} color="#fff" />
+                    </Pressable>
+                  </View>
                   <Text style={styles.helperMuted}>Your scheduled sessions appear here.</Text>
+
+                  {requests.length ? (
+                    <View style={{ marginTop: 12 }}>
+                      <Text style={styles.subTitle}>Booking requests</Text>
+                      <View style={{ marginTop: 10, gap: 10 }}>
+                        {requests.map((r) => {
+                          const u = userMap?.[String(r.requester_uid || '')];
+                          const name = String(u?.display_name || u?.anonymous_username || r.requester_uid || 'User');
+                          return (
+                            <View key={r.id} style={styles.requestRow}>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.apptName} numberOfLines={1}>{name}</Text>
+                                <Text style={styles.apptMeta} numberOfLines={1}>
+                                  {fmtDateRange(String(r.start_at || ''), String(r.end_at || ''))} • {Math.round(Number(r.requested_duration_min || 0) || 0)} min
+                                </Text>
+                              </View>
+                              <Pressable style={styles.approveBtn} onPress={() => handleApprove(r.id)}>
+                                <Text style={styles.approveText}>Approve</Text>
+                              </Pressable>
+                              <Pressable style={styles.rejectBtn} onPress={() => handleReject(r.id)}>
+                                <Text style={styles.rejectText}>Decline</Text>
+                              </Pressable>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ) : null}
 
                   {sessions.length === 0 ? (
                     <Text style={styles.muted}>No appointments yet.</Text>
@@ -315,6 +484,33 @@ export default function TherapistProfileScreen() {
                     </View>
                   )}
                 </View>
+              ) : tab === 'reviews' ? (
+                <View style={styles.sectionCard}>
+                  <Text style={styles.sectionTitle}>Reviews (private)</Text>
+                  <Text style={styles.helperMuted}>Only you and admins can see feedback.</Text>
+
+                  {reviews.length === 0 ? (
+                    <Text style={styles.muted}>No reviews yet.</Text>
+                  ) : (
+                    <View style={{ marginTop: 10, gap: 10 }}>
+                      {reviews.map((r) => (
+                        <View key={r.id} style={styles.reviewRow}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <Text style={styles.reviewStars}>
+                              {'★★★★★'.slice(0, Math.max(1, Math.min(5, Number(r.rating || 0))))}
+                            </Text>
+                            <Text style={styles.reviewDate}>{String(r.created_at || '').slice(0, 10)}</Text>
+                          </View>
+                          {r.comment ? (
+                            <Text style={styles.reviewText}>{String(r.comment)}</Text>
+                          ) : (
+                            <Text style={styles.muted}>No comment.</Text>
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
               ) : (
                 <>
                   {(profile.ai_persona_summary || Number(profile.review_count || 0) > 0) ? (
@@ -333,24 +529,6 @@ export default function TherapistProfileScreen() {
                           Rating: {Number(profile.avg_rating || 0).toFixed(1)} / 5 ({Number(profile.review_count || 0)} reviews)
                         </Text>
                       ) : null}
-                    </View>
-                  ) : null}
-
-                  {reviews.length ? (
-                    <View style={styles.sectionCard}>
-                      <Text style={styles.sectionTitle}>Reviews (private)</Text>
-                      <Text style={styles.helperMuted}>Only you and admins can see these.</Text>
-                      <View style={{ marginTop: 10, gap: 10 }}>
-                        {reviews.map((r) => (
-                          <View key={r.id} style={styles.reviewRow}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                              <Text style={styles.reviewStars}>{'★★★★★'.slice(0, Math.max(1, Math.min(5, Number(r.rating || 0))))}</Text>
-                              <Text style={styles.reviewDate}>{String(r.created_at || '').slice(0, 10)}</Text>
-                            </View>
-                            {r.comment ? <Text style={styles.reviewText}>{String(r.comment)}</Text> : null}
-                          </View>
-                        ))}
-                      </View>
                     </View>
                   ) : null}
 
@@ -414,6 +592,57 @@ export default function TherapistProfileScreen() {
                   </View>
                 </>
               )}
+
+              <Modal visible={showCreateSlot} transparent animationType="fade" onRequestClose={() => setShowCreateSlot(false)}>
+                <View style={styles.modalBackdrop}>
+                  <View style={styles.modalCard}>
+                    <View style={styles.modalHeader}>
+                      <Text style={styles.modalTitle}>Create availability</Text>
+                      <Pressable style={styles.modalClose} onPress={() => setShowCreateSlot(false)} hitSlop={10}>
+                        <Feather name="x" size={18} color={tokens.colors.text} />
+                      </Pressable>
+                    </View>
+
+                    <Text style={styles.modalLabel}>Date</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 8 }}>
+                      {dateOptions.map((o, idx) => (
+                        <Pressable
+                          key={o.label}
+                          style={[styles.pillBtn, idx === slotDayIdx && styles.pillBtnActive]}
+                          onPress={() => setSlotDayIdx(idx)}
+                        >
+                          <Text style={[styles.pillText, idx === slotDayIdx && styles.pillTextActive]}>{o.label}</Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+
+                    <Text style={styles.modalLabel}>Time</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 8 }}>
+                      {timeOptions.map((o, idx) => (
+                        <Pressable
+                          key={o.label}
+                          style={[styles.pillBtn, slotTimeIdxs.includes(idx) && styles.pillBtnActive]}
+                          onPress={() =>
+                            setSlotTimeIdxs((prev) => {
+                              const list = Array.isArray(prev) ? prev : [];
+                              return list.includes(idx) ? list.filter((x) => x !== idx) : [...list, idx];
+                            })
+                          }
+                        >
+                          <Text style={[styles.pillText, slotTimeIdxs.includes(idx) && styles.pillTextActive]}>{o.label}</Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+
+                    <Text style={styles.modalLabel}>Duration</Text>
+                    <Text style={styles.helperMuted}>Users will choose 30 or 60 minutes when requesting.</Text>
+
+                    <Pressable style={styles.createBtn} onPress={createSlotFromPicker}>
+                      <Text style={styles.createBtnText}>Create slot</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </Modal>
             </>
           ) : (
             <>
@@ -529,6 +758,16 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 14, fontWeight: '900', color: tokens.colors.text },
   helperMuted: { marginTop: 6, fontSize: 12, fontWeight: '700', color: tokens.colors.textMuted, lineHeight: 16 },
   noteText: { marginTop: 10, fontSize: 13, color: tokens.colors.text, lineHeight: 18, fontWeight: '600' },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  iconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    backgroundColor: tokens.colors.pink,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subTitle: { marginTop: 14, fontSize: 12, fontWeight: '900', color: tokens.colors.textSecondary },
 
   slotRow: {
     flexDirection: 'row',
@@ -603,7 +842,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   tabBtnActive: { backgroundColor: tokens.colors.pink },
-  tabText: { fontSize: 13, fontWeight: '900', color: tokens.colors.textSecondary },
+  tabText: { fontSize: 12, fontWeight: '900', color: tokens.colors.textSecondary, textAlign: 'center' },
   tabTextActive: { color: '#ffffff' },
 
   apptRow: {
@@ -633,6 +872,36 @@ const styles = StyleSheet.create({
   },
   openChatText: { color: '#fff', fontSize: 13, fontWeight: '900' },
 
+  requestRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: tokens.colors.surfaceOverlay,
+  },
+  approveBtn: {
+    height: 36,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: tokens.colors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  approveText: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  rejectBtn: {
+    height: 36,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(239,68,68,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rejectText: { color: '#b91c1c', fontSize: 12, fontWeight: '900' },
+
   reviewRow: {
     paddingVertical: 10,
     paddingHorizontal: 12,
@@ -642,5 +911,53 @@ const styles = StyleSheet.create({
   reviewStars: { fontSize: 12, fontWeight: '900', color: tokens.colors.pink },
   reviewDate: { fontSize: 11, fontWeight: '800', color: tokens.colors.textMuted },
   reviewText: { marginTop: 6, fontSize: 12, fontWeight: '600', color: tokens.colors.text, lineHeight: 16 },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 520,
+    backgroundColor: tokens.colors.surface,
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  modalTitle: { fontSize: 16, fontWeight: '900', color: tokens.colors.text },
+  modalClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 14,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalLabel: { marginTop: 12, fontSize: 12, fontWeight: '900', color: tokens.colors.textSecondary },
+  pillBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+  },
+  pillBtnActive: { backgroundColor: 'rgba(244,114,182,0.16)', borderColor: 'rgba(244,114,182,0.35)' },
+  pillText: { fontSize: 12, fontWeight: '800', color: tokens.colors.textSecondary },
+  pillTextActive: { color: tokens.colors.pink },
+  createBtn: {
+    marginTop: 14,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: tokens.colors.pink,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  createBtnText: { color: '#fff', fontSize: 13, fontWeight: '900' },
 });
 

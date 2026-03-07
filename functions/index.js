@@ -609,8 +609,8 @@ exports.verifyTherapistCode = functions
     }
   });
 
-// Premium-only callable: book a therapist slot.
-// Body: { slotId }
+// Premium-only callable: request a therapist slot (therapist must approve).
+// Body: { slotId, requestedDurationMin } where requestedDurationMin ∈ {30, 60}
 exports.bookTherapistSlot = functions
   .region('us-central1')
   .https.onCall(async (data, context) => {
@@ -622,6 +622,10 @@ exports.bookTherapistSlot = functions
     const slotId = typeof data?.slotId === 'string' ? data.slotId.trim() : '';
     if (!slotId) {
       throw new functions.https.HttpsError('invalid-argument', 'slotId is required.');
+    }
+    const requestedDurationMin = Number(data?.requestedDurationMin || 0);
+    if (![30, 60].includes(requestedDurationMin)) {
+      throw new functions.https.HttpsError('invalid-argument', 'requestedDurationMin must be 30 or 60.');
     }
 
     const now = new Date();
@@ -668,52 +672,204 @@ exports.bookTherapistSlot = functions
         if (!Number.isFinite(startMs)) {
           throw new functions.https.HttpsError('failed-precondition', 'slot-invalid');
         }
+        const endMs = Date.parse(endAt);
+        if (!Number.isFinite(endMs) || endMs <= startMs) {
+          throw new functions.https.HttpsError('failed-precondition', 'slot-invalid');
+        }
+        const slotDurationMin = Math.round((endMs - startMs) / (60 * 1000));
+        if (requestedDurationMin > slotDurationMin) {
+          throw new functions.https.HttpsError('failed-precondition', 'duration-too-long');
+        }
         // Prevent booking slots that already started (5 min grace)
         if (startMs < Date.now() - 5 * 60 * 1000) {
           throw new functions.https.HttpsError('failed-precondition', 'slot-started');
         }
 
-        const sessionRef = db.collection('therapist_sessions').doc();
+        const reqRef = db.collection('therapist_booking_requests').doc();
         tx.update(slotRef, {
-          status: 'booked',
-          booked_by_uid: uid,
-          booked_at: nowIso,
-          session_id: sessionRef.id,
+          status: 'requested',
+          requested_by_uid: uid,
+          requested_at: nowIso,
+          requested_request_id: reqRef.id,
         });
-        tx.set(sessionRef, {
+        tx.set(reqRef, {
           therapist_uid: therapistUid,
-          user_uid: uid,
+          requester_uid: uid,
           slot_id: slotId,
-          status: 'scheduled',
-          starts_at: startAt,
-          ends_at: endAt,
-          duration_min: Number(slot.duration_min || 0) || null,
+          start_at: startAt,
+          end_at: endAt,
+          requested_duration_min: requestedDurationMin,
+          status: 'requested',
           created_at: nowIso,
+          session_id: null,
         });
 
-        return { ok: true, sessionId: sessionRef.id, therapistUid };
+        return { ok: true, requestId: reqRef.id, therapistUid };
       });
 
       // Best-effort notifications (no transaction required)
       try {
         await db.collection('notifications').add({
           recipient_id: result.therapistUid,
-          type: 'therapist_session_booked',
-          title: 'New session booking',
-          body: 'A premium user booked a private session slot.',
+          type: 'therapist_booking_requested',
+          title: 'New booking request',
+          body: 'A premium user requested a private session slot.',
           read: false,
           created_at: nowIso,
-          data: { session_id: result.sessionId, slot_id: slotId },
+          data: { booking_request_id: result.requestId, slot_id: slotId },
         });
       } catch (e) {
         // ignore
       }
 
-      return { ok: true, sessionId: result.sessionId };
+      return { ok: true, requestId: result.requestId, status: 'requested' };
     } catch (err) {
       if (err instanceof functions.https.HttpsError) throw err;
       console.error('bookTherapistSlot failed', err);
       throw new functions.https.HttpsError('internal', err.message || 'Failed to book slot.');
+    }
+  });
+
+// Therapist-only callable: approve booking request → creates session and books slot.
+// Body: { requestId }
+exports.approveTherapistBookingRequest = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const uid = context?.auth?.uid;
+    if (!uid) throw new functions.https.HttpsError('unauthenticated', 'You must be logged in.');
+    const requestId = typeof data?.requestId === 'string' ? data.requestId.trim() : '';
+    if (!requestId) throw new functions.https.HttpsError('invalid-argument', 'requestId is required.');
+
+    const nowIso = new Date().toISOString();
+    const reqRef = db.collection('therapist_booking_requests').doc(requestId);
+    try {
+      const out = await db.runTransaction(async (tx) => {
+        const reqSnap = await tx.get(reqRef);
+        if (!reqSnap.exists) throw new functions.https.HttpsError('not-found', 'Request not found.');
+        const req = reqSnap.data() || {};
+        if (String(req.status || '') !== 'requested') {
+          throw new functions.https.HttpsError('failed-precondition', 'request-not-pending');
+        }
+        const therapistUid = String(req.therapist_uid || '').trim();
+        if (!therapistUid || therapistUid !== uid) {
+          throw new functions.https.HttpsError('permission-denied', 'Not your request.');
+        }
+        const slotId = String(req.slot_id || '').trim();
+        const requesterUid = String(req.requester_uid || '').trim();
+        if (!slotId || !requesterUid) throw new functions.https.HttpsError('failed-precondition', 'request-invalid');
+        const slotRef = db.collection('therapist_slots').doc(slotId);
+        const slotSnap = await tx.get(slotRef);
+        if (!slotSnap.exists) throw new functions.https.HttpsError('not-found', 'Slot not found.');
+        const slot = slotSnap.data() || {};
+        if (String(slot.status || '') !== 'requested') {
+          throw new functions.https.HttpsError('failed-precondition', 'slot-not-requested');
+        }
+        if (String(slot.requested_request_id || '').trim() !== requestId) {
+          throw new functions.https.HttpsError('failed-precondition', 'slot-request-mismatch');
+        }
+
+        const sessionRef = db.collection('therapist_sessions').doc();
+        const startIso = String(req.start_at || '');
+        const startMs = Date.parse(startIso);
+        if (!Number.isFinite(startMs)) throw new functions.https.HttpsError('failed-precondition', 'request-invalid');
+        const dur = Number(req.requested_duration_min || 0);
+        if (![30, 60].includes(dur)) throw new functions.https.HttpsError('failed-precondition', 'request-invalid');
+        const endsIso = new Date(startMs + dur * 60 * 1000).toISOString();
+        tx.update(slotRef, {
+          status: 'booked',
+          booked_by_uid: requesterUid,
+          booked_at: nowIso,
+          session_id: sessionRef.id,
+        });
+        tx.update(reqRef, { status: 'approved', approved_at: nowIso, session_id: sessionRef.id });
+        tx.set(sessionRef, {
+          therapist_uid: therapistUid,
+          user_uid: requesterUid,
+          slot_id: slotId,
+          status: 'scheduled',
+          starts_at: startIso,
+          ends_at: endsIso,
+          duration_min: dur,
+          created_at: nowIso,
+        });
+        return { sessionId: sessionRef.id, requesterUid, slotId };
+      });
+
+      try {
+        await db.collection('notifications').add({
+          recipient_id: out.requesterUid,
+          type: 'therapist_booking_approved',
+          title: 'Booking approved',
+          body: 'Your therapist approved your booking request.',
+          read: false,
+          created_at: nowIso,
+          data: { session_id: out.sessionId, slot_id: out.slotId },
+        });
+      } catch (e) {}
+
+      return { ok: true, sessionId: out.sessionId };
+    } catch (err) {
+      if (err instanceof functions.https.HttpsError) throw err;
+      console.error('approveTherapistBookingRequest failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Failed to approve booking.');
+    }
+  });
+
+// Therapist-only callable: reject booking request → releases slot back to open.
+// Body: { requestId }
+exports.rejectTherapistBookingRequest = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const uid = context?.auth?.uid;
+    if (!uid) throw new functions.https.HttpsError('unauthenticated', 'You must be logged in.');
+    const requestId = typeof data?.requestId === 'string' ? data.requestId.trim() : '';
+    if (!requestId) throw new functions.https.HttpsError('invalid-argument', 'requestId is required.');
+
+    const nowIso = new Date().toISOString();
+    const reqRef = db.collection('therapist_booking_requests').doc(requestId);
+    try {
+      const out = await db.runTransaction(async (tx) => {
+        const reqSnap = await tx.get(reqRef);
+        if (!reqSnap.exists) throw new functions.https.HttpsError('not-found', 'Request not found.');
+        const req = reqSnap.data() || {};
+        if (String(req.status || '') !== 'requested') {
+          throw new functions.https.HttpsError('failed-precondition', 'request-not-pending');
+        }
+        const therapistUid = String(req.therapist_uid || '').trim();
+        if (!therapistUid || therapistUid !== uid) {
+          throw new functions.https.HttpsError('permission-denied', 'Not your request.');
+        }
+        const slotId = String(req.slot_id || '').trim();
+        const requesterUid = String(req.requester_uid || '').trim();
+        if (!slotId || !requesterUid) throw new functions.https.HttpsError('failed-precondition', 'request-invalid');
+        const slotRef = db.collection('therapist_slots').doc(slotId);
+        const slotSnap = await tx.get(slotRef);
+        if (!slotSnap.exists) throw new functions.https.HttpsError('not-found', 'Slot not found.');
+        const slot = slotSnap.data() || {};
+        if (String(slot.status || '') === 'requested') {
+          tx.update(slotRef, { status: 'open', requested_by_uid: null, requested_at: null, requested_request_id: null });
+        }
+        tx.update(reqRef, { status: 'rejected', rejected_at: nowIso });
+        return { requesterUid, slotId };
+      });
+
+      try {
+        await db.collection('notifications').add({
+          recipient_id: out.requesterUid,
+          type: 'therapist_booking_rejected',
+          title: 'Booking declined',
+          body: 'Your therapist declined the booking request.',
+          read: false,
+          created_at: nowIso,
+          data: { slot_id: out.slotId },
+        });
+      } catch (e) {}
+
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof functions.https.HttpsError) throw err;
+      console.error('rejectTherapistBookingRequest failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Failed to reject booking.');
     }
   });
 

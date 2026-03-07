@@ -34,7 +34,7 @@ export type TherapistSlot = {
   start_at: string; // ISO
   end_at: string; // ISO
   duration_min: number;
-  status: 'open' | 'booked' | 'cancelled' | string;
+  status: 'open' | 'requested' | 'booked' | 'cancelled' | string;
   booked_by_uid?: string | null;
   created_at?: string | null;
 };
@@ -66,6 +66,19 @@ export type TherapistReview = {
   rating: number;
   comment?: string | null;
   created_at: string;
+};
+
+export type TherapistBookingRequest = {
+  id: string;
+  therapist_uid: string;
+  requester_uid: string;
+  slot_id: string;
+  start_at: string;
+  end_at: string;
+  requested_duration_min: number;
+  status: 'requested' | 'approved' | 'rejected' | string;
+  created_at: string;
+  session_id?: string | null;
 };
 
 export const getTherapistProfile = async (therapistId: string): Promise<TherapistProfile | null> => {
@@ -133,17 +146,69 @@ export const listOpenSlotsForTherapist = async (therapistUid: string, max: numbe
   return list;
 };
 
-export const bookTherapistSlot = async (slotId: string): Promise<{ ok: boolean; sessionId?: string; error?: string }> => {
+export const bookTherapistSlot = async (
+  slotId: string,
+  requestedDurationMin: 30 | 60
+): Promise<{ ok: boolean; requestId?: string; status?: string; error?: string }> => {
   if (!auth.currentUser) return { ok: false, error: 'Not logged in.' };
   try {
-    const fn = httpsCallable<{ slotId: string }, { ok: boolean; sessionId?: string; error?: string }>(
+    const fn = httpsCallable<
+      { slotId: string; requestedDurationMin: number },
+      { ok: boolean; requestId?: string; status?: string; error?: string }
+    >(
       functions,
       'bookTherapistSlot'
     );
-    const res = await fn({ slotId });
+    const res = await fn({ slotId, requestedDurationMin });
     return res.data || { ok: false, error: 'Booking failed.' };
   } catch (e: any) {
     return { ok: false, error: e?.message || 'Booking failed.' };
+  }
+};
+
+export const listBookingRequestsForTherapist = async (
+  therapistUid: string,
+  max: number = 50
+): Promise<TherapistBookingRequest[]> => {
+  if (!auth.currentUser) return [];
+  const tid = String(therapistUid || '').trim();
+  if (!tid) return [];
+  const q = query(collection(db, 'therapist_booking_requests'), where('therapist_uid', '==', tid), limit(200));
+  const snap = await getDocs(q);
+  const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as TherapistBookingRequest[];
+  return list
+    .filter((r) => String(r.status || '') === 'requested')
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+    .slice(0, max);
+};
+
+export const approveTherapistBookingRequest = async (
+  requestId: string
+): Promise<{ ok: boolean; sessionId?: string; error?: string }> => {
+  if (!auth.currentUser) return { ok: false, error: 'Not logged in.' };
+  try {
+    const fn = httpsCallable<{ requestId: string }, { ok: boolean; sessionId?: string; error?: string }>(
+      functions,
+      'approveTherapistBookingRequest'
+    );
+    const res = await fn({ requestId });
+    return res.data || { ok: false, error: 'Approve failed.' };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Approve failed.' };
+  }
+};
+
+export const rejectTherapistBookingRequest = async (requestId: string): Promise<{ ok: boolean; error?: string }> => {
+  if (!auth.currentUser) return { ok: false, error: 'Not logged in.' };
+  try {
+    const fn = httpsCallable<{ requestId: string }, { ok: boolean; error?: string }>(
+      functions,
+      'rejectTherapistBookingRequest'
+    );
+    const res = await fn({ requestId });
+    return res.data || { ok: false, error: 'Reject failed.' };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Reject failed.' };
   }
 };
 

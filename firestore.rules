@@ -162,6 +162,15 @@ service cloud.firestore {
         && (resource.data.therapist_uid == request.auth.uid || isAdmin());
     }
 
+    // Booking requests (created/updated by Cloud Functions):
+    // - therapist + requester + admin can read
+    match /therapist_booking_requests/{requestId} {
+      allow read: if isAdmin()
+        || (request.auth != null && resource.data.therapist_uid == request.auth.uid)
+        || (request.auth != null && resource.data.requester_uid == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
     match /therapist_sessions/{sessionId} {
       allow read: if request.auth != null
         && (resource.data.user_uid == request.auth.uid

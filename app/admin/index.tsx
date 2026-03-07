@@ -42,6 +42,21 @@ export default function AdminDashboard() {
           </View>
           <Feather name="chevron-right" size={22} color="#9ca3af" />
         </Pressable>
+
+        <Pressable
+          style={styles.card}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push('/admin/therapist-progress' as any);
+          }}
+        >
+          <Feather name="activity" size={28} color="#ec4899" />
+          <View style={styles.cardText}>
+            <Text style={styles.cardTitle}>Therapist progress</Text>
+            <Text style={styles.cardDesc}>See upload progress + open reviews + email therapists.</Text>
+          </View>
+          <Feather name="chevron-right" size={22} color="#9ca3af" />
+        </Pressable>
         <Pressable
           style={styles.card}
           onPress={() => {
