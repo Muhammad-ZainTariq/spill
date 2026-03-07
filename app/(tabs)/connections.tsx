@@ -42,15 +42,15 @@ import {
 
 interface Message {
   id: string;
-  content: string;
-  sender_id: string;
-  created_at: string;
+  content?: string;
+  sender_id?: string;
+  created_at?: string;
   sender?: {
     id: string;
     display_name?: string;
     anonymous_username?: string;
     avatar_url?: string;
-  };
+  } | null;
 }
 
 type TabKey = 'messages' | 'therapists' | 'groups' | 'requests' | 'leaderboard';
@@ -357,11 +357,6 @@ export default function ConnectionsScreen() {
     try {
       const sentMessage = await sendMessage(selectedConversation.id, content);
 
-      await supabase
-        .from('conversations')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', selectedConversation.id);
-
       if (sentMessage && currentUserId) {
         setMessages((prev) => {
           if (prev.some((m) => m.id === sentMessage.id)) return prev;
@@ -593,7 +588,7 @@ export default function ConnectionsScreen() {
         ]}>
           <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{item.content}</Text>
           <Text style={[styles.messageTime, isMe && styles.messageTimeMe]}>
-            {formatTimeAgo(item.created_at)}
+            {item.created_at ? formatTimeAgo(item.created_at) : ''}
           </Text>
         </View>
       </View>
@@ -1330,22 +1325,25 @@ const styles = StyleSheet.create({
   segmentRow: {
     flexDirection: 'row',
     paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 8,
+    paddingTop: 6,
+    paddingBottom: 6,
     backgroundColor: '#fff',
   },
   segmentChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
+    height: 32,
+    paddingHorizontal: 12,
+    paddingVertical: 0,
     borderRadius: 20,
     backgroundColor: '#f3f4f6',
     marginRight: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   segmentChipActive: {
     backgroundColor: '#ec4899',
   },
   segmentText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
     color: '#4b5563',
   },
@@ -1354,13 +1352,12 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 6,
     paddingBottom: 24,
   },
   loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
+    paddingTop: 24,
   },
   loadingText: {
     marginTop: 8,
@@ -1368,10 +1365,9 @@ const styles = StyleSheet.create({
     color: '#6b7280',
   },
   emptyState: {
-    flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 64,
+    paddingTop: 24,
+    paddingBottom: 24,
   },
   emptyTitle: {
     fontSize: 18,
