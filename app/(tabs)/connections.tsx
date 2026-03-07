@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { listOpenSlotsForTherapist, listTherapistProfiles, TherapistProfile } from '@/app/therapist/marketplace';
 import {
     acceptMessageRequest,
     CHALLENGE_CATEGORIES,
@@ -52,7 +53,7 @@ interface Message {
   };
 }
 
-type TabKey = 'messages' | 'groups' | 'requests' | 'leaderboard';
+type TabKey = 'messages' | 'therapists' | 'groups' | 'requests' | 'leaderboard';
 
 export default function ConnectionsScreen() {
   const router = useRouter();
@@ -80,6 +81,9 @@ export default function ConnectionsScreen() {
   const [leaderboard, setLeaderboard] = useState<{ userId: string; displayName: string; totalWins: number; tictactoeWins: number; chessWins: number }[]>([]);
   const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
 
+  // Therapists list state (inline tab)
+  const [therapists, setTherapists] = useState<(TherapistProfile & { nextSlotAt?: string | null; openSlots?: number })[]>([]);
+  const [loadingTherapists, setLoadingTherapists] = useState(false);
   // User search state
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -166,6 +170,32 @@ export default function ConnectionsScreen() {
       setRequests([]);
     } finally {
       setLoadingRequests(false);
+    }
+  };
+
+  const loadTherapists = async () => {
+    try {
+      setLoadingTherapists(true);
+      const list = await listTherapistProfiles(30);
+      const enriched = await Promise.all(
+        list.map(async (p) => {
+          try {
+            const slots = await listOpenSlotsForTherapist(p.id, 10);
+            return {
+              ...p,
+              openSlots: slots.length,
+              nextSlotAt: slots[0]?.start_at || null,
+            };
+          } catch {
+            return { ...p, openSlots: 0, nextSlotAt: null };
+          }
+        })
+      );
+      setTherapists(enriched);
+    } catch (e) {
+      setTherapists([]);
+    } finally {
+      setLoadingTherapists(false);
     }
   };
 
@@ -291,6 +321,11 @@ export default function ConnectionsScreen() {
 
   useEffect(() => {
     if (activeTab === 'leaderboard') loadLeaderboard();
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'therapists') loadTherapists();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
   useEffect(() => {
@@ -566,9 +601,26 @@ export default function ConnectionsScreen() {
   };
 
   const showMessages = activeTab === 'messages';
+  const showTherapists = activeTab === 'therapists';
   const showGroups = activeTab === 'groups';
   const showRequests = activeTab === 'requests';
   const showLeaderboard = activeTab === 'leaderboard';
+
+  const filteredTherapists = therapists.filter((t) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    const name = String(t.display_name || '').toLowerCase();
+    const spec = String(t.specialization || '').toLowerCase();
+    const summary = String((t as any).ai_persona_summary || '').toLowerCase();
+    return name.includes(q) || spec.includes(q) || summary.includes(q);
+  });
+
+  const fmtWhenSlot = (iso?: string | null) => {
+    if (!iso) return 'No slots yet';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return 'No slots yet';
+    return d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
 
   // If a conversation is selected, show the chat view
   if (selectedConversation) {
@@ -745,6 +797,8 @@ export default function ConnectionsScreen() {
             placeholder={
               showMessages 
                 ? 'Search people...' 
+                : showTherapists
+                ? 'Search therapists...'
                 : showGroups 
                 ? 'Search groups...' 
                 : showLeaderboard 
@@ -782,20 +836,13 @@ export default function ConnectionsScreen() {
         </View>
       </View>
 
-      <Pressable
-        style={styles.therapistsCta}
-        onPress={() => router.push('/therapists' as any)}
+      {/* Segmented control: Messages / Therapists / Groups / Requests / Leaderboard */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.segmentRow}
       >
-        <View style={{ flex: 1 }}>
-          <Text style={styles.therapistsCtaTitle}>Therapists</Text>
-          <Text style={styles.therapistsCtaSubtitle}>Browse verified profiles & book premium sessions</Text>
-        </View>
-        <Feather name="arrow-right" size={18} color="#111827" />
-      </Pressable>
-
-      {/* Segmented control: Messages / Groups / Requests / Leaderboard */}
-      <View style={styles.segmentRow}>
-        {(['messages', 'groups', 'requests', 'leaderboard'] as TabKey[]).map((key) => (
+        {(['messages', 'therapists', 'groups', 'requests', 'leaderboard'] as TabKey[]).map((key) => (
           <Pressable
             key={key}
             style={[
@@ -811,7 +858,15 @@ export default function ConnectionsScreen() {
               ]}
               numberOfLines={1}
             >
-              {key === 'messages' ? 'Messages' : key === 'groups' ? 'Groups' : key === 'requests' ? 'Requests' : 'Leaderboard'}
+              {key === 'messages'
+                ? 'Messages'
+                : key === 'therapists'
+                ? 'Therapists'
+                : key === 'groups'
+                ? 'Groups'
+                : key === 'requests'
+                ? 'Requests'
+                : 'Leaderboard'}
             </Text>
             {key === 'requests' && requests.length > 0 && (
               <View style={styles.requestBadge}>
@@ -820,7 +875,7 @@ export default function ConnectionsScreen() {
             )}
           </Pressable>
         ))}
-      </View>
+      </ScrollView>
 
       {/* Content */}
       {showMessages ? (
@@ -865,6 +920,56 @@ export default function ConnectionsScreen() {
             }
             refreshing={loadingConversations}
             onRefresh={loadConversations}
+          />
+        )
+      ) : showTherapists ? (
+        loadingTherapists ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#ec4899" />
+            <Text style={styles.loadingText}>Loading therapists...</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={filteredTherapists}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.listContent}
+            renderItem={({ item }) => (
+              <Pressable style={styles.therapistCard} onPress={() => router.push(`/therapist/${item.id}` as any)}>
+                <View style={styles.therapistTop}>
+                  <Text style={styles.therapistName} numberOfLines={1}>
+                    {item.display_name || 'Therapist'}
+                  </Text>
+                  <View style={styles.therapistBadge}>
+                    <Feather name="check-circle" size={14} color="#10b981" />
+                    <Text style={styles.therapistBadgeText}>Verified</Text>
+                  </View>
+                </View>
+                <Text style={styles.therapistSpec} numberOfLines={1}>
+                  {item.specialization || 'Mental health support'}
+                </Text>
+                {item.ai_persona_summary ? (
+                  <Text style={styles.therapistSummary} numberOfLines={2}>
+                    {String(item.ai_persona_summary)}
+                  </Text>
+                ) : null}
+                <View style={styles.therapistMetaRow}>
+                  <View style={styles.therapistMetaPill}>
+                    <Feather name="clock" size={14} color="#4b5563" />
+                    <Text style={styles.therapistMetaText}>{fmtWhenSlot((item as any).nextSlotAt)}</Text>
+                  </View>
+                  <View style={styles.therapistMetaPill}>
+                    <Feather name="calendar" size={14} color="#4b5563" />
+                    <Text style={styles.therapistMetaText}>{Number((item as any).openSlots || 0)} open</Text>
+                  </View>
+                </View>
+              </Pressable>
+            )}
+            ListEmptyComponent={
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyTitle}>No verified therapists yet</Text>
+                <Text style={styles.emptySubtitle}>When an admin approves a therapist, they’ll appear here.</Text>
+              </View>
+            }
           />
         )
       ) : showGroups ? (
@@ -1137,21 +1242,40 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8f9fa',
   },
-  therapistsCta: {
-    marginHorizontal: 16,
-    marginTop: 10,
-    marginBottom: 2,
+  // (removed top therapists CTA; therapists lives in the segmented tabs now)
+  therapistCard: {
     backgroundColor: '#ffffff',
     borderRadius: 18,
     padding: 14,
     borderWidth: 1,
     borderColor: '#e5e7eb',
+    marginBottom: 12,
+  },
+  therapistTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  therapistName: { flex: 1, fontSize: 16, fontWeight: '900', color: '#111827' },
+  therapistBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(16,185,129,0.10)',
   },
-  therapistsCtaTitle: { fontSize: 15, fontWeight: '900', color: '#111827' },
-  therapistsCtaSubtitle: { marginTop: 4, fontSize: 12, fontWeight: '600', color: '#6b7280' },
+  therapistBadgeText: { fontSize: 12, fontWeight: '900', color: '#10b981' },
+  therapistSpec: { marginTop: 6, fontSize: 13, fontWeight: '700', color: '#6b7280' },
+  therapistSummary: { marginTop: 8, fontSize: 12, fontWeight: '600', color: '#111827', lineHeight: 16 },
+  therapistMetaRow: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  therapistMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#f3f4f6',
+  },
+  therapistMetaText: { fontSize: 12, fontWeight: '700', color: '#4b5563' },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
