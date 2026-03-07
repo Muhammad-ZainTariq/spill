@@ -170,7 +170,7 @@ export default function TherapistProfileScreen() {
     <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.headerBtn} hitSlop={10}>
-          <Feather name="arrow-left" size={20} color={tokens.colors.text} />
+          <Feather name="arrow-left" size={20} color="#ffffff" />
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.title} numberOfLines={1}>
@@ -181,7 +181,7 @@ export default function TherapistProfileScreen() {
           </Text>
         </View>
         <Pressable onPress={load} style={styles.headerBtn} hitSlop={10}>
-          <Feather name="refresh-cw" size={18} color={tokens.colors.text} />
+          <Feather name="refresh-cw" size={18} color="#ffffff" />
         </Pressable>
       </View>
 
@@ -289,28 +289,30 @@ export default function TherapistProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: tokens.colors.pink },
+  safe: { flex: 1, backgroundColor: tokens.colors.bg },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     paddingHorizontal: tokens.spacing.screenHorizontal,
     paddingVertical: 12,
-    backgroundColor: 'transparent',
+    borderBottomWidth: 1,
+    borderBottomColor: tokens.colors.border,
+    backgroundColor: tokens.colors.surface,
   },
   headerBtn: {
     width: 40,
     height: 40,
     borderRadius: tokens.radius.sm,
-    backgroundColor: tokens.colors.surface,
+    backgroundColor: tokens.colors.pink,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  title: { fontSize: 22, fontWeight: '900', color: '#ffffff' },
-  subtitle: { marginTop: 2, fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.9)' },
+  title: { fontSize: 18, fontWeight: '900', color: tokens.colors.text },
+  subtitle: { marginTop: 2, fontSize: 12, fontWeight: '600', color: tokens.colors.textMuted },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 18 },
-  muted: { fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.85)' },
-  emptyTitle: { fontSize: 16, fontWeight: '900', color: '#ffffff' },
+  muted: { fontSize: 13, fontWeight: '600', color: tokens.colors.textMuted },
+  emptyTitle: { fontSize: 16, fontWeight: '900', color: tokens.colors.text },
   content: { padding: tokens.spacing.screenHorizontal, paddingBottom: 28, gap: 12 },
   hero: {
     backgroundColor: tokens.colors.surface,
@@ -385,7 +387,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
     height: 48,
     borderRadius: 16,
-    backgroundColor: '#111827',
+    backgroundColor: tokens.colors.pink,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -396,10 +398,10 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: tokens.colors.surfaceElevated,
     borderWidth: 1,
-    borderColor: tokens.colors.border,
+    borderColor: 'rgba(244,114,182,0.45)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  secondaryBtnText: { color: tokens.colors.text, fontSize: 13, fontWeight: '900' },
+  secondaryBtnText: { color: tokens.colors.pink, fontSize: 13, fontWeight: '900' },
 });
 
