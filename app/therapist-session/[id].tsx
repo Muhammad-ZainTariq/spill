@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, db } from '@/lib/firebase';
 import { KeyboardAwareLayout } from '@/app/KeyboardAwareLayout.native';
 import { tokens } from '@/app/ui/tokens';
+import { submitTherapistSessionReview } from '@/app/therapist/marketplace';
 
 type Session = {
   therapist_uid: string;
@@ -89,6 +90,11 @@ export default function TherapistSessionScreen() {
   const listRef = useRef<FlatList>(null);
   const [crisisStatus, setCrisisStatus] = useState<'active' | 'cleared' | null>(null);
   const [crisisSnippet, setCrisisSnippet] = useState<string | null>(null);
+  const [showReview, setShowReview] = useState(false);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewText, setReviewText] = useState('');
+  const [submittingReview, setSubmittingReview] = useState(false);
+  const [didReview, setDidReview] = useState(false);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -260,6 +266,30 @@ export default function TherapistSessionScreen() {
     }
   };
 
+  const handleSubmitReview = async () => {
+    if (!sessionId || !session || !meUid || !isPatient) return;
+    if (submittingReview) return;
+    setSubmittingReview(true);
+    try {
+      const res = await submitTherapistSessionReview(sessionId, reviewRating, reviewText);
+      if (!res.ok) {
+        const msg = String(res.error || 'Could not submit review.');
+        if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('insufficient')) {
+          Alert.alert('Already reviewed', 'You already left a review for this session.');
+        } else {
+          Alert.alert('Error', msg);
+        }
+        return;
+      }
+      setDidReview(true);
+      setShowReview(false);
+      setReviewText('');
+      Alert.alert('Thank you', 'Your feedback was submitted.');
+    } finally {
+      setSubmittingReview(false);
+    }
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
@@ -400,6 +430,46 @@ export default function TherapistSessionScreen() {
           </View>
         ) : null}
 
+        {hasEnded && isPatient && !didReview ? (
+          <View style={styles.reviewCard}>
+            <Text style={styles.reviewTitle}>Leave a review</Text>
+            <Text style={styles.reviewHint}>Only the therapist and admins can see your feedback.</Text>
+            <Pressable style={styles.reviewBtn} onPress={() => setShowReview((v) => !v)}>
+              <Text style={styles.reviewBtnText}>{showReview ? 'Hide' : 'Write review'}</Text>
+            </Pressable>
+
+            {showReview ? (
+              <View style={{ marginTop: 12, gap: 10 }}>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <Pressable
+                      key={n}
+                      onPress={() => setReviewRating(n)}
+                      style={[styles.starBtn, reviewRating >= n && styles.starBtnActive]}
+                    >
+                      <Text style={[styles.starText, reviewRating >= n && styles.starTextActive]}>★</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <TextInput
+                  value={reviewText}
+                  onChangeText={setReviewText}
+                  style={styles.reviewInput}
+                  placeholder="Optional comment (e.g. good listener, helpful advice)…"
+                  multiline
+                />
+                <Pressable
+                  style={[styles.submitReviewBtn, submittingReview && { opacity: 0.6 }]}
+                  onPress={handleSubmitReview}
+                  disabled={submittingReview}
+                >
+                  <Text style={styles.submitReviewText}>{submittingReview ? 'Submitting…' : 'Submit review'}</Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
         <View style={styles.composer}>
           <TextInput
             value={text}
@@ -535,6 +605,62 @@ const styles = StyleSheet.create({
     borderRadius: 14,
   },
   lockText: { flex: 1, fontSize: 12, fontWeight: '700', color: tokens.colors.textSecondary, lineHeight: 16 },
+
+  reviewCard: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    borderRadius: 16,
+    padding: 12,
+    backgroundColor: tokens.colors.surface,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+  },
+  reviewTitle: { fontSize: 14, fontWeight: '900', color: tokens.colors.text },
+  reviewHint: { marginTop: 6, fontSize: 12, fontWeight: '700', color: tokens.colors.textMuted, lineHeight: 16 },
+  reviewBtn: {
+    marginTop: 10,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    borderWidth: 1,
+    borderColor: 'rgba(244,114,182,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reviewBtnText: { fontSize: 13, fontWeight: '900', color: tokens.colors.pink },
+  starBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  starBtnActive: { borderColor: 'rgba(244,114,182,0.55)', backgroundColor: 'rgba(244,114,182,0.12)' },
+  starText: { fontSize: 18, fontWeight: '900', color: tokens.colors.textMuted },
+  starTextActive: { color: tokens.colors.pink },
+  reviewInput: {
+    minHeight: 90,
+    borderRadius: 14,
+    backgroundColor: tokens.colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: tokens.colors.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  submitReviewBtn: {
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: tokens.colors.pink,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  submitReviewText: { color: '#fff', fontSize: 13, fontWeight: '900' },
 
   composer: {
     flexDirection: 'row',

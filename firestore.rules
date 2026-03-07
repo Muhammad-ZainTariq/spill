@@ -190,6 +190,30 @@ service cloud.firestore {
         && resource.data.sender_uid == request.auth.uid;
     }
 
+    // Session reviews:
+    // - only the patient can create exactly one review per session (docId = patient uid)
+    // - only therapist/admin can read reviews (patient cannot)
+    match /therapist_sessions/{sessionId}/reviews/{reviewerUid} {
+      allow create: if request.auth != null
+        && request.auth.uid == reviewerUid
+        && exists(/databases/$(database)/documents/therapist_sessions/$(sessionId))
+        && get(/databases/$(database)/documents/therapist_sessions/$(sessionId)).data.user_uid == request.auth.uid
+        && request.resource.data.reviewer_uid == request.auth.uid
+        && request.resource.data.created_at is string
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && !exists(/databases/$(database)/documents/therapist_sessions/$(sessionId)/reviews/$(reviewerUid));
+
+      allow read: if isAdmin()
+        || (
+          request.auth != null
+          && exists(/databases/$(database)/documents/therapist_sessions/$(sessionId))
+          && get(/databases/$(database)/documents/therapist_sessions/$(sessionId)).data.therapist_uid == request.auth.uid
+        );
+      allow update, delete: if false;
+    }
+
     match /therapist_sessions/{sessionId}/signals/{signalId} {
       allow read: if request.auth != null
         && exists(/databases/$(database)/documents/therapist_sessions/$(sessionId))
@@ -215,6 +239,15 @@ service cloud.firestore {
           )
           || isAdmin()
         );
+      allow delete: if isAdmin();
+    }
+
+    // Aggregated therapist reviews (written by Cloud Functions):
+    // Admin + therapist can read, nobody else.
+    match /therapist_reviews/{reviewId} {
+      allow read: if isAdmin()
+        || (request.auth != null && resource.data.therapist_uid == request.auth.uid);
+      allow create, update: if false;
       allow delete: if isAdmin();
     }
   }

@@ -91,6 +91,21 @@ export default function TherapistsScreen() {
                 {item.specialization || 'Mental health support'}
               </Text>
 
+              {item.ai_persona_summary ? (
+                <Text style={styles.summary} numberOfLines={2}>
+                  {String(item.ai_persona_summary)}
+                </Text>
+              ) : null}
+
+              {(Number(item.avg_rating || 0) > 0 || Number(item.review_count || 0) > 0) ? (
+                <View style={styles.ratingRow}>
+                  <Feather name="star" size={14} color={tokens.colors.pink} />
+                  <Text style={styles.ratingText}>
+                    {Number(item.avg_rating || 0).toFixed(1)} ({Number(item.review_count || 0)} reviews)
+                  </Text>
+                </View>
+              ) : null}
+
               <View style={styles.metaRow}>
                 <View style={styles.metaPill}>
                   <Feather name="clock" size={14} color={tokens.colors.textSecondary} />
@@ -161,6 +176,9 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 12, fontWeight: '900', color: tokens.colors.success },
   spec: { marginTop: 6, fontSize: 13, fontWeight: '700', color: tokens.colors.textSecondary },
+  summary: { marginTop: 8, fontSize: 12, fontWeight: '600', color: tokens.colors.text, lineHeight: 16 },
+  ratingRow: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  ratingText: { fontSize: 12, fontWeight: '800', color: tokens.colors.textSecondary },
   metaRow: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   metaPill: {
     flexDirection: 'row',

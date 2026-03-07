@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { addDoc, collection, doc, getDoc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, getDocs, onSnapshot, query, setDoc, updateDoc, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -44,6 +44,16 @@ type TherapistRequest = {
   requirements_template_id?: string | null;
 };
 
+type TherapistReview = {
+  id: string;
+  therapist_uid: string;
+  session_id: string;
+  reviewer_uid: string;
+  rating: number;
+  comment?: string | null;
+  created_at: string;
+};
+
 function safeString(v: unknown): string {
   if (typeof v === 'string') return v;
   if (Array.isArray(v)) return typeof v[0] === 'string' ? v[0] : '';
@@ -65,6 +75,7 @@ export default function AdminTherapistRequestScreen() {
     UK_DEFAULT_THERAPIST_VERIFICATION_REQUIREMENTS
   );
   const [missingIds, setMissingIds] = useState<string[]>([]);
+  const [reviews, setReviews] = useState<TherapistReview[]>([]);
 
   const docs = useMemo(() => {
     const list: string[] = [];
@@ -79,6 +90,23 @@ export default function AdminTherapistRequestScreen() {
     const m = (req as any)?.document_uploads;
     return m && typeof m === 'object' ? (m as Record<string, any>) : {};
   }, [req]);
+
+  const loadReviews = useCallback(async (therapistUid: string) => {
+    try {
+      const tid = String(therapistUid || '').trim();
+      if (!tid) {
+        setReviews([]);
+        return;
+      }
+      const q = query(collection(db, 'therapist_reviews'), where('therapist_uid', '==', tid));
+      const snap = await getDocs(q);
+      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as TherapistReview[];
+      list.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      setReviews(list.slice(0, 20));
+    } catch {
+      setReviews([]);
+    }
+  }, []);
 
   const status = String(req?.status || 'pending');
   const isInviteMode = status === 'pending' || status === 'invited';
@@ -169,6 +197,15 @@ export default function AdminTherapistRequestScreen() {
     load();
     return () => unsub();
   }, [load, requestId]);
+
+  useEffect(() => {
+    const tid = String((req as any)?.completed_uid || '').trim();
+    if (!tid) {
+      setReviews([]);
+      return;
+    }
+    loadReviews(tid);
+  }, [req?.completed_uid, loadReviews]);
 
   const buildMissingDocsMessage = useCallback(
     (ids: string[]) => {
@@ -456,6 +493,26 @@ export default function AdminTherapistRequestScreen() {
             ) : null}
           </View>
 
+          {reviews.length ? (
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Reviews (private)</Text>
+              <Text style={styles.helpText}>Only admins and the therapist can see these.</Text>
+              <View style={{ marginTop: 10, gap: 10 }}>
+                {reviews.slice(0, 8).map((r) => (
+                  <View key={r.id} style={styles.reviewRow}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={styles.reviewStars}>
+                        {'★★★★★'.slice(0, Math.max(1, Math.min(5, Number(r.rating || 0))))}
+                      </Text>
+                      <Text style={styles.reviewDate}>{String(r.created_at || '').slice(0, 10)}</Text>
+                    </View>
+                    {r.comment ? <Text style={styles.reviewText}>{String(r.comment)}</Text> : null}
+                  </View>
+                ))}
+              </View>
+            </View>
+          ) : null}
+
           {isInviteMode ? (
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Invite message (optional)</Text>
@@ -737,6 +794,16 @@ const styles = StyleSheet.create({
   },
   otherDocText: { flex: 1, fontSize: 12, fontWeight: '700', color: tokens.colors.text },
   otherDocOpen: { fontSize: 12, fontWeight: '900', color: tokens.colors.pink },
+
+  reviewRow: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: tokens.colors.surfaceOverlay,
+  },
+  reviewStars: { fontSize: 12, fontWeight: '900', color: tokens.colors.pink },
+  reviewDate: { fontSize: 11, fontWeight: '800', color: tokens.colors.textMuted },
+  reviewText: { marginTop: 6, fontSize: 12, fontWeight: '600', color: tokens.colors.text, lineHeight: 16 },
   templateBtn: {
     marginTop: 12,
     height: 44,

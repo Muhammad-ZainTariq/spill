@@ -795,3 +795,136 @@ exports.sendExpoPush = functions
     }
     return res;
   });
+
+function buildTherapistPersonaFromReviews(reviews) {
+  const text = reviews
+    .map((r) => String(r.comment || ''))
+    .join(' • ')
+    .toLowerCase();
+
+  const TRAITS = [
+    { key: 'good listener', words: ['listener', 'listens', 'listening', 'heard', 'hearing'] },
+    { key: 'supportive', words: ['supportive', 'support', 'comfort', 'comforting'] },
+    { key: 'practical', words: ['practical', 'steps', 'actionable', 'tools', 'strategies', 'coping'] },
+    { key: 'calm', words: ['calm', 'grounding', 'peaceful'] },
+    { key: 'empathetic', words: ['empathetic', 'empathy', 'understanding', 'understood', 'caring'] },
+    { key: 'direct', words: ['direct', 'straight', 'honest', 'clear'] },
+    { key: 'patient', words: ['patient', 'patience', 'time', 'gentle'] },
+    { key: 'motivational', words: ['motivating', 'motivational', 'encouraging', 'encourage'] },
+  ];
+
+  const counts = new Map();
+  for (const t of TRAITS) {
+    let c = 0;
+    for (const w of t.words) {
+      if (text.includes(w)) c += 1;
+    }
+    if (c > 0) counts.set(t.key, c);
+  }
+
+  const top = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([k]) => k)
+    .slice(0, 3);
+
+  const avg = (() => {
+    const nums = reviews.map((r) => Number(r.rating || 0)).filter((n) => Number.isFinite(n) && n > 0);
+    if (!nums.length) return null;
+    return Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 10) / 10;
+  })();
+
+  const parts = [];
+  if (top.length) parts.push(`Known as a ${top.join(', ')} therapist.`);
+  if (avg != null) parts.push(`Average recent rating: ${avg}/5.`);
+  parts.push('Focuses on supportive chat and practical coping strategies.');
+  return { summary: parts.join(' '), traits: top };
+}
+
+// When a patient leaves a session review:
+// - create an aggregated record under therapist_reviews/{sessionId_reviewerUid}
+// - update therapist_profiles aggregates (review_count, avg_rating)
+// - refresh ai_persona_summary every ~10 reviews
+exports.onTherapistSessionReviewCreated = functions
+  .region('us-central1')
+  .firestore.document('therapist_sessions/{sessionId}/reviews/{reviewerUid}')
+  .onCreate(async (snap, context) => {
+    const { sessionId, reviewerUid } = context.params;
+    const data = snap.data() || {};
+    const rating = Math.max(1, Math.min(5, Math.round(Number(data.rating || 0))));
+    const comment = typeof data.comment === 'string' ? data.comment.trim().slice(0, 800) : '';
+    const createdAt = typeof data.created_at === 'string' && data.created_at ? data.created_at : new Date().toISOString();
+
+    // Load session to resolve therapist uid (source of truth)
+    const sessionRef = db.collection('therapist_sessions').doc(String(sessionId));
+    const sessionSnap = await sessionRef.get();
+    if (!sessionSnap.exists) return null;
+    const sess = sessionSnap.data() || {};
+    const therapistUid = typeof sess.therapist_uid === 'string' ? sess.therapist_uid : null;
+    const patientUid = typeof sess.user_uid === 'string' ? sess.user_uid : null;
+    if (!therapistUid || !patientUid) return null;
+
+    // Ensure reviewer is actually the patient (extra safety)
+    if (String(reviewerUid) !== String(patientUid)) return null;
+
+    // Write aggregated review doc for therapist/admin dashboards
+    const aggId = `${sessionId}_${reviewerUid}`;
+    const aggRef = db.collection('therapist_reviews').doc(aggId);
+    await aggRef.set(
+      {
+        therapist_uid: therapistUid,
+        session_id: String(sessionId),
+        reviewer_uid: String(reviewerUid),
+        rating,
+        comment: comment || null,
+        created_at: createdAt,
+      },
+      { merge: true }
+    );
+
+    // Update aggregates + possibly refresh persona summary
+    const profRef = db.collection('therapist_profiles').doc(therapistUid);
+    let nextCount = 0;
+    let shouldSummarize = false;
+    await db.runTransaction(async (tx) => {
+      const profSnap = await tx.get(profRef);
+      const prof = profSnap.exists ? (profSnap.data() || {}) : {};
+      const prevCount = Number(prof.review_count || 0) || 0;
+      const prevSum = Number(prof.rating_sum || 0) || 0;
+      nextCount = prevCount + 1;
+      const nextSum = prevSum + rating;
+      const nextAvg = nextCount > 0 ? Math.round((nextSum / nextCount) * 10) / 10 : 0;
+      const lastSummaryCount = Number(prof.ai_last_summary_count || 0) || 0;
+      shouldSummarize = nextCount >= 10 && (nextCount - lastSummaryCount >= 10);
+      tx.set(
+        profRef,
+        {
+          review_count: nextCount,
+          rating_sum: nextSum,
+          avg_rating: nextAvg,
+        },
+        { merge: true }
+      );
+    });
+
+    if (!shouldSummarize) return null;
+
+    // Fetch last 10 reviews for this therapist to generate new summary
+    const recentSnap = await db
+      .collection('therapist_reviews')
+      .where('therapist_uid', '==', therapistUid)
+      .orderBy('created_at', 'desc')
+      .limit(10)
+      .get();
+    const recent = recentSnap.docs.map((d) => d.data());
+    const persona = buildTherapistPersonaFromReviews(recent);
+    await profRef.set(
+      {
+        ai_persona_summary: persona.summary,
+        ai_persona_traits: persona.traits,
+        ai_last_summary_count: nextCount,
+        ai_updated_at: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+    return null;
+  });
