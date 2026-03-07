@@ -1,13 +1,12 @@
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { addDoc, collection, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,6 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { db, functions } from '@/lib/firebase';
+import { tokens } from '@/app/ui/tokens';
 import {
   getTherapistVerificationRequirements,
   TherapistVerificationRequirementItem,
@@ -32,20 +32,17 @@ type TherapistRequest = {
   status?: string | null;
   document_url?: string | null;
   document_urls?: string[] | null;
+  document_uploads?: Record<
+    string,
+    { title?: string | null; url?: string | null; kind?: string | null; mime?: string | null; uploaded_at?: string | null }
+  > | null;
+  verification_video?: { url?: string | null; uploaded_at?: string | null; mime?: string | null } | null;
   completed_uid?: string | null;
   admin_request_message?: string | null;
   reviewed_note?: string | null;
   requested_item_ids?: string[] | null;
   requirements_template_id?: string | null;
 };
-
-function docKind(url: string): 'pdf' | 'image' | 'other' {
-  const u = (url || '').toLowerCase();
-  if (u.includes('.pdf') || u.includes('application/pdf')) return 'pdf';
-  if (u.match(/\.(png|jpe?g|webp|gif)(\?|$)/)) return 'image';
-  if (u.includes('image') || u.includes('jpg') || u.includes('jpeg') || u.includes('png')) return 'image';
-  return 'other';
-}
 
 function safeString(v: unknown): string {
   if (typeof v === 'string') return v;
@@ -78,6 +75,11 @@ export default function AdminTherapistRequestScreen() {
     return [...new Set(list.filter(Boolean))];
   }, [req]);
 
+  const uploadsMap = useMemo(() => {
+    const m = (req as any)?.document_uploads;
+    return m && typeof m === 'object' ? (m as Record<string, any>) : {};
+  }, [req]);
+
   const status = String(req?.status || 'pending');
   const isInviteMode = status === 'pending' || status === 'invited';
   const isReviewMode = status === 'completed' || status === 'resubmitted';
@@ -91,6 +93,11 @@ export default function AdminTherapistRequestScreen() {
       .filter(Boolean);
   }, [req?.requested_item_ids, requirements]);
 
+  const requestedItems = useMemo(() => {
+    const byId = new Map((requirements || []).map((it) => [it.id, it]));
+    return requestedDefaultIds.map((id) => byId.get(id)).filter(Boolean) as TherapistVerificationRequirementItem[];
+  }, [requestedDefaultIds, requirements]);
+
   const openDoc = useCallback(
     (url: string) => {
       const u = String(url || '').trim();
@@ -102,6 +109,15 @@ export default function AdminTherapistRequestScreen() {
     },
     [router]
   );
+
+  const openVideo = useCallback(() => {
+    const u = String((req as any)?.verification_video?.url || '').trim();
+    if (!u) return;
+    router.push({
+      pathname: '/document-viewer',
+      params: { url: encodeURIComponent(u), title: 'Verification video' },
+    } as any);
+  }, [router, req]);
 
   const load = useCallback(async () => {
     if (!requestId) return;
@@ -137,8 +153,22 @@ export default function AdminTherapistRequestScreen() {
   }, [requestId]);
 
   useEffect(() => {
+    if (!requestId) return;
+    // Realtime updates so docs appear as soon as therapist uploads
+    const unsub = onSnapshot(doc(db, 'therapist_onboarding_requests', requestId), (snap) => {
+      if (!snap.exists()) {
+        setReq(null);
+        setLoading(false);
+        return;
+      }
+      const data = { id: snap.id, ...(snap.data() as any) } as TherapistRequest;
+      setReq(data);
+      setLoading(false);
+    });
+    // Still call load() once to fetch requirements template + init missing list
     load();
-  }, [load]);
+    return () => unsub();
+  }, [load, requestId]);
 
   const buildMissingDocsMessage = useCallback(
     (ids: string[]) => {
@@ -314,7 +344,7 @@ export default function AdminTherapistRequestScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.backButton} hitSlop={10}>
-          <Feather name="arrow-left" size={20} color="#111827" />
+          <Feather name="arrow-left" size={20} color={tokens.colors.text} />
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.title} numberOfLines={1}>
@@ -328,7 +358,7 @@ export default function AdminTherapistRequestScreen() {
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator size="small" color="#ec4899" />
+          <ActivityIndicator size="small" color="#ffffff" />
           <Text style={styles.mutedText}>Loading…</Text>
         </View>
       ) : !req ? (
@@ -357,47 +387,73 @@ export default function AdminTherapistRequestScreen() {
           ) : null}
 
           <View style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Documents</Text>
-            {docs.length === 0 ? (
-              <Text style={styles.mutedText}>No documents uploaded yet.</Text>
-            ) : (
-              <>
-                <Pressable style={styles.docHero} onPress={() => openDoc(docs[0])}>
-                  {docKind(docs[0]) === 'image' ? (
-                    <Image source={{ uri: docs[0] }} style={styles.docHeroImage} />
-                  ) : (
-                    <View style={styles.docHeroFile}>
-                      <Feather name="file-text" size={26} color="#111827" />
-                      <Text style={styles.docHeroFileTitle}>{docKind(docs[0]) === 'pdf' ? 'PDF document' : 'Document'}</Text>
-                      <Text style={styles.docHeroFileSub}>Tap to open full screen</Text>
-                    </View>
-                  )}
-                </Pressable>
+            <Text style={styles.sectionTitle}>Verification checklist</Text>
+            <Text style={styles.helpText}>
+              Each upload is attached to a specific checklist item, so you can quickly verify what is what.
+            </Text>
 
-                {docs.length > 1 ? (
-                  <View style={styles.docThumbRow}>
-                    {docs.slice(0, 6).map((u) => (
-                      <Pressable key={u} style={styles.docThumb} onPress={() => openDoc(u)}>
-                        {docKind(u) === 'image' ? (
-                          <Image source={{ uri: u }} style={styles.docThumbImage} />
-                        ) : (
-                          <View style={styles.docThumbFile}>
-                            <Feather name="file" size={18} color="#111827" />
-                            <Text style={styles.docThumbFileText}>{docKind(u) === 'pdf' ? 'PDF' : 'DOC'}</Text>
-                          </View>
-                        )}
-                      </Pressable>
-                    ))}
-                  </View>
-                ) : null}
-
-                <View style={styles.docButtonsRow}>
-                  <Pressable onPress={() => openDoc(docs[0])} style={styles.docBtnPrimary}>
-                    <Text style={styles.docBtnPrimaryText}>Open full screen</Text>
-                  </Pressable>
+            <View style={{ marginTop: 12, gap: 10 }}>
+              <Pressable onPress={openVideo} style={styles.checklistRow}>
+                <Feather
+                  name={(req as any)?.verification_video?.url ? 'check-circle' : 'circle'}
+                  size={18}
+                  color={(req as any)?.verification_video?.url ? tokens.colors.pink : tokens.colors.textMuted}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.checklistTitle}>ID verification video (5 seconds)</Text>
+                  <Text style={styles.checklistText} numberOfLines={2}>
+                    {(req as any)?.verification_video?.url ? 'Uploaded — tap to open.' : 'Missing — ask therapist to record it in-app.'}
+                  </Text>
                 </View>
-              </>
-            )}
+                {(req as any)?.verification_video?.url ? (
+                  <Text style={styles.openChip}>Open</Text>
+                ) : (
+                  <Text style={styles.missingChip}>Missing</Text>
+                )}
+              </Pressable>
+
+              {requestedItems.map((it) => {
+                const uploaded = uploadsMap?.[it.id];
+                const has = !!uploaded?.url;
+                return (
+                  <Pressable
+                    key={it.id}
+                    onPress={() => (has ? openDoc(String(uploaded.url)) : null)}
+                    style={styles.checklistRow}
+                  >
+                    <Feather
+                      name={has ? 'check-circle' : 'circle'}
+                      size={18}
+                      color={has ? tokens.colors.pink : tokens.colors.textMuted}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.checklistTitle}>{it.title}</Text>
+                      <Text style={styles.checklistText} numberOfLines={2}>
+                        {has ? 'Uploaded — tap to open.' : 'Missing'}
+                      </Text>
+                    </View>
+                    {has ? <Text style={styles.openChip}>Open</Text> : <Text style={styles.missingChip}>Missing</Text>}
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {docs.length > 0 ? (
+              <View style={{ marginTop: 14 }}>
+                <Text style={[styles.sectionTitle, { marginBottom: 8 }]}>Other uploaded files</Text>
+                <View style={{ gap: 8 }}>
+                  {docs.slice(0, 8).map((u) => (
+                    <Pressable key={u} style={styles.otherDocRow} onPress={() => openDoc(u)}>
+                      <Feather name="file" size={16} color="#111827" />
+                      <Text style={styles.otherDocText} numberOfLines={1}>
+                        {u}
+                      </Text>
+                      <Text style={styles.otherDocOpen}>Open</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            ) : null}
           </View>
 
           {isInviteMode ? (
@@ -509,91 +565,96 @@ export default function AdminTherapistRequestScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#f3f4f6' },
+  safe: { flex: 1, backgroundColor: tokens.colors.pink },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    paddingHorizontal: 16,
+    paddingHorizontal: tokens.spacing.screenHorizontal,
     paddingTop: 8,
     paddingBottom: 12,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    backgroundColor: 'transparent',
   },
   backButton: {
     width: 40,
     height: 40,
-    borderRadius: 14,
+    borderRadius: tokens.radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f3f4f6',
+    backgroundColor: tokens.colors.surface,
   },
-  title: { fontSize: 18, fontWeight: '900', color: '#111827' },
-  subtitle: { fontSize: 12, fontWeight: '600', color: '#6b7280', marginTop: 2 },
+  title: { fontSize: 22, fontWeight: '900', color: '#ffffff' },
+  subtitle: { fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.9)', marginTop: 2 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 18 },
-  emptyTitle: { fontSize: 16, fontWeight: '900', color: '#111827' },
-  mutedText: { color: '#6b7280', fontSize: 13, fontWeight: '600' },
-  content: { padding: 16, paddingBottom: 24, gap: 12 },
+  emptyTitle: { fontSize: 16, fontWeight: '900', color: '#ffffff' },
+  mutedText: { color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: '700' },
+  content: { padding: tokens.spacing.screenHorizontal, paddingBottom: 24, gap: 12 },
 
   hero: {
-    backgroundColor: '#fff',
-    borderRadius: 18,
+    backgroundColor: tokens.colors.surface,
+    borderRadius: tokens.radius.lg,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: tokens.colors.border,
   },
-  heroName: { fontSize: 18, fontWeight: '900', color: '#111827' },
-  heroMeta: { marginTop: 4, fontSize: 13, fontWeight: '600', color: '#6b7280' },
-  statusPill: { alignSelf: 'flex-start', marginTop: 10, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: '#f3f4f6' },
-  statusPillText: { fontSize: 11, fontWeight: '900', color: '#111827', textTransform: 'capitalize' },
+  heroName: { fontSize: 18, fontWeight: '900', color: tokens.colors.text },
+  heroMeta: { marginTop: 4, fontSize: 13, fontWeight: '700', color: tokens.colors.textSecondary },
+  statusPill: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.65)',
+  },
+  statusPillText: { fontSize: 11, fontWeight: '900', color: tokens.colors.text, textTransform: 'capitalize' },
 
   sectionCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
+    backgroundColor: tokens.colors.surface,
+    borderRadius: tokens.radius.md,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: tokens.colors.border,
     padding: 12,
   },
-  sectionTitle: { fontSize: 13, fontWeight: '900', color: '#111827' },
-  helpText: { marginTop: 6, color: '#6b7280', fontSize: 12, lineHeight: 16 },
-  noteText: { marginTop: 10, fontSize: 13, color: '#374151', lineHeight: 18 },
+  sectionTitle: { fontSize: 13, fontWeight: '900', color: tokens.colors.text },
+  helpText: { marginTop: 6, color: tokens.colors.textSecondary, fontSize: 12, lineHeight: 16, fontWeight: '700' },
+  noteText: { marginTop: 10, fontSize: 13, color: tokens.colors.textSecondary, lineHeight: 18, fontWeight: '600' },
 
   docHero: {
     marginTop: 10,
     width: '100%',
     height: 260,
-    borderRadius: 14,
+    borderRadius: tokens.radius.sm,
     overflow: 'hidden',
-    backgroundColor: '#f3f4f6',
+    backgroundColor: tokens.colors.surfaceOverlay,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: tokens.colors.border,
   },
   docHeroImage: { width: '100%', height: '100%', resizeMode: 'contain', backgroundColor: '#0b0f19' },
   docHeroFile: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 16 },
-  docHeroFileTitle: { fontSize: 14, fontWeight: '900', color: '#111827', marginTop: 10 },
-  docHeroFileSub: { fontSize: 12, fontWeight: '600', color: '#6b7280', marginTop: 4 },
+  docHeroFileTitle: { fontSize: 14, fontWeight: '900', color: tokens.colors.text, marginTop: 10 },
+  docHeroFileSub: { fontSize: 12, fontWeight: '700', color: tokens.colors.textSecondary, marginTop: 4 },
 
   docThumbRow: { flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' },
   docThumb: {
     width: 68,
     height: 68,
-    borderRadius: 12,
+    borderRadius: tokens.radius.sm,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    backgroundColor: '#f3f4f6',
+    borderColor: tokens.colors.border,
+    backgroundColor: tokens.colors.surfaceOverlay,
   },
   docThumbImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   docThumbFile: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  docThumbFileText: { fontSize: 10, fontWeight: '900', color: '#111827', marginTop: 6 },
+  docThumbFileText: { fontSize: 10, fontWeight: '900', color: tokens.colors.text, marginTop: 6 },
 
   docButtonsRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
   docBtnPrimary: {
     flex: 1,
     height: 44,
     borderRadius: 14,
-    backgroundColor: '#111827',
+    backgroundColor: tokens.colors.text,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -601,10 +662,10 @@ const styles = StyleSheet.create({
 
   messageBox: {
     marginTop: 10,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 12,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    borderRadius: tokens.radius.sm,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: tokens.colors.border,
   },
   messageInput: {
     paddingHorizontal: 12,
@@ -612,28 +673,75 @@ const styles = StyleSheet.create({
     minHeight: 90,
     textAlignVertical: 'top',
     fontSize: 14,
-    color: '#111827',
+    color: tokens.colors.text,
   },
-  helperMuted: { marginTop: 6, color: '#6b7280', fontSize: 12, fontWeight: '700', lineHeight: 16 },
+  helperMuted: { marginTop: 6, color: tokens.colors.textSecondary, fontSize: 12, fontWeight: '700', lineHeight: 16 },
   checkRow: {
     flexDirection: 'row',
     gap: 10,
     paddingVertical: 10,
     paddingHorizontal: 10,
-    borderRadius: 12,
+    borderRadius: tokens.radius.sm,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    backgroundColor: '#fff',
+    borderColor: tokens.colors.border,
+    backgroundColor: tokens.colors.surface,
     alignItems: 'flex-start',
   },
-  checkRowSelected: { borderColor: 'rgba(236,72,153,0.35)', backgroundColor: 'rgba(236,72,153,0.06)' },
-  checkTitle: { fontSize: 13, fontWeight: '900', color: '#111827' },
-  checkText: { marginTop: 2, fontSize: 12, fontWeight: '600', color: '#374151', lineHeight: 16 },
+  checkRowSelected: { borderColor: 'rgba(244,114,182,0.35)', backgroundColor: 'rgba(244,114,182,0.08)' },
+  checkTitle: { fontSize: 13, fontWeight: '900', color: tokens.colors.text },
+  checkText: { marginTop: 2, fontSize: 12, fontWeight: '600', color: tokens.colors.textSecondary, lineHeight: 16 },
+
+  checklistRow: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: tokens.radius.sm,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+    backgroundColor: tokens.colors.surface,
+    alignItems: 'flex-start',
+  },
+  checklistTitle: { fontSize: 13, fontWeight: '900', color: tokens.colors.text },
+  checklistText: { marginTop: 2, fontSize: 12, fontWeight: '600', color: tokens.colors.textSecondary, lineHeight: 16 },
+  openChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(244,114,182,0.16)',
+    color: tokens.colors.pink,
+    fontSize: 11,
+    fontWeight: '900',
+    overflow: 'hidden',
+  },
+  missingChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    color: tokens.colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '900',
+    overflow: 'hidden',
+  },
+  otherDocRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: tokens.radius.sm,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+    backgroundColor: tokens.colors.surface,
+  },
+  otherDocText: { flex: 1, fontSize: 12, fontWeight: '700', color: tokens.colors.text },
+  otherDocOpen: { fontSize: 12, fontWeight: '900', color: tokens.colors.pink },
   templateBtn: {
     marginTop: 12,
     height: 44,
     borderRadius: 14,
-    backgroundColor: '#111827',
+    backgroundColor: tokens.colors.text,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -641,17 +749,25 @@ const styles = StyleSheet.create({
 
   primaryBtn: {
     marginTop: 12,
-    backgroundColor: '#111827',
+    backgroundColor: tokens.colors.text,
     paddingVertical: 12,
     borderRadius: 14,
     alignItems: 'center',
   },
   primaryBtnText: { color: '#fff', fontSize: 14, fontWeight: '900' },
 
-  approveBtn: { backgroundColor: '#10b981', height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  approveBtn: { backgroundColor: tokens.colors.success, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   approveText: { color: '#fff', fontSize: 14, fontWeight: '900' },
-  moreBtn: { backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: '#e5e7eb', height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  moreText: { color: '#111827', fontSize: 14, fontWeight: '900' },
+  moreBtn: {
+    backgroundColor: tokens.colors.surfaceOverlay,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+    height: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  moreText: { color: tokens.colors.text, fontSize: 14, fontWeight: '900' },
   rejectLink: {
     height: 42,
     borderRadius: 14,

@@ -32,6 +32,12 @@ service firebase.storage {
       // No direct client writes; uploads go through the uploadMedia Cloud Function.
       allow write: if false;
     }
+
+    // (Optional) If you later store videos in a separate folder.
+    match /therapist-videos/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
   }
 }
 

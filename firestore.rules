@@ -131,10 +131,14 @@ service cloud.firestore {
     // Therapist onboarding requests:
     // - Public users create requests via Cloud Functions, not direct writes.
     // - Admins can read/update/delete any request.
-    // - Therapists can update their own request (to mark onboarding completed).
+    // - Therapists can read/update their own request (by email match).
     match /therapist_onboarding_requests/{requestId} {
       // Admin powers
       allow read, update, delete: if isAdmin();
+
+      // Therapist can read their own request based on email match
+      allow read: if request.auth != null
+        && resource.data.email == request.auth.token.email;
 
       // Therapist can update their own request based on email match
       allow update: if request.auth != null

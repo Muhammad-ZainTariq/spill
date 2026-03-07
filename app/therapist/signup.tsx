@@ -1,15 +1,12 @@
-import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
-import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack } from 'expo-router';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -20,7 +17,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { auth, db, functions, getDownloadURL, ref, storage } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
 import { UK_DEFAULT_THERAPIST_VERIFICATION_REQUIREMENTS } from '@/app/functions';
 
 export default function TherapistSignupScreen() {
@@ -28,9 +25,6 @@ export default function TherapistSignupScreen() {
   const params = useLocalSearchParams<{ requestId?: string; email?: string; name?: string; specialization?: string }>();
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [picking, setPicking] = useState(false);
-  const [docUri, setDocUri] = useState<string | null>(null);
-  const [docMime, setDocMime] = useState<string>('image/jpeg');
 
   const email = (params.email || '').toString();
   const requestId = (params.requestId || '').toString();
@@ -44,60 +38,6 @@ export default function TherapistSignupScreen() {
     }
   }, [requestId, email, router]);
 
-  const pickDocument = async () => {
-    try {
-      setPicking(true);
-      await ImagePicker.requestMediaLibraryPermissionsAsync();
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.All,
-        allowsEditing: false,
-        quality: 0.9,
-      });
-      if (result.canceled) return;
-      const asset = result.assets[0];
-      const mime = asset.mimeType || 'image/jpeg';
-      setDocUri(asset.uri);
-      setDocMime(mime);
-    } catch (err) {
-      console.error('pickDocument error', err);
-      Alert.alert('Error', 'Could not open your library.');
-    } finally {
-      setPicking(false);
-    }
-  };
-
-  const uploadDocument = async (uid: string): Promise<string | null> => {
-    if (!docUri) return null;
-    try {
-      const base64Data = await FileSystem.readAsStringAsync(docUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      if (!base64Data?.length) {
-        Alert.alert('Upload failed', 'Could not read the selected file.');
-        return null;
-      }
-      const mime = docMime?.trim() || 'image/jpeg';
-      const ext = mime.includes('png') ? 'png' : mime.includes('pdf') ? 'pdf' : 'jpg';
-      const path = `therapist-docs/${uid}/${Date.now()}.${ext}`;
-      const uploadMedia = httpsCallable<{ base64: string; contentType: string; path: string }, { path: string }>(
-        functions,
-        'uploadMedia'
-      );
-      const { data } = await uploadMedia({ base64: base64Data, contentType: mime, path });
-      if (!data?.path?.trim()) return null;
-      const url = await getDownloadURL(ref(storage, data.path.trim()));
-      return url || null;
-    } catch (e: any) {
-      console.error('uploadDocument error', e);
-      const isNotFound = e?.code === 'functions/not-found' || e?.message?.includes('not-found');
-      const msg = isNotFound
-        ? 'Upload server not deployed. Ask the team to deploy the upload function.'
-        : e?.message || 'Something went wrong while uploading.';
-      Alert.alert('Upload failed', msg);
-      return null;
-    }
-  };
-
   const handleCompleteSignup = async () => {
     if (!email || !requestId) {
       Alert.alert('Invalid link', 'Missing invite info. Ask the team to resend your invite.');
@@ -107,21 +47,11 @@ export default function TherapistSignupScreen() {
       Alert.alert('Weak password', 'Password should be at least 6 characters.');
       return;
     }
-    if (!docUri) {
-      Alert.alert('Missing document', 'Please upload at least one verification document.');
-      return;
-    }
 
     setLoading(true);
     try {
       const { user } = await createUserWithEmailAndPassword(auth, email.trim(), password);
       const uid = user.uid;
-
-      const docUrl = await uploadDocument(uid);
-      if (!docUrl) {
-        setLoading(false);
-        return;
-      }
 
       await setDoc(
         doc(db, 'users', uid),
@@ -142,35 +72,14 @@ export default function TherapistSignupScreen() {
         { merge: true }
       );
 
-      // Create a public therapist profile doc (readable by users). Admin later sets verified=true.
-      await setDoc(
-        doc(db, 'therapist_profiles', uid),
-        {
-          verified: false,
-          display_name: therapistNameFromInvite?.trim() || null,
-          specialization: therapistSpecFromInvite?.trim() || null,
-          languages: [],
-          bio: null,
-          timezone: null,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        },
-        { merge: true }
-      );
-
+      // Link request to uid (documents uploaded next on verification screen)
       await updateDoc(doc(db, 'therapist_onboarding_requests', requestId), {
-        status: 'completed',
         completed_uid: uid,
         completed_at: new Date().toISOString(),
-        document_url: docUrl,
       });
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert(
-        'Thanks!',
-        'We received your details. Our team will review your documents and enable therapist access.'
-      );
-      router.replace('/(tabs)');
+      router.replace('/therapist/verification' as any);
     } catch (err: any) {
       console.error('Therapist signup error', err);
       if (err?.code === 'auth/email-already-in-use') {
@@ -188,6 +97,7 @@ export default function TherapistSignupScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#ec4899' }}>
+      <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -195,7 +105,7 @@ export default function TherapistSignupScreen() {
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>Therapist onboarding</Text>
           <Text style={styles.subtitle}>
-            Create your login and upload at least one document that proves you&apos;re a licensed therapist.
+            Step 1/2: Create your login. You’ll upload documents next.
           </Text>
 
           <View style={styles.infoCard}>
@@ -239,34 +149,6 @@ export default function TherapistSignupScreen() {
                 style={styles.input}
               />
             </View>
-            <Text style={styles.label}>Verification document</Text>
-            {docUri ? (
-              <View style={styles.previewRow}>
-                <Image
-                  source={{ uri: docUri }}
-                  style={{ width: 64, height: 64, borderRadius: 12, backgroundColor: '#e5e7eb' }}
-                />
-                <Pressable
-                  onPress={pickDocument}
-                  disabled={picking}
-                  style={styles.changeButton}
-                >
-                  <Text style={styles.changeButtonText}>
-                    {picking ? 'Picking...' : 'Change document'}
-                  </Text>
-                </Pressable>
-              </View>
-            ) : (
-              <Pressable
-                onPress={pickDocument}
-                disabled={picking}
-                style={styles.uploadButton}
-              >
-                <Text style={styles.uploadButtonText}>
-                  {picking ? 'Opening library...' : 'Upload license / degree'}
-                </Text>
-              </Pressable>
-            )}
           </View>
           <Pressable
             onPress={handleCompleteSignup}
@@ -276,16 +158,8 @@ export default function TherapistSignupScreen() {
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.submitText}>Finish onboarding</Text>
+              <Text style={styles.submitText}>Continue</Text>
             )}
-          </Pressable>
-          <Pressable
-            onPress={() => router.back()}
-            style={{ marginTop: 12, paddingVertical: 8 }}
-          >
-            <Text style={{ color: '#f9fafb', textAlign: 'center', textDecorationLine: 'underline' }}>
-              Go back
-            </Text>
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>

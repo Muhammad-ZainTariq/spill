@@ -3,22 +3,22 @@ import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { signInWithEmailAndPassword } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
 import { useCallback, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
+  ScrollView,
   StatusBar,
   Text,
   TextInput,
   View,
-  Modal,
-  ScrollView,
 } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from '../lib/firebase';
 
 export default function Login() {
@@ -32,12 +32,29 @@ export default function Login() {
   const [therapistName, setTherapistName] = useState('');
   const [therapistEmail, setTherapistEmail] = useState('');
   const [therapistSpecialization, setTherapistSpecialization] = useState('');
+  const [showSpecializationPicker, setShowSpecializationPicker] = useState(false);
   const [therapistNote, setTherapistNote] = useState('');
   const [therapistSubmitting, setTherapistSubmitting] = useState(false);
   const [therapistCode, setTherapistCode] = useState('');
   const [verifyingCode, setVerifyingCode] = useState(false);
   const logoScale = useSharedValue(1);
   const router = useRouter();
+
+  const SPECIALIZATION_OPTIONS = [
+    'CBT',
+    'Counselling',
+    'Psychotherapy',
+    'Trauma / PTSD',
+    'Anxiety',
+    'Depression',
+    'Couples / Relationship',
+    'Family therapy',
+    'Addiction',
+    'Eating disorders',
+    'Youth / Teens',
+    'Grief',
+    'Other',
+  ];
 
   const handleLogin = useCallback(
     async () => {
@@ -347,15 +364,25 @@ export default function Login() {
                 </View>
                 <View style={{ marginBottom: 12 }}>
                   <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Specialization (optional)</Text>
-                  <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
-                    <TextInput
-                      style={{ paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111827' }}
-                      value={therapistSpecialization}
-                      onChangeText={setTherapistSpecialization}
-                      placeholder="e.g. CBT, couples therapy"
-                      placeholderTextColor="#9CA3AF"
-                    />
-                  </View>
+                  <Pressable
+                    onPress={() => setShowSpecializationPicker(true)}
+                    style={{
+                      backgroundColor: '#F3F4F6',
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: '#E5E7EB',
+                      paddingHorizontal: 12,
+                      paddingVertical: 12,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Text style={{ fontSize: 15, color: therapistSpecialization ? '#111827' : '#9CA3AF', fontWeight: '600' }}>
+                      {therapistSpecialization || 'Select specialization'}
+                    </Text>
+                    <Feather name="chevron-down" size={18} color="#6b7280" />
+                  </Pressable>
                 </View>
                 <View style={{ marginBottom: 16 }}>
                   <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Anything else (optional)</Text>
@@ -451,6 +478,47 @@ export default function Login() {
                   </Text>
                 </Pressable>
               </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Specialization picker */}
+        <Modal
+          visible={showSpecializationPicker}
+          animationType="fade"
+          transparent
+          onRequestClose={() => setShowSpecializationPicker(false)}
+        >
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', paddingHorizontal: 16 }}>
+            <View style={{ backgroundColor: '#fff', borderRadius: 18, padding: 16, maxHeight: '70%' }}>
+              <Text style={{ fontSize: 16, fontWeight: '900', color: '#111827', marginBottom: 10, textAlign: 'center' }}>
+                Select specialization
+              </Text>
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {SPECIALIZATION_OPTIONS.map((opt) => (
+                  <Pressable
+                    key={opt}
+                    onPress={() => {
+                      setTherapistSpecialization(opt === 'Other' ? 'Other' : opt);
+                      setShowSpecializationPicker(false);
+                    }}
+                    style={{
+                      paddingVertical: 12,
+                      paddingHorizontal: 12,
+                      borderRadius: 12,
+                      backgroundColor: therapistSpecialization === opt ? '#fdf2f8' : 'transparent',
+                      borderWidth: 1,
+                      borderColor: therapistSpecialization === opt ? '#f9a8d4' : 'transparent',
+                      marginBottom: 8,
+                    }}
+                  >
+                    <Text style={{ fontSize: 14, fontWeight: '800', color: '#111827' }}>{opt}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+              <Pressable onPress={() => setShowSpecializationPicker(false)} style={{ paddingVertical: 10, alignItems: 'center' }}>
+                <Text style={{ color: '#6b7280', fontWeight: '700' }}>Close</Text>
+              </Pressable>
             </View>
           </View>
         </Modal>
