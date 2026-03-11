@@ -53,6 +53,10 @@ export interface Post {
   content: string;
   category?: string;
   media_url?: string;
+  /** YouTube video URL (e.g. https://youtube.com/watch?v=xxx). When set, feed shows thumbnail + inline playback. */
+  youtube_url?: string | null;
+  /** Extracted YouTube video ID for quick display. */
+  youtube_id?: string | null;
   created_at: string;
   user_id: string;
   is_vent?: boolean;

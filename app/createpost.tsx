@@ -1,3 +1,4 @@
+import { extractYoutubeId } from '@/app/therapist/marketplace';
 import { auth, db, functions, getDownloadURL, ref, storage } from '@/lib/firebase';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
@@ -15,6 +16,7 @@ export default function CreatePost() {
   const [category, setCategory] = useState<'General' | 'Anxiety Share' | 'Depression Vent'>('General');
   const [mediaUrl, setMediaUrl] = useState('');
   const [localMedia, setLocalMedia] = useState<{ uri: string; type: 'image' | 'video'; mimeType: string; fileName?: string } | null>(null);
+  const [youtubeUrl, setYoutubeUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [isVentMode, setIsVentMode] = useState(false);
   const [ventDurationMinutes, setVentDurationMinutes] = useState(24 * 60); // Store in minutes, default 24h
@@ -29,7 +31,13 @@ export default function CreatePost() {
     })();
   }, []);
 
+  const addYoutubeUrl = (text: string) => {
+    setYoutubeUrl(text);
+    if (text.trim()) setLocalMedia(null);
+  };
+
   const pickMedia = async () => {
+    if (youtubeUrl.trim()) setYoutubeUrl('');
     try {
       // Ensure permissions are granted before opening
       const perm = await ImagePicker.getMediaLibraryPermissionsAsync();
@@ -108,6 +116,13 @@ export default function CreatePost() {
         return;
       }
 
+      const youtubeId = youtubeUrl.trim() ? extractYoutubeId(youtubeUrl.trim()) : null;
+      if (youtubeUrl.trim() && !youtubeId) {
+        Alert.alert('Invalid YouTube link', 'Please paste a valid YouTube video URL (e.g. youtube.com/watch?v=... or youtu.be/...).');
+        setLoading(false);
+        return;
+      }
+
       const uploadedUrl = await uploadMediaIfNeeded(user.uid);
       if (localMedia && uploadedUrl == null) {
         setLoading(false);
@@ -121,7 +136,9 @@ export default function CreatePost() {
         user_id: user.uid,
         content: content.trim(),
         category,
-        media_url: uploadedUrl || null,
+        media_url: youtubeId ? null : (uploadedUrl || null),
+        youtube_url: youtubeId ? youtubeUrl.trim() : null,
+        youtube_id: youtubeId || null,
         is_vent: isVentMode,
         expires_at: expiresAt,
         created_at: new Date().toISOString(),
@@ -271,6 +288,17 @@ export default function CreatePost() {
           </View>
 
           <Text style={[styles.label, { marginTop: 16 }]}>Media (optional)</Text>
+          <Text style={[styles.label, { marginTop: 8, fontSize: 12, color: '#6b7280' }]}>Add a YouTube video link</Text>
+          <TextInput
+            value={youtubeUrl}
+            onChangeText={addYoutubeUrl}
+            placeholder="https://youtube.com/watch?v=... or youtu.be/..."
+            placeholderTextColor="#9ca3af"
+            style={[styles.input, { marginTop: 4 }]}
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!loading}
+          />
           {localMedia ? (
             <View style={styles.previewBox}>
               {localMedia.type === 'image' ? (

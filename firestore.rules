@@ -263,11 +263,9 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Therapist resources (books, articles, courses) – admin adds, therapists read
+    // Therapist resources (videos, books, articles) – admin adds, all authenticated users can read
     match /therapist_resources/{resourceId} {
-      allow read: if request.auth != null
-        && (isAdmin()
-            || exists(/databases/$(database)/documents/therapist_profiles/$(request.auth.uid)));
+      allow read: if request.auth != null;
       allow create, update, delete: if isAdmin();
     }
   }

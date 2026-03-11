@@ -46,7 +46,7 @@ const CAT_LABELS: Record<string, string> = {
   legal: 'Legal / Ethics',
 };
 
-export default function TherapistResourcesScreen() {
+export default function ResourcesScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [resources, setResources] = useState<TherapistResource[]>([]);
@@ -96,7 +96,7 @@ export default function TherapistResourcesScreen() {
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>Learning resources</Text>
-          <Text style={styles.subtitle}>Videos, books & articles to deepen your practice</Text>
+          <Text style={styles.subtitle}>Videos, books & articles for your wellbeing</Text>
         </View>
         <Pressable onPress={load} style={styles.headerBtn} hitSlop={10}>
           <Feather name="refresh-cw" size={18} color={tokens.colors.text} />
@@ -204,7 +204,7 @@ export default function TherapistResourcesScreen() {
               <Feather name="book-open" size={48} color={tokens.colors.textMuted} />
               <Text style={styles.emptyTitle}>No resources yet</Text>
               <Text style={styles.muted}>
-                {filter ? 'No resources in this category.' : 'Your admin will add videos, books and articles here.'}
+                {filter ? 'No resources in this category.' : 'Videos, books and articles will appear here.'}
               </Text>
             </View>
           }

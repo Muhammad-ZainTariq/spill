@@ -639,6 +639,12 @@ export default function ConnectionsScreen() {
                 )}
               </Pressable>
             ))}
+            <Pressable
+              style={styles.segmentChip}
+              onPress={() => router.push('/resources' as any)}
+            >
+              <Text style={styles.segmentText}>Resources</Text>
+            </Pressable>
           </ScrollView>
         </View>
 

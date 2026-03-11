@@ -1,4 +1,5 @@
-                                                        import { Feather } from '@expo/vector-icons';
+                                                        import { extractYoutubeId, youtubeThumbnailUrl } from '@/app/therapist/marketplace';
+import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
@@ -8,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Dimensions,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -19,6 +21,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { WebView } from 'react-native-webview';
 import Reanimated, {
   useAnimatedStyle,
   useSharedValue,
@@ -285,6 +288,7 @@ export default function HomeScreen() {
   const [aiResponses, setAiResponses] = useState<Record<string, string>>({});
   const [isPremium, setIsPremium] = useState(false);
   const [commentSheetPostId, setCommentSheetPostId] = useState<string | null>(null);
+  const [playingYoutube, setPlayingYoutube] = useState<{ youtubeId: string; title?: string } | null>(null);
   const [sheetComments, setSheetComments] = useState<SheetComment[]>([]);
   const [sheetCommentsLoading, setSheetCommentsLoading] = useState(false);
   const [newCommentText, setNewCommentText] = useState('');
