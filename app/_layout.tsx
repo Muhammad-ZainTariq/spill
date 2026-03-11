@@ -141,7 +141,7 @@ export default function RootLayout() {
           name="notifications" 
           options={{ 
             headerShown: true,
-            headerBackTitle: '',
+            headerBackTitle: 'Back',
             headerTintColor: '#ec4899',
             headerTitleStyle: {
               fontWeight: 'bold',

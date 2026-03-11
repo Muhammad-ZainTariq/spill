@@ -11,6 +11,7 @@ import {
   Animated,
   Dimensions,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -21,7 +22,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { WebView } from 'react-native-webview';
 import Reanimated, {
   Easing,
   useAnimatedStyle,
@@ -290,7 +290,6 @@ export default function HomeScreen() {
   const [aiResponses, setAiResponses] = useState<Record<string, string>>({});
   const [isPremium, setIsPremium] = useState(false);
   const [commentSheetPostId, setCommentSheetPostId] = useState<string | null>(null);
-  const [playingYoutubePostId, setPlayingYoutubePostId] = useState<string | null>(null);
   const [showStopTouching, setShowStopTouching] = useState(false);
   const logoScale = useSharedValue(1);
   const [sheetComments, setSheetComments] = useState<SheetComment[]>([]);
@@ -531,6 +530,7 @@ export default function HomeScreen() {
                   withTiming(1.0, { duration: 700, easing: Easing.inOut(Easing.cubic) })
                 );
                 setTimeout(() => setShowStopTouching(false), 1000);
+                onRefresh();
               }}
               hitSlop={10}
               style={styles.headerLogoPressable}
@@ -829,51 +829,25 @@ export default function HomeScreen() {
                   </View>
                 )}
               </Pressable>
-              {/* YouTube video – tap to play inline on same screen */}
+              {/* YouTube video – tap to open in YouTube app */}
               {(post.youtube_id || (post.youtube_url && extractYoutubeId(post.youtube_url))) && (
-                <View style={styles.youtubeWrap}>
-                  {playingYoutubePostId === post.id ? (
-                    <View style={styles.youtubeInline}>
-                      <Pressable
-                        style={styles.youtubeCloseInline}
-                        onPress={() => {
-                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          setPlayingYoutubePostId(null);
-                        }}
-                      >
-                        <Feather name="x" size={20} color="#fff" />
-                      </Pressable>
-                      <WebView
-                        source={{
-                          uri: `https://www.youtube.com/embed/${post.youtube_id || extractYoutubeId(post.youtube_url)}?autoplay=1`,
-                        }}
-                        style={styles.youtubeWebViewInline}
-                        allowsFullscreenVideo
-                        allowsInlineMediaPlayback
-                        mediaPlaybackRequiresUserAction={false}
-                        javaScriptEnabled
-                        domStorageEnabled
-                      />
-                    </View>
-                  ) : (
-                    <Pressable
-                      style={styles.youtubeThumbWrap}
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setPlayingYoutubePostId(post.id);
-                      }}
-                    >
-                      <Image
-                        source={{ uri: youtubeThumbnailUrl(post.youtube_id || extractYoutubeId(post.youtube_url)!, false) }}
-                        style={styles.youtubeThumb}
-                        contentFit="cover"
-                      />
-                      <View style={styles.youtubePlayOverlay}>
-                        <Feather name="play-circle" size={56} color="rgba(255,255,255,0.95)" />
-                      </View>
-                    </Pressable>
-                  )}
-                </View>
+                <Pressable
+                  style={styles.youtubeThumbWrap}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    const url = post.youtube_url || `https://www.youtube.com/watch?v=${post.youtube_id || extractYoutubeId(post.youtube_url)}`;
+                    Linking.openURL(url);
+                  }}
+                >
+                  <Image
+                    source={{ uri: youtubeThumbnailUrl(post.youtube_id || extractYoutubeId(post.youtube_url)!, false) }}
+                    style={styles.youtubeThumb}
+                    contentFit="cover"
+                  />
+                  <View style={styles.youtubePlayOverlay}>
+                    <Feather name="play-circle" size={56} color="rgba(255,255,255,0.95)" />
+                  </View>
+                </Pressable>
               )}
 
               {/* Post actions: minimal, fast */}
@@ -1073,15 +1047,15 @@ const styles = StyleSheet.create({
   headerLogoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 0,
   },
   headerLogo: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 10,
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '800',
     color: '#ec4899',
     letterSpacing: -0.5,
@@ -1493,15 +1467,13 @@ const styles = StyleSheet.create({
     height: 300,
     borderRadius: 8,
   },
-  youtubeWrap: {
+  youtubeThumbWrap: {
     marginTop: -8,
     marginBottom: 12,
     borderRadius: 8,
     overflow: 'hidden',
-    backgroundColor: '#000',
-  },
-  youtubeThumbWrap: {
     position: 'relative',
+    backgroundColor: '#000',
   },
   youtubeThumb: {
     width: '100%',
@@ -1513,29 +1485,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.3)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  youtubeInline: {
-    position: 'relative',
-    width: '100%',
-    height: Math.round(Dimensions.get('window').width * (9 / 16)),
-    backgroundColor: '#000',
-  },
-  youtubeCloseInline: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    zIndex: 10,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  youtubeWebViewInline: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: '#000',
   },
   postActions: {
     flexDirection: 'row',
