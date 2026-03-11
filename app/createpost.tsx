@@ -1,4 +1,5 @@
 import { extractYoutubeId } from '@/app/therapist/marketplace';
+import { Feather } from '@expo/vector-icons';
 import { auth, db, functions, getDownloadURL, ref, storage } from '@/lib/firebase';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
@@ -10,6 +11,16 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { checkPremiumStatus } from './functions';
 
+async function fetchYoutubeTitle(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(url)}`);
+    const data = await res.json();
+    return data?.title ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export default function CreatePost() {
   const router = useRouter();
   const [content, setContent] = useState('');
@@ -17,6 +28,8 @@ export default function CreatePost() {
   const [mediaUrl, setMediaUrl] = useState('');
   const [localMedia, setLocalMedia] = useState<{ uri: string; type: 'image' | 'video'; mimeType: string; fileName?: string } | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [youtubeTitle, setYoutubeTitle] = useState<string | null>(null);
+  const [fetchingTitle, setFetchingTitle] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isVentMode, setIsVentMode] = useState(false);
   const [ventDurationMinutes, setVentDurationMinutes] = useState(24 * 60); // Store in minutes, default 24h
@@ -33,8 +46,26 @@ export default function CreatePost() {
 
   const addYoutubeUrl = (text: string) => {
     setYoutubeUrl(text);
+    setYoutubeTitle(null);
     if (text.trim()) setLocalMedia(null);
   };
+
+  useEffect(() => {
+    const url = youtubeUrl.trim();
+    const id = extractYoutubeId(url);
+    if (!id) return;
+    let cancelled = false;
+    setFetchingTitle(true);
+    fetchYoutubeTitle(url)
+      .then((title) => {
+        if (!cancelled && title) {
+          setYoutubeTitle(title);
+          setContent((prev) => (prev.trim() ? prev : title));
+        }
+      })
+      .finally(() => setFetchingTitle(false));
+    return () => { cancelled = true; };
+  }, [youtubeUrl]);
 
   const pickMedia = async () => {
     if (youtubeUrl.trim()) setYoutubeUrl('');
@@ -99,12 +130,19 @@ export default function CreatePost() {
   };
 
   const handleSubmit = async () => {
-    if (!content.trim()) {
-      Alert.alert('Write something', 'Post content cannot be empty.');
+    const youtubeId = youtubeUrl.trim() ? extractYoutubeId(youtubeUrl.trim()) : null;
+    const effectiveContent = content.trim() || (youtubeTitle || (youtubeId ? 'YouTube video' : ''));
+
+    if (!effectiveContent && !youtubeId) {
+      Alert.alert('Add something', 'Write something or add a YouTube video link.');
       return;
     }
     if (content.trim().length > 1000) {
       Alert.alert('Too long', 'Max 1000 characters.');
+      return;
+    }
+    if (youtubeUrl.trim() && !youtubeId) {
+      Alert.alert('Invalid YouTube link', 'Please paste a valid YouTube video URL (e.g. youtube.com/watch?v=... or youtu.be/...).');
       return;
     }
 
@@ -113,13 +151,6 @@ export default function CreatePost() {
       const user = auth.currentUser;
       if (!user) {
         Alert.alert('Not logged in', 'Please log in again.');
-        return;
-      }
-
-      const youtubeId = youtubeUrl.trim() ? extractYoutubeId(youtubeUrl.trim()) : null;
-      if (youtubeUrl.trim() && !youtubeId) {
-        Alert.alert('Invalid YouTube link', 'Please paste a valid YouTube video URL (e.g. youtube.com/watch?v=... or youtu.be/...).');
-        setLoading(false);
         return;
       }
 
@@ -134,7 +165,7 @@ export default function CreatePost() {
 
       await addDoc(collection(db, 'posts'), {
         user_id: user.uid,
-        content: content.trim(),
+        content: effectiveContent,
         category,
         media_url: youtubeId ? null : (uploadedUrl || null),
         youtube_url: youtubeId ? youtubeUrl.trim() : null,
@@ -287,18 +318,30 @@ export default function CreatePost() {
             ))}
           </View>
 
-          <Text style={[styles.label, { marginTop: 16 }]}>Media (optional)</Text>
-          <Text style={[styles.label, { marginTop: 8, fontSize: 12, color: '#6b7280' }]}>Add a YouTube video link</Text>
-          <TextInput
-            value={youtubeUrl}
-            onChangeText={addYoutubeUrl}
-            placeholder="https://youtube.com/watch?v=... or youtu.be/..."
-            placeholderTextColor="#9ca3af"
-            style={[styles.input, { marginTop: 4 }]}
-            autoCapitalize="none"
-            autoCorrect={false}
-            editable={!loading}
-          />
+          <Text style={[styles.label, { marginTop: 16 }]}>Add a YouTube video (optional)</Text>
+          <View style={styles.youtubeCard}>
+            <View style={styles.youtubeInputRow}>
+              <View style={styles.youtubeIconWrap}>
+                <Feather name="play-circle" size={22} color="#ff0000" />
+              </View>
+              <TextInput
+                value={youtubeUrl}
+                onChangeText={addYoutubeUrl}
+                placeholder="Paste YouTube link..."
+                placeholderTextColor="#9ca3af"
+                style={styles.youtubeInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!loading}
+              />
+            </View>
+            {fetchingTitle && (
+              <Text style={styles.youtubeStatus}>Fetching video title...</Text>
+            )}
+            {youtubeTitle && !fetchingTitle && (
+              <Text style={styles.youtubeTitle} numberOfLines={2}>📺 {youtubeTitle}</Text>
+            )}
+          </View>
           {localMedia ? (
             <View style={styles.previewBox}>
               {localMedia.type === 'image' ? (
@@ -386,6 +429,47 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 16,
     color: '#111827',
+  },
+  youtubeCard: {
+    marginTop: 8,
+    backgroundColor: '#fef2f2',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    padding: 14,
+    gap: 10,
+  },
+  youtubeInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    overflow: 'hidden',
+  },
+  youtubeIconWrap: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#fef2f2',
+  },
+  youtubeInput: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: '#111827',
+  },
+  youtubeStatus: {
+    fontSize: 13,
+    color: '#9ca3af',
+    fontStyle: 'italic',
+  },
+  youtubeTitle: {
+    fontSize: 14,
+    color: '#374151',
+    fontWeight: '600',
+    lineHeight: 20,
   },
   mediaPicker: {
     height: 48,

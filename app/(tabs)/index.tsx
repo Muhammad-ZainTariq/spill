@@ -290,7 +290,7 @@ export default function HomeScreen() {
   const [aiResponses, setAiResponses] = useState<Record<string, string>>({});
   const [isPremium, setIsPremium] = useState(false);
   const [commentSheetPostId, setCommentSheetPostId] = useState<string | null>(null);
-  const [playingYoutube, setPlayingYoutube] = useState<{ youtubeId: string; title?: string } | null>(null);
+  const [playingYoutubePostId, setPlayingYoutubePostId] = useState<string | null>(null);
   const [showStopTouching, setShowStopTouching] = useState(false);
   const logoScale = useSharedValue(1);
   const [sheetComments, setSheetComments] = useState<SheetComment[]>([]);
@@ -536,12 +536,12 @@ export default function HomeScreen() {
               style={styles.headerLogoPressable}
             >
               <Reanimated.View style={[logoAnimatedStyle, styles.headerLogoRow]}>
+                <Text style={styles.headerTitle}>Spill</Text>
                 <Image
                   source={showStopTouching ? require('@/assets/images/stop-touching.png') : require('@/assets/images/logo12.png')}
                   style={styles.headerLogo}
                   contentFit="contain"
                 />
-                <Text style={styles.headerTitle}>Spill</Text>
               </Reanimated.View>
             </Pressable>
           </View>
@@ -697,11 +697,7 @@ export default function HomeScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor="transparent"
-            titleColor="transparent"
-            colors={["transparent"]}
-            progressBackgroundColor="transparent"
-            title=""
+            tintColor="#ec4899"
           />
         }
         onScroll={onScroll}
@@ -833,25 +829,51 @@ export default function HomeScreen() {
                   </View>
                 )}
               </Pressable>
-              {/* YouTube video – tap to play inline (separate from post content) */}
+              {/* YouTube video – tap to play inline on same screen */}
               {(post.youtube_id || (post.youtube_url && extractYoutubeId(post.youtube_url))) && (
-                <Pressable
-                  style={styles.youtubeThumbWrap}
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    const yid = post.youtube_id || extractYoutubeId(post.youtube_url);
-                    if (yid) setPlayingYoutube({ youtubeId: yid, title: post.content?.slice(0, 60) });
-                  }}
-                >
-                  <Image
-                    source={{ uri: youtubeThumbnailUrl(post.youtube_id || extractYoutubeId(post.youtube_url)!, false) }}
-                    style={styles.youtubeThumb}
-                    contentFit="cover"
-                  />
-                  <View style={styles.youtubePlayOverlay}>
-                    <Feather name="play-circle" size={56} color="rgba(255,255,255,0.95)" />
-                  </View>
-                </Pressable>
+                <View style={styles.youtubeWrap}>
+                  {playingYoutubePostId === post.id ? (
+                    <View style={styles.youtubeInline}>
+                      <Pressable
+                        style={styles.youtubeCloseInline}
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          setPlayingYoutubePostId(null);
+                        }}
+                      >
+                        <Feather name="x" size={20} color="#fff" />
+                      </Pressable>
+                      <WebView
+                        source={{
+                          uri: `https://www.youtube.com/embed/${post.youtube_id || extractYoutubeId(post.youtube_url)}?autoplay=1`,
+                        }}
+                        style={styles.youtubeWebViewInline}
+                        allowsFullscreenVideo
+                        allowsInlineMediaPlayback
+                        mediaPlaybackRequiresUserAction={false}
+                        javaScriptEnabled
+                        domStorageEnabled
+                      />
+                    </View>
+                  ) : (
+                    <Pressable
+                      style={styles.youtubeThumbWrap}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setPlayingYoutubePostId(post.id);
+                      }}
+                    >
+                      <Image
+                        source={{ uri: youtubeThumbnailUrl(post.youtube_id || extractYoutubeId(post.youtube_url)!, false) }}
+                        style={styles.youtubeThumb}
+                        contentFit="cover"
+                      />
+                      <View style={styles.youtubePlayOverlay}>
+                        <Feather name="play-circle" size={56} color="rgba(255,255,255,0.95)" />
+                      </View>
+                    </Pressable>
+                  )}
+                </View>
               )}
 
               {/* Post actions: minimal, fast */}
@@ -989,39 +1011,6 @@ export default function HomeScreen() {
             )}
           </Pressable>
         </Pressable>
-      </Modal>
-
-      {/* YouTube video player modal */}
-      <Modal
-        visible={!!playingYoutube}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setPlayingYoutube(null)}
-      >
-        <View style={styles.youtubeModal}>
-          <View style={[styles.youtubeModalHeader, { paddingTop: insets.top + 8 }]}>
-            <Pressable onPress={() => setPlayingYoutube(null)} style={styles.youtubeCloseBtn}>
-              <Feather name="x" size={24} color="#111827" />
-            </Pressable>
-            <Text style={styles.youtubeModalTitle} numberOfLines={1}>
-              {playingYoutube?.title || 'Video'}
-            </Text>
-            <View style={{ width: 44 }} />
-          </View>
-          {playingYoutube && (
-            <WebView
-              source={{
-                uri: `https://www.youtube.com/embed/${playingYoutube.youtubeId}?autoplay=1`,
-              }}
-              style={styles.youtubeWebView}
-              allowsFullscreenVideo
-              allowsInlineMediaPlayback
-              mediaPlaybackRequiresUserAction={false}
-              javaScriptEnabled
-              domStorageEnabled
-            />
-          )}
-        </View>
       </Modal>
 
       {/* Floating Action Button */}
@@ -1504,13 +1493,15 @@ const styles = StyleSheet.create({
     height: 300,
     borderRadius: 8,
   },
-  youtubeThumbWrap: {
+  youtubeWrap: {
     marginTop: -8,
     marginBottom: 12,
     borderRadius: 8,
     overflow: 'hidden',
-    position: 'relative',
     backgroundColor: '#000',
+  },
+  youtubeThumbWrap: {
+    position: 'relative',
   },
   youtubeThumb: {
     width: '100%',
@@ -1523,31 +1514,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  youtubeModal: {
-    flex: 1,
+  youtubeInline: {
+    position: 'relative',
+    width: '100%',
+    height: Math.round(Dimensions.get('window').width * (9 / 16)),
     backgroundColor: '#000',
   },
-  youtubeModalHeader: {
-    flexDirection: 'row',
+  youtubeCloseInline: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0,0,0,0.6)',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    justifyContent: 'center',
   },
-  youtubeCloseBtn: { padding: 10, marginLeft: -10 },
-  youtubeModalTitle: {
-    flex: 1,
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#111827',
-    marginLeft: 8,
-  },
-  youtubeWebView: {
-    flex: 1,
+  youtubeWebViewInline: {
+    width: '100%',
+    height: '100%',
     backgroundColor: '#000',
-    minHeight: Math.round(Dimensions.get('window').width * (9 / 16)),
   },
   postActions: {
     flexDirection: 'row',
