@@ -1,3 +1,5 @@
+import { listOpenSlotsForTherapist, listTherapistProfiles, TherapistProfile } from '@/app/therapist/marketplace';
+import TherapistList from '@/components/TherapistList';
 import { auth, db } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -6,38 +8,36 @@ import { useRouter } from 'expo-router';
 import { doc, getDoc } from 'firebase/firestore';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-import { listOpenSlotsForTherapist, listTherapistProfiles, TherapistProfile } from '@/app/therapist/marketplace';
 import {
-    acceptMessageRequest,
-    CHALLENGE_CATEGORIES,
-    declineMessageRequest,
-    fetchMessages,
-    formatTimeAgo,
-    blockUser,
-    getConversations,
-    getCurrentUserRole,
-    getGameLeaderboard,
-    getGroups,
-    getOfficialChallenges,
-    getOrCreateConversation,
-    getPendingRequests,
-    Group,
-    reportDmUser,
-    sendMessage
+  acceptMessageRequest,
+  blockUser,
+  CHALLENGE_CATEGORIES,
+  declineMessageRequest,
+  fetchMessages,
+  formatTimeAgo,
+  getConversations,
+  getCurrentUserRole,
+  getGameLeaderboard,
+  getGroups,
+  getOfficialChallenges,
+  getOrCreateConversation,
+  getPendingRequests,
+  Group,
+  reportDmUser,
+  sendMessage,
 } from '../functions';
 
 interface Message {
@@ -60,48 +60,34 @@ export default function ConnectionsScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const flatListRef = useRef<FlatList>(null);
-  const messagesChannelRef = useRef<any | null>(null);
-
   const [activeTab, setActiveTab] = useState<TabKey>('messages');
   const [searchQuery, setSearchQuery] = useState('');
-
   const [conversations, setConversations] = useState<any[]>([]);
   const [loadingConversations, setLoadingConversations] = useState(true);
-
   const [groups, setGroups] = useState<Group[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [officialChallenges, setOfficialChallenges] = useState<any[]>([]);
   const [loadingOfficial, setLoadingOfficial] = useState(false);
   const [isAppAdmin, setIsAppAdmin] = useState(false);
   const [challengeCategoryFilter, setChallengeCategoryFilter] = useState<string>('All');
-
   const [requests, setRequests] = useState<any[]>([]);
   const [loadingRequests, setLoadingRequests] = useState(true);
-
   const [leaderboard, setLeaderboard] = useState<{ userId: string; displayName: string; totalWins: number; tictactoeWins: number; chessWins: number }[]>([]);
   const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
-
-  // Therapists list state (inline tab)
   const [therapists, setTherapists] = useState<(TherapistProfile & { nextSlotAt?: string | null; openSlots?: number })[]>([]);
   const [loadingTherapists, setLoadingTherapists] = useState(false);
-  // User search state
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-
-  // Settings modal state
   const [showSettings, setShowSettings] = useState(false);
   const [messagePreference, setMessagePreference] = useState<'direct' | 'requests' | 'none'>('requests');
   const [autoJoinGroups, setAutoJoinGroups] = useState(false);
   const [loadingSettings, setLoadingSettings] = useState(false);
-
-  // Chat view state
   const [selectedConversation, setSelectedConversation] = useState<any>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [sending, setSending] = useState(false);
   const [messageText, setMessageText] = useState('');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
-  // Hide tab bar when in chat
   useLayoutEffect(() => {
     navigation.setOptions({
       tabBarStyle: selectedConversation ? { display: 'none' } : undefined,
@@ -139,7 +125,7 @@ export default function ConnectionsScreen() {
       const role = await getCurrentUserRole();
       setIsAppAdmin(role.is_admin);
       setLoadingOfficial(true);
-      const list = await getOfficialChallenges(); // all users can browse and join; we filter by challengeCategoryFilter in UI
+      const list = await getOfficialChallenges();
       setOfficialChallenges(list);
     } catch (e) {
       setOfficialChallenges([]);
@@ -181,11 +167,7 @@ export default function ConnectionsScreen() {
         list.map(async (p) => {
           try {
             const slots = await listOpenSlotsForTherapist(p.id, 10);
-            return {
-              ...p,
-              openSlots: slots.length,
-              nextSlotAt: slots[0]?.start_at || null,
-            };
+            return { ...p, openSlots: slots.length, nextSlotAt: slots[0]?.start_at || null };
           } catch {
             return { ...p, openSlots: 0, nextSlotAt: null };
           }
@@ -209,9 +191,7 @@ export default function ConnectionsScreen() {
 
   const handleDeclineRequest = async (conversationId: string) => {
     const success = await declineMessageRequest(conversationId);
-    if (success) {
-      loadRequests();
-    }
+    if (success) loadRequests();
   };
 
   const loadSettings = async () => {
@@ -278,16 +258,10 @@ export default function ConnectionsScreen() {
       const conv = await getOrCreateConversation(userId);
       const profileSnap = await getDoc(doc(db, 'users', userId));
       const profile = profileSnap.exists() ? { id: userId, ...profileSnap.data() } : null;
-      setSelectedConversation({
-        ...conv,
-        otherUser: profile,
-      });
+      setSelectedConversation({ ...conv, otherUser: profile });
       setSearchQuery('');
       setSearchResults([]);
-      
-      setTimeout(() => {
-        loadConversations();
-      }, 500);
+      setTimeout(() => loadConversations(), 500);
     } catch (error: any) {
       console.error('Error starting conversation:', error);
       if (error.message === 'This user is not accepting messages') {
@@ -325,16 +299,12 @@ export default function ConnectionsScreen() {
 
   useEffect(() => {
     if (activeTab === 'therapists') loadTherapists();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
   useEffect(() => {
     const delayDebounce = setTimeout(() => {
-      if (activeTab === 'messages') {
-        searchUsers(searchQuery);
-      }
+      if (activeTab === 'messages') searchUsers(searchQuery);
     }, 300);
-
     return () => clearTimeout(delayDebounce);
   }, [searchQuery, activeTab]);
 
@@ -353,17 +323,14 @@ export default function ConnectionsScreen() {
     const content = messageText.trim();
     setMessageText('');
     setSending(true);
-
     try {
       const sentMessage = await sendMessage(selectedConversation.id, content);
-
       if (sentMessage && currentUserId) {
         setMessages((prev) => {
           if (prev.some((m) => m.id === sentMessage.id)) return prev;
           return [...prev, { ...sentMessage, sender: { id: currentUserId } }];
         });
       }
-
       loadMessages();
       loadConversations();
     } catch (error) {
@@ -377,125 +344,92 @@ export default function ConnectionsScreen() {
   const filteredConversations = conversations.filter((c) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
-    const name =
-      c.otherUser?.display_name ||
-      c.otherUser?.anonymous_username ||
-      'Anonymous';
+    const name = c.otherUser?.display_name || c.otherUser?.anonymous_username || 'Anonymous';
     return name.toLowerCase().includes(q);
   });
 
   const filteredGroups = groups.filter((g) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
-    return (
-      g.name.toLowerCase().includes(q) ||
-      g.description?.toLowerCase().includes(q)
-    );
+    return g.name.toLowerCase().includes(q) || g.description?.toLowerCase().includes(q);
   });
 
   const filteredRequests = requests.filter((r) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
-    const name =
-      r.otherUser?.display_name ||
-      r.otherUser?.anonymous_username ||
-      'Anonymous';
+    const name = r.otherUser?.display_name || r.otherUser?.anonymous_username || 'Anonymous';
     return name.toLowerCase().includes(q);
   });
 
-  const renderConversationItem = ({ item }: { item: any }) => {
-    const lastMsg =
-      item.last_message && Array.isArray(item.last_message) && item.last_message.length > 0
-        ? item.last_message[0]
-        : null;
-    const displayName =
-      item.otherUser?.display_name ||
-      item.otherUser?.anonymous_username ||
-      'Anonymous';
+  const filteredTherapists = therapists.filter((t) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    const name = String(t.display_name || '').toLowerCase();
+    const spec = String(t.specialization || '').toLowerCase();
+    const summary = String((t as any).ai_persona_summary || '').toLowerCase();
+    return name.includes(q) || spec.includes(q) || summary.includes(q);
+  });
 
+  const fmtWhenSlot = (iso?: string | null) => {
+    if (!iso) return 'No slots yet';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return 'No slots yet';
+    return d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
+  const renderConversationItem = ({ item }: { item: any }) => {
+    const lastMsg = item.last_message && Array.isArray(item.last_message) && item.last_message.length > 0 ? item.last_message[0] : null;
+    const displayName = item.otherUser?.display_name || item.otherUser?.anonymous_username || 'Anonymous';
     return (
-      <Pressable
-        style={styles.conversationItem}
-        onPress={() => setSelectedConversation(item)}
-      >
+      <Pressable style={styles.conversationItem} onPress={() => setSelectedConversation(item)}>
         {item.otherUser?.avatar_url ? (
-          <Image
-            source={{ uri: item.otherUser.avatar_url }}
-            style={styles.avatar}
-          />
+          <Image source={{ uri: item.otherUser.avatar_url }} style={styles.avatar} />
         ) : (
           <View style={styles.avatarFallback}>
-            <Text style={styles.avatarText}>
-              {displayName[0]?.toUpperCase() || '?'}
-            </Text>
+            <Text style={styles.avatarText}>{displayName[0]?.toUpperCase() || '?'}</Text>
           </View>
         )}
         <View style={styles.conversationInfo}>
-          <Text style={styles.conversationName} numberOfLines={1}>
-            {displayName}
-          </Text>
+          <Text style={styles.conversationName} numberOfLines={1}>{displayName}</Text>
           {lastMsg ? (
-            <Text style={styles.conversationPreview} numberOfLines={1}>
-              {lastMsg.content}
-            </Text>
+            <Text style={styles.conversationPreview} numberOfLines={1}>{lastMsg.content}</Text>
           ) : (
-            <Text style={styles.conversationPreview} numberOfLines={1}>
-              Start a conversation
-            </Text>
+            <Text style={styles.conversationPreview} numberOfLines={1}>Start a conversation</Text>
           )}
         </View>
         <Text style={styles.conversationTime}>
-          {lastMsg
-            ? formatTimeAgo(lastMsg.created_at)
-            : item.updated_at
-            ? formatTimeAgo(item.updated_at)
-            : ''}
+          {lastMsg ? formatTimeAgo(lastMsg.created_at) : item.updated_at ? formatTimeAgo(item.updated_at) : ''}
         </Text>
       </Pressable>
     );
   };
 
   const renderGroupItem = ({ item }: { item: Group }) => {
-    const creatorName =
-      item.creator?.display_name ||
-      item.creator?.anonymous_username ||
-      'Anonymous';
+    const creatorName = item.creator?.display_name || item.creator?.anonymous_username || 'Anonymous';
     const isChallenge = (item as any).is_challenge === true;
-
     return (
-      <Pressable
-        style={styles.groupItem}
-        onPress={() => router.push(`/group?groupId=${item.id}` as any)}
-      >
+      <Pressable style={styles.groupItem} onPress={() => router.push(`/group?groupId=${item.id}` as any)}>
         <View style={styles.groupInfo}>
           <View style={styles.groupNameRow}>
-            <Text style={styles.groupName} numberOfLines={1}>
-              {item.name}
-            </Text>
+            <Text style={styles.groupName} numberOfLines={1}>{item.name}</Text>
             {isChallenge && (
               <View style={styles.challengeBadge}>
                 <Text style={styles.challengeBadgeText}>Challenge</Text>
               </View>
             )}
           </View>
-          <Text style={styles.groupCreator} numberOfLines={1}>
-            by {creatorName}
-          </Text>
+          <Text style={styles.groupCreator} numberOfLines={1}>by {creatorName}</Text>
           {isChallenge && (item as any).challenge_goal ? (
             <Text style={styles.groupDescription} numberOfLines={1}>
               {(item as any).challenge_goal} • {(item as any).challenge_duration_days} days
             </Text>
           ) : item.description ? (
-            <Text style={styles.groupDescription} numberOfLines={2}>
-              {item.description}
-            </Text>
+            <Text style={styles.groupDescription} numberOfLines={2}>{item.description}</Text>
           ) : null}
         </View>
         {item.category && !isChallenge && (
           <View style={styles.groupCategoryBadge}>
-            <Text style={styles.groupCategoryText}>
-              {item.category.replace('_', ' ')}
-            </Text>
+            <Text style={styles.groupCategoryText}>{item.category.replace('_', ' ')}</Text>
           </View>
         )}
       </Pressable>
@@ -503,49 +437,30 @@ export default function ConnectionsScreen() {
   };
 
   const renderRequestItem = ({ item }: { item: any }) => {
-    const displayName =
-      item.otherUser?.display_name ||
-      item.otherUser?.anonymous_username ||
-      'Anonymous';
-
+    const displayName = item.otherUser?.display_name || item.otherUser?.anonymous_username || 'Anonymous';
     return (
       <View style={styles.requestItem}>
         <View style={styles.requestHeader}>
           {item.otherUser?.avatar_url ? (
-            <Image
-              source={{ uri: item.otherUser.avatar_url }}
-              style={styles.avatar}
-            />
+            <Image source={{ uri: item.otherUser.avatar_url }} style={styles.avatar} />
           ) : (
             <View style={styles.avatarFallback}>
-              <Text style={styles.avatarText}>
-                {displayName[0]?.toUpperCase() || '?'}
-              </Text>
+              <Text style={styles.avatarText}>{displayName[0]?.toUpperCase() || '?'}</Text>
             </View>
           )}
           <View style={styles.requestInfo}>
             <Text style={styles.requestName}>{displayName}</Text>
             {item.firstMessage && (
-              <Text style={styles.requestMessage} numberOfLines={2}>
-                {item.firstMessage.content}
-              </Text>
+              <Text style={styles.requestMessage} numberOfLines={2}>{item.firstMessage.content}</Text>
             )}
-            <Text style={styles.requestTime}>
-              {item.updated_at ? formatTimeAgo(item.updated_at) : ''}
-            </Text>
+            <Text style={styles.requestTime}>{item.updated_at ? formatTimeAgo(item.updated_at) : ''}</Text>
           </View>
         </View>
         <View style={styles.requestActions}>
-          <Pressable
-            style={styles.declineButton}
-            onPress={() => handleDeclineRequest(item.id)}
-          >
+          <Pressable style={styles.declineButton} onPress={() => handleDeclineRequest(item.id)}>
             <Text style={styles.declineButtonText}>Decline</Text>
           </Pressable>
-          <Pressable
-            style={styles.acceptButton}
-            onPress={() => handleAcceptRequest(item.id)}
-          >
+          <Pressable style={styles.acceptButton} onPress={() => handleAcceptRequest(item.id)}>
             <Text style={styles.acceptButtonText}>Accept</Text>
           </Pressable>
         </View>
@@ -555,12 +470,8 @@ export default function ConnectionsScreen() {
 
   const renderSearchResult = ({ item }: { item: any }) => {
     const displayName = item.display_name || item.anonymous_username || 'Anonymous';
-
     return (
-      <Pressable
-        style={styles.searchResultItem}
-        onPress={() => startConversation(item.id)}
-      >
+      <Pressable style={styles.searchResultItem} onPress={() => startConversation(item.id)}>
         {item.avatar_url ? (
           <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
         ) : (
@@ -579,13 +490,9 @@ export default function ConnectionsScreen() {
 
   const renderMessage = ({ item }: { item: Message }) => {
     const isMe = item.sender_id === currentUserId;
-    
     return (
       <View style={[styles.messageRow, isMe && styles.messageRowMe]}>
-        <View style={[
-          styles.messageBubble,
-          isMe ? styles.messageBubbleMe : styles.messageBubbleOther
-        ]}>
+        <View style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleOther]}>
           <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{item.content}</Text>
           <Text style={[styles.messageTime, isMe && styles.messageTimeMe]}>
             {item.created_at ? formatTimeAgo(item.created_at) : ''}
@@ -595,41 +502,12 @@ export default function ConnectionsScreen() {
     );
   };
 
-  const showMessages = activeTab === 'messages';
-  const showTherapists = activeTab === 'therapists';
-  const showGroups = activeTab === 'groups';
-  const showRequests = activeTab === 'requests';
-  const showLeaderboard = activeTab === 'leaderboard';
-
-  const filteredTherapists = therapists.filter((t) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    const name = String(t.display_name || '').toLowerCase();
-    const spec = String(t.specialization || '').toLowerCase();
-    const summary = String((t as any).ai_persona_summary || '').toLowerCase();
-    return name.includes(q) || spec.includes(q) || summary.includes(q);
-  });
-
-  const fmtWhenSlot = (iso?: string | null) => {
-    if (!iso) return 'No slots yet';
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return 'No slots yet';
-    return d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  };
-
-  // If a conversation is selected, show the chat view
   if (selectedConversation) {
     const displayName = selectedConversation.otherUser?.display_name || selectedConversation.otherUser?.anonymous_username || 'Anonymous';
     const otherUserId = selectedConversation.otherUser?.id;
-
     return (
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 20}
-      >
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 20}>
         <View style={{ flex: 1, backgroundColor: '#f8f9fa' }}>
-          {/* Chat Header - Clean white design */}
           <View style={[styles.chatHeader, { paddingTop: insets.top + 12 }]}>
             <Pressable onPress={() => setSelectedConversation(null)}>
               <Feather name="arrow-left" size={24} color="#333" />
@@ -644,85 +522,30 @@ export default function ConnectionsScreen() {
               )}
               <Text style={styles.chatHeaderTitle}>{displayName}</Text>
             </View>
-            <Pressable
-              onPress={() => {
-                if (!selectedConversation?.id || !otherUserId) return;
-                Alert.alert('Options', 'Choose an action', [
-                  {
-                    text: 'Report',
-                    style: 'destructive',
-                    onPress: () => {
-                      Alert.alert('Report user', 'Why are you reporting this user?', [
-                        {
-                          text: 'Harassment',
-                          style: 'destructive',
-                          onPress: async () => {
-                            await reportDmUser({
-                              targetUid: otherUserId,
-                              conversationId: selectedConversation.id,
-                              reason: 'harassment',
-                            });
-                            Alert.alert('Reported', 'Thanks — our team will review this.');
-                          },
-                        },
-                        {
-                          text: 'Self-harm / crisis',
-                          style: 'destructive',
-                          onPress: async () => {
-                            await reportDmUser({
-                              targetUid: otherUserId,
-                              conversationId: selectedConversation.id,
-                              reason: 'self_harm',
-                            });
-                            Alert.alert('Reported', 'Thanks — our team will review this.');
-                          },
-                        },
-                        {
-                          text: 'Spam',
-                          style: 'destructive',
-                          onPress: async () => {
-                            await reportDmUser({
-                              targetUid: otherUserId,
-                              conversationId: selectedConversation.id,
-                              reason: 'spam',
-                            });
-                            Alert.alert('Reported', 'Thanks — our team will review this.');
-                          },
-                        },
-                        { text: 'Cancel', style: 'cancel' },
-                      ]);
-                    },
-                  },
-                  {
-                    text: 'Block',
-                    style: 'destructive',
-                    onPress: () => {
-                      Alert.alert('Block user', 'They will not be able to message you.', [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Block',
-                          style: 'destructive',
-                          onPress: async () => {
-                            await blockUser(otherUserId, 'dm');
-                            Alert.alert('Blocked', 'User blocked.');
-                            setSelectedConversation(null);
-                            loadConversations();
-                          },
-                        },
-                      ]);
-                    },
-                  },
-                  { text: 'Cancel', style: 'cancel' },
-                ]);
-              }}
-              style={styles.chatHeaderMore}
-              hitSlop={10}
-            >
+            <Pressable onPress={() => {
+              if (!selectedConversation?.id || !otherUserId) return;
+              Alert.alert('Options', 'Choose an action', [
+                { text: 'Report', style: 'destructive', onPress: () => {
+                  Alert.alert('Report user', 'Why are you reporting this user?', [
+                    { text: 'Harassment', style: 'destructive', onPress: async () => { await reportDmUser({ targetUid: otherUserId, conversationId: selectedConversation.id, reason: 'harassment' }); Alert.alert('Reported', 'Thanks — our team will review this.'); } },
+                    { text: 'Self-harm / crisis', style: 'destructive', onPress: async () => { await reportDmUser({ targetUid: otherUserId, conversationId: selectedConversation.id, reason: 'self_harm' }); Alert.alert('Reported', 'Thanks — our team will review this.'); } },
+                    { text: 'Spam', style: 'destructive', onPress: async () => { await reportDmUser({ targetUid: otherUserId, conversationId: selectedConversation.id, reason: 'spam' }); Alert.alert('Reported', 'Thanks — our team will review this.'); } },
+                    { text: 'Cancel', style: 'cancel' },
+                  ]);
+                }},
+                { text: 'Block', style: 'destructive', onPress: () => {
+                  Alert.alert('Block user', 'They will not be able to message you.', [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Block', style: 'destructive', onPress: async () => { await blockUser(otherUserId, 'dm'); Alert.alert('Blocked', 'User blocked.'); setSelectedConversation(null); loadConversations(); } },
+                  ]);
+                }},
+                { text: 'Cancel', style: 'cancel' },
+              ]);
+            }} style={styles.chatHeaderMore}>
               <Feather name="more-vertical" size={20} color="#333" />
             </Pressable>
           </View>
 
-          {/* Messages List */}
           <View style={styles.messagesListContainer}>
             <FlatList
               ref={flatListRef}
@@ -730,24 +553,13 @@ export default function ConnectionsScreen() {
               data={[...messages].slice().reverse()}
               renderItem={renderMessage}
               keyExtractor={(item) => item.id}
-              contentContainerStyle={[
-                styles.messagesList,
-                { paddingBottom: 12 }
-              ]}
+              contentContainerStyle={[styles.messagesList, { paddingBottom: 12 }]}
               keyboardDismissMode="interactive"
               keyboardShouldPersistTaps="handled"
             />
           </View>
 
-          {/* Message Input Bar */}
-          <View
-            style={[
-              styles.inputBarWrapper,
-              {
-                paddingBottom: insets.bottom + 8,
-              }
-            ]}
-          >
+          <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom + 8 }]}>
             <View style={styles.inputContainer}>
               <TextInput
                 style={styles.input}
@@ -758,16 +570,8 @@ export default function ConnectionsScreen() {
                 multiline
                 maxLength={1000}
               />
-              <Pressable
-                style={[styles.sendButton, (!messageText.trim() || sending) && styles.sendButtonDisabled]}
-                onPress={handleSend}
-                disabled={!messageText.trim() || sending}
-              >
-                {sending ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Feather name="send" size={20} color="#fff" />
-                )}
+              <Pressable style={[styles.sendButton, (!messageText.trim() || sending) && styles.sendButtonDisabled]} onPress={handleSend} disabled={!messageText.trim() || sending}>
+                {sending ? <ActivityIndicator size="small" color="#fff" /> : <Feather name="send" size={20} color="#fff" />}
               </Pressable>
             </View>
           </View>
@@ -779,26 +583,16 @@ export default function ConnectionsScreen() {
   return (
     <View style={styles.container}>
       {/* Top search + actions */}
-      <View
-        style={[
-          styles.topBar,
-          { paddingTop: insets.top + 12 },
-        ]}
-      >
+      <View style={[styles.topBar, { paddingTop: insets.top + 12 }]}>
         <View style={styles.searchBar}>
           <Feather name="search" size={20} color="#999" />
           <TextInput
             style={styles.searchInput}
             placeholder={
-              showMessages 
-                ? 'Search people...' 
-                : showTherapists
-                ? 'Search therapists...'
-                : showGroups 
-                ? 'Search groups...' 
-                : showLeaderboard 
-                ? 'Leaderboard' 
-                : 'Search requests...'
+              activeTab === 'messages' ? 'Search people...' :
+              activeTab === 'therapists' ? 'Search therapists...' :
+              activeTab === 'groups' ? 'Search groups...' :
+              activeTab === 'requests' ? 'Search requests...' : 'Leaderboard'
             }
             placeholderTextColor="#999"
             value={searchQuery}
@@ -806,317 +600,218 @@ export default function ConnectionsScreen() {
           />
         </View>
         <View style={styles.actions}>
-          <Pressable
-            style={styles.settingsButton}
-            onPress={() => setShowSettings(true)}
-          >
+          <Pressable style={styles.settingsButton} onPress={() => setShowSettings(true)}>
             <Feather name="settings" size={18} color="#666" />
           </Pressable>
-          <Pressable
-            style={styles.streaksButton}
-            onPress={() => router.push('/streaks' as any)}
-          >
+          <Pressable style={styles.streaksButton} onPress={() => router.push('/streaks' as any)}>
             <Feather name="zap" size={18} color="#ec4899" />
           </Pressable>
-          <Pressable
-            style={styles.createButton}
-            onPress={() =>
-              showMessages
-                ? router.push('/(tabs)/messages' as any)
-                : router.push('/group' as any)
-            }
-          >
+          <Pressable style={styles.createButton} onPress={() => activeTab === 'messages' ? router.push('/(tabs)/messages' as any) : router.push('/group' as any)}>
             <Feather name="plus" size={24} color="#fff" />
           </Pressable>
         </View>
       </View>
 
-      {/* Segmented control: Messages / Therapists / Groups / Requests / Leaderboard */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.segmentRow}
-      >
-        {(['messages', 'therapists', 'groups', 'requests', 'leaderboard'] as TabKey[]).map((key) => (
-          <Pressable
-            key={key}
-            style={[
-              styles.segmentChip,
-              activeTab === key && styles.segmentChipActive,
-            ]}
-            onPress={() => setActiveTab(key)}
-          >
-            <Text
-              style={[
-                styles.segmentText,
-                activeTab === key && styles.segmentTextActive,
-              ]}
-              numberOfLines={1}
-            >
-              {key === 'messages'
-                ? 'Messages'
-                : key === 'therapists'
-                ? 'Therapists'
-                : key === 'groups'
-                ? 'Groups'
-                : key === 'requests'
-                ? 'Requests'
-                : 'Leaderboard'}
-            </Text>
-            {key === 'requests' && requests.length > 0 && (
-              <View style={styles.requestBadge}>
-                <Text style={styles.requestBadgeText}>{requests.length}</Text>
-              </View>
-            )}
-          </Pressable>
-        ))}
-      </ScrollView>
-
-      {/* Content */}
-      {showMessages ? (
-        searchQuery.trim().length > 0 ? (
-          <FlatList
-            data={searchResults}
-            keyExtractor={(item) => item.id}
-            renderItem={renderSearchResult}
-            contentContainerStyle={styles.listContent}
-            ListEmptyComponent={
-              isSearching ? (
-                <View style={styles.emptyState}>
-                  <ActivityIndicator size="small" color="#ec4899" />
-                  <Text style={styles.emptyTitle}>Searching...</Text>
-                </View>
-              ) : (
-                <View style={styles.emptyState}>
-                  <Text style={styles.emptyTitle}>No users found</Text>
-                  <Text style={styles.emptySubtitle}>Try a different search term</Text>
-                </View>
-              )
-            }
-          />
-        ) : loadingConversations ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#ec4899" />
-            <Text style={styles.loadingText}>Loading conversations...</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={filteredConversations}
-            keyExtractor={(item) => item.id}
-            renderItem={renderConversationItem}
-            contentContainerStyle={styles.listContent}
-            ListEmptyComponent={
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyTitle}>No conversations yet</Text>
-                <Text style={styles.emptySubtitle}>
-                  Search for someone to start chatting
+      {/* FIXED LAYOUT: Tabs (sticky) + Content (fills rest of screen) */}
+      <View style={styles.contentContainer}>
+        {/* Tab pills - fixed at top, never scrolls away */}
+        <View style={styles.tabsContainer}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.segmentRow}>
+            {(['messages', 'therapists', 'groups', 'requests', 'leaderboard'] as TabKey[]).map((key) => (
+              <Pressable
+                key={key}
+                style={[styles.segmentChip, activeTab === key && styles.segmentChipActive]}
+                onPress={() => setActiveTab(key)}
+              >
+                <Text style={[styles.segmentText, activeTab === key && styles.segmentTextActive]}>
+                  {key === 'messages' ? 'Messages' : key === 'therapists' ? 'Therapists' : key === 'groups' ? 'Groups' : key === 'requests' ? 'Requests' : 'Leaderboard'}
                 </Text>
-              </View>
-            }
-            refreshing={loadingConversations}
-            onRefresh={loadConversations}
-          />
-        )
-      ) : showTherapists ? (
-        loadingTherapists ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#ec4899" />
-            <Text style={styles.loadingText}>Loading therapists...</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={filteredTherapists}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.listContent}
-            renderItem={({ item }) => (
-              <Pressable style={styles.therapistCard} onPress={() => router.push(`/therapist/${item.id}` as any)}>
-                <View style={styles.therapistTop}>
-                  <Text style={styles.therapistName} numberOfLines={1}>
-                    {item.display_name || 'Therapist'}
-                  </Text>
-                  <View style={styles.therapistBadge}>
-                    <Feather name="check-circle" size={14} color="#10b981" />
-                    <Text style={styles.therapistBadgeText}>Verified</Text>
+                {key === 'requests' && requests.length > 0 && (
+                  <View style={styles.requestBadge}>
+                    <Text style={styles.requestBadgeText}>{requests.length}</Text>
                   </View>
-                </View>
-                <Text style={styles.therapistSpec} numberOfLines={1}>
-                  {item.specialization || 'Mental health support'}
-                </Text>
-                {item.ai_persona_summary ? (
-                  <Text style={styles.therapistSummary} numberOfLines={2}>
-                    {String(item.ai_persona_summary)}
-                  </Text>
-                ) : null}
-                <View style={styles.therapistMetaRow}>
-                  <View style={styles.therapistMetaPill}>
-                    <Feather name="clock" size={14} color="#4b5563" />
-                    <Text style={styles.therapistMetaText}>{fmtWhenSlot((item as any).nextSlotAt)}</Text>
-                  </View>
-                  <View style={styles.therapistMetaPill}>
-                    <Feather name="calendar" size={14} color="#4b5563" />
-                    <Text style={styles.therapistMetaText}>{Number((item as any).openSlots || 0)} open</Text>
-                  </View>
-                </View>
+                )}
               </Pressable>
-            )}
-            ListEmptyComponent={
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyTitle}>No verified therapists yet</Text>
-                <Text style={styles.emptySubtitle}>When an admin approves a therapist, they’ll appear here.</Text>
+            ))}
+          </ScrollView>
+        </View>
+
+        {/* Content starts immediately under tabs - no gap, no middle alignment, cannot slide under tabs */}
+        <View style={styles.contentWrapper}>
+          {activeTab === 'messages' ? (
+            searchQuery.trim().length > 0 ? (
+              <FlatList
+                style={styles.tabContent}
+                data={searchResults}
+                keyExtractor={(item) => item.id}
+                renderItem={renderSearchResult}
+                contentContainerStyle={styles.listContent}
+                ListEmptyComponent={
+                  isSearching ? (
+                    <View style={styles.emptyState}>
+                      <ActivityIndicator size="small" color="#ec4899" />
+                      <Text style={styles.emptyTitle}>Searching...</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.emptyState}>
+                      <Text style={styles.emptyTitle}>No users found</Text>
+                      <Text style={styles.emptySubtitle}>Try a different search term</Text>
+                    </View>
+                  )
+                }
+              />
+            ) : loadingConversations ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#ec4899" />
+                <Text style={styles.loadingText}>Loading conversations...</Text>
               </View>
-            }
-          />
-        )
-      ) : showGroups ? (
-        loadingGroups ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#ec4899" />
-            <Text style={styles.loadingText}>Loading groups...</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={filteredGroups}
-            keyExtractor={(item) => item.id}
-            renderItem={renderGroupItem}
-            contentContainerStyle={styles.listContent}
-            ListHeaderComponent={
-              <View style={styles.groupsListHeader}>
-                <Pressable
-                  style={styles.createChallengeButton}
-                  onPress={() => router.push('/create-challenge' as any)}
-                >
-                  <Feather name="zap" size={20} color="#fff" />
-                  <Text style={styles.createChallengeButtonText}>Create challenge</Text>
-                </Pressable>
-                {(loadingOfficial ? (
-                  <ActivityIndicator size="small" color="#ec4899" style={{ marginVertical: 12 }} />
-                ) : officialChallenges.length > 0 ? (
-                  <View style={styles.officialSection}>
-                    <Text style={styles.officialSectionTitle}>Official challenges (admin)</Text>
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      style={styles.challengeCategoryScroll}
-                      contentContainerStyle={styles.challengeCategoryContent}
-                    >
-                      <Pressable
-                        style={[styles.challengeCategoryChip, challengeCategoryFilter === 'All' && styles.challengeCategoryChipActive]}
-                        onPress={() => setChallengeCategoryFilter('All')}
-                      >
-                        <Text style={[styles.challengeCategoryChipText, challengeCategoryFilter === 'All' && styles.challengeCategoryChipTextActive]}>All</Text>
-                      </Pressable>
-                      {CHALLENGE_CATEGORIES.map((c) => (
-                        <Pressable
-                          key={c.value}
-                          style={[styles.challengeCategoryChip, challengeCategoryFilter === c.value && styles.challengeCategoryChipActive]}
-                          onPress={() => setChallengeCategoryFilter(c.value)}
-                        >
-                          <Text style={[styles.challengeCategoryChipText, challengeCategoryFilter === c.value && styles.challengeCategoryChipTextActive]}>{c.label}</Text>
-                        </Pressable>
-                      ))}
-                    </ScrollView>
-                    {(challengeCategoryFilter === 'All'
-                      ? officialChallenges
-                      : officialChallenges.filter((c) => (c.challenge_category || 'other') === challengeCategoryFilter)
-                    ).map((item) => (
-                      <Pressable
-                        key={item.id}
-                        style={styles.officialChallengeItem}
-                        onPress={() => router.push(`/group?groupId=${item.id}` as any)}
-                      >
-                        <View style={styles.groupInfo}>
-                          <Text style={styles.groupName} numberOfLines={1}>{item.name}</Text>
-                          <Text style={styles.officialCategoryTag}>
-                            {CHALLENGE_CATEGORIES.find((x) => x.value === (item.challenge_category || 'other'))?.label ?? '✨ Other'}
-                          </Text>
-                          <Text style={styles.officialManagedBy}>Managed by administration</Text>
-                          {item.challenge_goal ? (
-                            <Text style={styles.groupDescription} numberOfLines={1}>
-                              {item.challenge_goal} • {item.challenge_duration_days} days
-                            </Text>
-                          ) : null}
-                        </View>
-                        <Feather name="chevron-right" size={20} color="#9ca3af" />
-                      </Pressable>
-                    ))}
+            ) : (
+              <FlatList
+                style={styles.tabContent}
+                data={filteredConversations}
+                keyExtractor={(item) => item.id}
+                renderItem={renderConversationItem}
+                contentContainerStyle={styles.listContent}
+                ListEmptyComponent={
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>No conversations yet</Text>
+                    <Text style={styles.emptySubtitle}>Search for someone to start chatting</Text>
                   </View>
-                ) : null)}
-                <Text style={styles.allGroupsTitle}>All groups</Text>
+                }
+                refreshing={loadingConversations}
+                onRefresh={loadConversations}
+              />
+            )
+          ) : activeTab === 'therapists' ? (
+            <TherapistList
+              therapists={filteredTherapists}
+              loading={loadingTherapists}
+              onTherapistPress={(id: string) => router.push(`/therapist/${id}` as any)}
+              style={styles.tabContent}
+            />
+          ) : activeTab === 'groups' ? (
+            loadingGroups ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#ec4899" />
+                <Text style={styles.loadingText}>Loading groups...</Text>
               </View>
-            }
-            ListEmptyComponent={
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyTitle}>No groups yet</Text>
-                <Text style={styles.emptySubtitle}>
-                  Create a group or start a challenge.
-                </Text>
+            ) : (
+              <FlatList
+                style={styles.tabContent}
+                data={filteredGroups}
+                keyExtractor={(item) => item.id}
+                renderItem={renderGroupItem}
+                contentContainerStyle={styles.listContent}
+                ListHeaderComponent={
+                  <View style={styles.groupsListHeader}>
+                    <Pressable style={styles.createChallengeButton} onPress={() => router.push('/create-challenge' as any)}>
+                      <Feather name="zap" size={20} color="#fff" />
+                      <Text style={styles.createChallengeButtonText}>Create challenge</Text>
+                    </Pressable>
+                    {(loadingOfficial ? (
+                      <ActivityIndicator size="small" color="#ec4899" style={{ marginVertical: 12 }} />
+                    ) : officialChallenges.length > 0 ? (
+                      <View style={styles.officialSection}>
+                        <Text style={styles.officialSectionTitle}>Official challenges (admin)</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.challengeCategoryScroll} contentContainerStyle={styles.challengeCategoryContent}>
+                          <Pressable style={[styles.challengeCategoryChip, challengeCategoryFilter === 'All' && styles.challengeCategoryChipActive]} onPress={() => setChallengeCategoryFilter('All')}>
+                            <Text style={[styles.challengeCategoryChipText, challengeCategoryFilter === 'All' && styles.challengeCategoryChipTextActive]}>All</Text>
+                          </Pressable>
+                          {CHALLENGE_CATEGORIES.map((c) => (
+                            <Pressable key={c.value} style={[styles.challengeCategoryChip, challengeCategoryFilter === c.value && styles.challengeCategoryChipActive]} onPress={() => setChallengeCategoryFilter(c.value)}>
+                              <Text style={[styles.challengeCategoryChipText, challengeCategoryFilter === c.value && styles.challengeCategoryChipTextActive]}>{c.label}</Text>
+                            </Pressable>
+                          ))}
+                        </ScrollView>
+                        {(challengeCategoryFilter === 'All' ? officialChallenges : officialChallenges.filter((c) => (c.challenge_category || 'other') === challengeCategoryFilter)).map((item) => (
+                          <Pressable key={item.id} style={styles.officialChallengeItem} onPress={() => router.push(`/group?groupId=${item.id}` as any)}>
+                            <View style={styles.groupInfo}>
+                              <Text style={styles.groupName} numberOfLines={1}>{item.name}</Text>
+                              <Text style={styles.officialCategoryTag}>{CHALLENGE_CATEGORIES.find((x) => x.value === (item.challenge_category || 'other'))?.label ?? '✨ Other'}</Text>
+                              <Text style={styles.officialManagedBy}>Managed by administration</Text>
+                              {item.challenge_goal && <Text style={styles.groupDescription} numberOfLines={1}>{item.challenge_goal} • {item.challenge_duration_days} days</Text>}
+                            </View>
+                            <Feather name="chevron-right" size={20} color="#9ca3af" />
+                          </Pressable>
+                        ))}
+                      </View>
+                    ) : null)}
+                    <Text style={styles.allGroupsTitle}>All groups</Text>
+                  </View>
+                }
+                ListEmptyComponent={
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>No groups yet</Text>
+                    <Text style={styles.emptySubtitle}>Create a group or start a challenge.</Text>
+                  </View>
+                }
+                refreshing={loadingGroups}
+                onRefresh={() => { loadGroups(); loadOfficialChallenges(); }}
+              />
+            )
+          ) : activeTab === 'requests' ? (
+            loadingRequests ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#ec4899" />
+                <Text style={styles.loadingText}>Loading requests...</Text>
               </View>
-            }
-            refreshing={loadingGroups}
-            onRefresh={() => { loadGroups(); loadOfficialChallenges(); }}
-          />
-        )
-      ) : showRequests ? (
-        loadingRequests ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#ec4899" />
-            <Text style={styles.loadingText}>Loading requests...</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={filteredRequests}
-            keyExtractor={(item) => item.id}
-            renderItem={renderRequestItem}
-            contentContainerStyle={styles.listContent}
-            ListEmptyComponent={
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyTitle}>No message requests</Text>
-                <Text style={styles.emptySubtitle}>
-                  You're all caught up!
-                </Text>
+            ) : (
+              <FlatList
+                style={styles.tabContent}
+                data={filteredRequests}
+                keyExtractor={(item) => item.id}
+                renderItem={renderRequestItem}
+                contentContainerStyle={styles.listContent}
+                ListEmptyComponent={
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>No message requests</Text>
+                    <Text style={styles.emptySubtitle}>You're all caught up!</Text>
+                  </View>
+                }
+                refreshing={loadingRequests}
+                onRefresh={loadRequests}
+              />
+            )
+          ) : activeTab === 'leaderboard' ? (
+            loadingLeaderboard ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#ec4899" />
+                <Text style={styles.loadingText}>Loading leaderboard...</Text>
               </View>
-            }
-            refreshing={loadingRequests}
-            onRefresh={loadRequests}
-          />
-        )
-      ) : showLeaderboard ? (
-        loadingLeaderboard ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#ec4899" />
-            <Text style={styles.loadingText}>Loading leaderboard...</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={leaderboard}
-            keyExtractor={(item) => item.userId}
-            contentContainerStyle={styles.listContent}
-            ListHeaderComponent={
-              <View style={{ paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e5e7eb' }}>
-                <Text style={{ fontSize: 15, fontWeight: '600', color: '#374151' }}>Game wins (Tic-Tac-Toe + Chess)</Text>
-                <Text style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>Top players by total wins</Text>
-              </View>
-            }
-            renderItem={({ item, index }) => (
-              <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#f3f4f6' }}>
-                <Text style={{ fontSize: 17, fontWeight: '700', color: '#9ca3af', width: 28 }}>#{index + 1}</Text>
-                <Text style={{ flex: 1, fontSize: 16, fontWeight: '600', color: '#111827' }} numberOfLines={1}>{item.displayName}</Text>
-                <View style={{ backgroundColor: '#ec4899', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>{item.totalWins} wins</Text>
-                </View>
-              </View>
-            )}
-            ListEmptyComponent={
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyTitle}>No games played yet</Text>
-                <Text style={styles.emptySubtitle}>Win Tic-Tac-Toe or Chess with your matches to appear here.</Text>
-              </View>
-            }
-            refreshing={loadingLeaderboard}
-            onRefresh={loadLeaderboard}
-          />
-        )
-      ) : null}
+            ) : (
+              <FlatList
+                style={styles.tabContent}
+                data={leaderboard}
+                keyExtractor={(item) => item.userId}
+                contentContainerStyle={styles.listContent}
+                ListHeaderComponent={
+                  <View style={{ paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e5e7eb' }}>
+                    <Text style={{ fontSize: 15, fontWeight: '600', color: '#374151' }}>Game wins (Tic-Tac-Toe + Chess)</Text>
+                    <Text style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>Top players by total wins</Text>
+                  </View>
+                }
+                renderItem={({ item, index }) => (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#f3f4f6' }}>
+                    <Text style={{ fontSize: 17, fontWeight: '700', color: '#9ca3af', width: 28 }}>#{index + 1}</Text>
+                    <Text style={{ flex: 1, fontSize: 16, fontWeight: '600', color: '#111827' }} numberOfLines={1}>{item.displayName}</Text>
+                    <View style={{ backgroundColor: '#ec4899', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>{item.totalWins} wins</Text>
+                    </View>
+                  </View>
+                )}
+                ListEmptyComponent={
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>No games played yet</Text>
+                    <Text style={styles.emptySubtitle}>Win Tic-Tac-Toe or Chess with your matches to appear here.</Text>
+                  </View>
+                }
+                refreshing={loadingLeaderboard}
+                onRefresh={loadLeaderboard}
+              />
+            )
+          ) : null}
+        </View>
+      </View>
 
       {/* Settings Modal */}
       {showSettings && (
@@ -1128,102 +823,51 @@ export default function ConnectionsScreen() {
                 <Feather name="x" size={24} color="#333" />
               </Pressable>
             </View>
-
             <View style={styles.settingsSection}>
               <Text style={styles.settingsLabel}>Message Requests</Text>
-              <Text style={styles.settingsDescription}>
-                Choose how you want to receive messages from new people
-              </Text>
-
-              <Pressable
-                style={styles.settingOption}
-                onPress={() => setMessagePreference('direct')}
-              >
+              <Text style={styles.settingsDescription}>Choose how you want to receive messages from new people</Text>
+              <Pressable style={styles.settingOption} onPress={() => setMessagePreference('direct')}>
                 <View style={styles.settingOptionContent}>
                   <Text style={styles.settingOptionTitle}>Accept Directly</Text>
-                  <Text style={styles.settingOptionDescription}>
-                    Anyone can message you without approval
-                  </Text>
+                  <Text style={styles.settingOptionDescription}>Anyone can message you without approval</Text>
                 </View>
-                <View style={[
-                  styles.radioButton,
-                  messagePreference === 'direct' && styles.radioButtonActive
-                ]}>
-                  {messagePreference === 'direct' && (
-                    <View style={styles.radioButtonInner} />
-                  )}
+                <View style={[styles.radioButton, messagePreference === 'direct' && styles.radioButtonActive]}>
+                  {messagePreference === 'direct' && <View style={styles.radioButtonInner} />}
                 </View>
               </Pressable>
-
-              <Pressable
-                style={styles.settingOption}
-                onPress={() => setMessagePreference('requests')}
-              >
+              <Pressable style={styles.settingOption} onPress={() => setMessagePreference('requests')}>
                 <View style={styles.settingOptionContent}>
                   <Text style={styles.settingOptionTitle}>Requests First</Text>
-                  <Text style={styles.settingOptionDescription}>
-                    New messages require your approval
-                  </Text>
+                  <Text style={styles.settingOptionDescription}>New messages require your approval</Text>
                 </View>
-                <View style={[
-                  styles.radioButton,
-                  messagePreference === 'requests' && styles.radioButtonActive
-                ]}>
-                  {messagePreference === 'requests' && (
-                    <View style={styles.radioButtonInner} />
-                  )}
+                <View style={[styles.radioButton, messagePreference === 'requests' && styles.radioButtonActive]}>
+                  {messagePreference === 'requests' && <View style={styles.radioButtonInner} />}
                 </View>
               </Pressable>
-
-              <Pressable
-                style={styles.settingOption}
-                onPress={() => setMessagePreference('none')}
-              >
+              <Pressable style={styles.settingOption} onPress={() => setMessagePreference('none')}>
                 <View style={styles.settingOptionContent}>
                   <Text style={styles.settingOptionTitle}>No Messages</Text>
-                  <Text style={styles.settingOptionDescription}>
-                    Don't receive any messages
-                  </Text>
+                  <Text style={styles.settingOptionDescription}>Don't receive any messages</Text>
                 </View>
-                <View style={[
-                  styles.radioButton,
-                  messagePreference === 'none' && styles.radioButtonActive
-                ]}>
-                  {messagePreference === 'none' && (
-                    <View style={styles.radioButtonInner} />
-                  )}
+                <View style={[styles.radioButton, messagePreference === 'none' && styles.radioButtonActive]}>
+                  {messagePreference === 'none' && <View style={styles.radioButtonInner} />}
                 </View>
               </Pressable>
             </View>
-
             <View style={styles.settingsSection}>
               <Text style={styles.settingsLabel}>Group Invites</Text>
-              <Pressable
-                style={styles.settingToggle}
-                onPress={() => setAutoJoinGroups(!autoJoinGroups)}
-              >
+              <Pressable style={styles.settingToggle} onPress={() => setAutoJoinGroups(!autoJoinGroups)}>
                 <View style={styles.settingToggleContent}>
                   <Text style={styles.settingOptionTitle}>Auto-Join Groups</Text>
-                  <Text style={styles.settingOptionDescription}>
-                    Automatically join when invited to groups
-                  </Text>
+                  <Text style={styles.settingOptionDescription}>Automatically join when invited to groups</Text>
                 </View>
                 <View style={[styles.toggle, autoJoinGroups && styles.toggleActive]}>
                   <View style={[styles.toggleThumb, autoJoinGroups && styles.toggleThumbActive]} />
                 </View>
               </Pressable>
             </View>
-
-            <Pressable
-              style={[styles.saveButton, loadingSettings && styles.saveButtonDisabled]}
-              onPress={saveSettings}
-              disabled={loadingSettings}
-            >
-              {loadingSettings ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={styles.saveButtonText}>Save Settings</Text>
-              )}
+            <Pressable style={[styles.saveButton, loadingSettings && styles.saveButtonDisabled]} onPress={saveSettings} disabled={loadingSettings}>
+              {loadingSettings ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.saveButtonText}>Save Settings</Text>}
             </Pressable>
           </View>
         </View>
@@ -1233,692 +877,129 @@ export default function ConnectionsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-  },
-  // (removed top therapists CTA; therapists lives in the segmented tabs now)
-  therapistCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 18,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    marginBottom: 12,
-  },
-  therapistTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  therapistName: { flex: 1, fontSize: 16, fontWeight: '900', color: '#111827' },
-  therapistBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(16,185,129,0.10)',
-  },
-  therapistBadgeText: { fontSize: 12, fontWeight: '900', color: '#10b981' },
-  therapistSpec: { marginTop: 6, fontSize: 13, fontWeight: '700', color: '#6b7280' },
-  therapistSummary: { marginTop: 8, fontSize: 12, fontWeight: '600', color: '#111827', lineHeight: 16 },
-  therapistMetaRow: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  therapistMetaPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: '#f3f4f6',
-  },
-  therapistMetaText: { fontSize: 12, fontWeight: '700', color: '#4b5563' },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  searchBar: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f3f4f6',
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    marginRight: 12,
-  },
-  searchInput: {
-    flex: 1,
-    marginLeft: 10,
-    fontSize: 15,
-    color: '#333',
-  },
-  actions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  streaksButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#fff5fb',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#f9a8d4',
-  },
-  createButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#ec4899',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  segmentRow: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingTop: 6,
-    paddingBottom: 6,
-    backgroundColor: '#fff',
-  },
-  segmentChip: {
-    height: 32,
-    paddingHorizontal: 12,
-    paddingVertical: 0,
-    borderRadius: 20,
-    backgroundColor: '#f3f4f6',
-    marginRight: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segmentChipActive: {
-    backgroundColor: '#ec4899',
-  },
-  segmentText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#4b5563',
-  },
-  segmentTextActive: {
-    color: '#fff',
-  },
-  listContent: {
-    paddingHorizontal: 16,
-    paddingTop: 6,
-    paddingBottom: 24,
-  },
-  loadingContainer: {
-    alignItems: 'center',
-    paddingTop: 24,
-  },
-  loadingText: {
-    marginTop: 8,
-    fontSize: 14,
-    color: '#6b7280',
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingTop: 24,
-    paddingBottom: 24,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    marginTop: 8,
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: '#6b7280',
-    marginTop: 4,
-    textAlign: 'center',
-    paddingHorizontal: 32,
-  },
-  conversationItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 16,
-    marginBottom: 8,
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    marginRight: 12,
-  },
-  avatarFallback: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    marginRight: 12,
-    backgroundColor: '#ec4899',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  conversationInfo: {
-    flex: 1,
-  },
-  conversationName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111827',
-    marginBottom: 2,
-  },
-  conversationPreview: {
-    fontSize: 13,
-    color: '#6b7280',
-  },
-  conversationTime: {
-    fontSize: 11,
-    color: '#9ca3af',
-    marginLeft: 8,
-  },
-  groupItem: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 16,
-    marginBottom: 8,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-  },
-  groupInfo: {
-    flex: 1,
-    marginRight: 12,
-  },
-  groupNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 2,
-  },
-  groupName: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  challengeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
-    backgroundColor: '#fef3c7',
-  },
-  challengeBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#b45309',
-  },
-  groupCreator: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginBottom: 4,
-  },
-  groupDescription: {
-    fontSize: 13,
-    color: '#4b5563',
-  },
-  groupCategoryBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: '#f3f4f6',
-  },
-  groupCategoryText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#6b7280',
-  },
-  groupsListHeader: {
-    paddingBottom: 16,
-  },
-  createChallengeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: '#ec4899',
-    paddingVertical: 14,
-    borderRadius: 16,
-    marginBottom: 16,
-  },
-  createChallengeButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
-  },
-  officialSection: {
-    marginBottom: 16,
-  },
-  officialSectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#6b7280',
-    marginBottom: 10,
-    textTransform: 'uppercase',
-  },
+  container: { flex: 1, backgroundColor: '#f8f9fa' },
+  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12 },
+  searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#f3f4f6', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 10, marginRight: 12 },
+  searchInput: { flex: 1, marginLeft: 10, fontSize: 15, color: '#333' },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  settingsButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#e5e7eb' },
+  streaksButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff5fb', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#f9a8d4' },
+  createButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#ec4899', justifyContent: 'center', alignItems: 'center' },
+
+  contentContainer: { flex: 1 },
+  tabsContainer: { backgroundColor: '#f8f9fa', borderBottomWidth: 1, borderBottomColor: '#e5e7eb' },
+  segmentRow: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8 },
+  segmentChip: { height: 36, paddingHorizontal: 16, borderRadius: 20, backgroundColor: '#f3f4f6', marginRight: 8, alignItems: 'center', justifyContent: 'center' },
+  segmentChipActive: { backgroundColor: '#ec4899' },
+  segmentText: { fontSize: 13, fontWeight: '600', color: '#4b5563' },
+  segmentTextActive: { color: '#fff' },
+  requestBadge: { position: 'absolute', top: -4, right: -6, backgroundColor: '#ef4444', borderRadius: 10, minWidth: 18, height: 18, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
+  requestBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+
+  contentWrapper: { flex: 1 },
+  tabContent: { flex: 1 },
+  listContent: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24 },
+
+  loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  loadingText: { marginTop: 8, fontSize: 14, color: '#6b7280' },
+  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 40 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#111827', marginTop: 8 },
+  emptySubtitle: { fontSize: 14, color: '#6b7280', marginTop: 4, textAlign: 'center', paddingHorizontal: 32 },
+
+  avatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12 },
+  avatarFallback: { width: 44, height: 44, borderRadius: 22, marginRight: 12, backgroundColor: '#ec4899', justifyContent: 'center', alignItems: 'center' },
+  avatarText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+
+  conversationItem: { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 8 },
+  conversationInfo: { flex: 1 },
+  conversationName: { fontSize: 16, fontWeight: '600', color: '#111827', marginBottom: 4 },
+  conversationPreview: { fontSize: 13, color: '#6b7280' },
+  conversationTime: { fontSize: 11, color: '#9ca3af', marginLeft: 8 },
+
+  groupItem: { backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 14, borderRadius: 16, marginBottom: 8 },
+  groupInfo: { flex: 1, marginRight: 12 },
+  groupNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 },
+  groupName: { flex: 1, fontSize: 16, fontWeight: '700', color: '#111827' },
+  groupCreator: { fontSize: 12, color: '#6b7280', marginBottom: 4 },
+  groupDescription: { fontSize: 13, color: '#4b5563' },
+  groupCategoryBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: '#f3f4f6' },
+  groupCategoryText: { fontSize: 11, fontWeight: '600', color: '#6b7280' },
+  groupsListHeader: { paddingBottom: 16 },
+  createChallengeButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#ec4899', paddingVertical: 14, borderRadius: 16, marginBottom: 16 },
+  createChallengeButtonText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+  challengeBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, backgroundColor: '#fef3c7' },
+  challengeBadgeText: { fontSize: 11, fontWeight: '700', color: '#b45309' },
+  officialSection: { marginBottom: 16 },
+  officialSectionTitle: { fontSize: 13, fontWeight: '700', color: '#6b7280', marginBottom: 10, textTransform: 'uppercase' },
+  officialChallengeItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fef3c7', padding: 14, borderRadius: 12, marginBottom: 8, borderWidth: 1, borderColor: '#fcd34d' },
+  officialCategoryTag: { fontSize: 11, fontWeight: '600', color: '#64748b', marginTop: 2 },
+  officialManagedBy: { fontSize: 11, fontWeight: '700', color: '#b45309', marginTop: 2 },
+  allGroupsTitle: { fontSize: 13, fontWeight: '700', color: '#6b7280', marginBottom: 10, textTransform: 'uppercase' },
   challengeCategoryScroll: { marginBottom: 10 },
   challengeCategoryContent: { flexDirection: 'row', gap: 8, paddingVertical: 4 },
-  challengeCategoryChip: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
+  challengeCategoryChip: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 999, backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0' },
   challengeCategoryChipActive: { backgroundColor: '#ec4899', borderColor: '#ec4899' },
   challengeCategoryChipText: { fontSize: 12, fontWeight: '600', color: '#475569' },
   challengeCategoryChipTextActive: { color: '#fff' },
-  officialCategoryTag: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#64748b',
-    marginTop: 2,
-  },
-  officialChallengeItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fef3c7',
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#fcd34d',
-  },
-  officialManagedBy: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#b45309',
-    marginTop: 2,
-  },
-  allGroupsTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#6b7280',
-    marginBottom: 10,
-    textTransform: 'uppercase',
-  },
-  requestBadge: {
-    position: 'absolute',
-    top: -4,
-    right: -6,
-    backgroundColor: '#ef4444',
-    borderRadius: 10,
-    minWidth: 18,
-    height: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 4,
-  },
-  requestBadgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  requestItem: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 16,
-    marginBottom: 8,
-  },
-  requestHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  requestInfo: {
-    flex: 1,
-  },
-  requestName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111827',
-    marginBottom: 4,
-  },
-  requestMessage: {
-    fontSize: 13,
-    color: '#4b5563',
-    marginBottom: 4,
-  },
-  requestTime: {
-    fontSize: 11,
-    color: '#9ca3af',
-  },
-  requestActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  declineButton: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: '#f3f4f6',
-    alignItems: 'center',
-  },
-  declineButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6b7280',
-  },
-  acceptButton: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: '#ec4899',
-    alignItems: 'center',
-  },
-  acceptButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  settingsButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  modalOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 9999,
-  },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 24,
-    width: '90%',
-    maxHeight: '80%',
-    padding: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 16,
-    elevation: 10,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#111827',
-  },
-  settingsSection: {
-    marginBottom: 24,
-  },
-  settingsLabel: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 8,
-  },
-  settingsDescription: {
-    fontSize: 13,
-    color: '#6b7280',
-    marginBottom: 16,
-  },
-  settingOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: '#f9fafb',
-    borderRadius: 12,
-    marginBottom: 8,
-  },
-  settingOptionContent: {
-    flex: 1,
-    marginRight: 12,
-  },
-  settingOptionTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#111827',
-    marginBottom: 4,
-  },
-  settingOptionDescription: {
-    fontSize: 12,
-    color: '#6b7280',
-  },
-  radioButton: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#d1d5db',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  radioButtonActive: {
-    borderColor: '#ec4899',
-  },
-  radioButtonInner: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#ec4899',
-  },
-  settingToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: '#f9fafb',
-    borderRadius: 12,
-  },
-  settingToggleContent: {
-    flex: 1,
-    marginRight: 12,
-  },
-  toggle: {
-    width: 50,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#e5e7eb',
-    padding: 2,
-  },
-  toggleActive: {
-    backgroundColor: '#ec4899',
-  },
-  toggleThumb: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#fff',
-    transform: [{ translateX: 0 }],
-  },
-  toggleThumbActive: {
-    transform: [{ translateX: 22 }],
-  },
-  saveButton: {
-    backgroundColor: '#ec4899',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  saveButtonDisabled: {
-    opacity: 0.5,
-  },
-  saveButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  chatHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 14,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  chatHeaderMore: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#f3f4f6',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  chatHeaderUserInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    marginLeft: 12,
-  },
-  headerAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginRight: 12,
-  },
-  chatHeaderTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  messagesListContainer: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-  },
-  messagesList: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  messageRow: {
-    marginBottom: 12,
-    alignItems: 'flex-start',
-  },
-  messageRowMe: {
-    alignItems: 'flex-end',
-  },
-  messageBubble: {
-    maxWidth: '75%',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  messageBubbleMe: {
-    backgroundColor: '#ec4899',
-    borderBottomRightRadius: 4,
-  },
-  messageBubbleOther: {
-    backgroundColor: '#fff',
-    borderBottomLeftRadius: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  messageText: {
-    fontSize: 15,
-    color: '#1f2937',
-    lineHeight: 20,
-    marginBottom: 4,
-  },
-  messageTextMe: {
-    color: '#fff',
-  },
-  messageTime: {
-    fontSize: 11,
-    color: '#6b7280',
-  },
-  messageTimeMe: {
-    color: 'rgba(255, 255, 255, 0.7)',
-  },
-  inputBarWrapper: {
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 8,
-  },
-  input: {
-    flex: 1,
-    maxHeight: 100,
-    backgroundColor: '#f3f4f6',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: '#333',
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: '#e1e5e9',
-  },
-  sendButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#ec4899',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#ec4899',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  sendButtonDisabled: {
-    opacity: 0.5,
-  },
-  searchResultItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 16,
-    marginBottom: 8,
-  },
-  searchResultSubtext: {
-    fontSize: 12,
-    color: '#9ca3af',
-    marginTop: 2,
-  },
+
+  requestItem: { backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 14, borderRadius: 16, marginBottom: 8 },
+  requestHeader: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
+  requestInfo: { flex: 1 },
+  requestName: { fontSize: 16, fontWeight: '600', color: '#111827', marginBottom: 4 },
+  requestMessage: { fontSize: 13, color: '#4b5563', marginBottom: 4 },
+  requestTime: { fontSize: 11, color: '#9ca3af' },
+  requestActions: { flexDirection: 'row', gap: 8 },
+  declineButton: { flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: '#f3f4f6', alignItems: 'center' },
+  declineButtonText: { fontSize: 14, fontWeight: '600', color: '#6b7280' },
+  acceptButton: { flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: '#ec4899', alignItems: 'center' },
+  acceptButtonText: { fontSize: 14, fontWeight: '600', color: '#fff' },
+
+  chatHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 14, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e5e7eb' },
+  chatHeaderUserInfo: { flexDirection: 'row', alignItems: 'center', flex: 1, marginLeft: 12 },
+  chatHeaderMore: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center' },
+  headerAvatar: { width: 40, height: 40, borderRadius: 20, marginRight: 12 },
+  chatHeaderTitle: { fontSize: 18, fontWeight: '700', color: '#111827' },
+  messagesListContainer: { flex: 1, backgroundColor: '#f8f9fa' },
+  messagesList: { paddingHorizontal: 16, paddingVertical: 12 },
+  messageRow: { marginBottom: 12, alignItems: 'flex-start' },
+  messageRowMe: { alignItems: 'flex-end' },
+  messageBubble: { maxWidth: '75%', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10 },
+  messageBubbleMe: { backgroundColor: '#ec4899', borderBottomRightRadius: 4 },
+  messageBubbleOther: { backgroundColor: '#fff', borderBottomLeftRadius: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 1 },
+  messageText: { fontSize: 15, color: '#1f2937', lineHeight: 20, marginBottom: 4 },
+  messageTextMe: { color: '#fff' },
+  messageTime: { fontSize: 11, color: '#6b7280' },
+  messageTimeMe: { color: 'rgba(255, 255, 255, 0.7)' },
+  inputBarWrapper: { backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#e5e7eb' },
+  inputContainer: { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 },
+  input: { flex: 1, maxHeight: 100, backgroundColor: '#f3f4f6', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, color: '#333', marginRight: 8, borderWidth: 1, borderColor: '#e1e5e9' },
+  sendButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#ec4899', justifyContent: 'center', alignItems: 'center', shadowColor: '#ec4899', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 3 },
+  sendButtonDisabled: { opacity: 0.5 },
+
+  searchResultItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 16, marginBottom: 8 },
+  searchResultSubtext: { fontSize: 12, color: '#9ca3af', marginTop: 2 },
+
+  modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 9999 },
+  modalContent: { backgroundColor: '#fff', borderRadius: 24, width: '90%', maxHeight: '80%', padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.2, shadowRadius: 16, elevation: 10 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+  modalTitle: { fontSize: 22, fontWeight: '800', color: '#111827' },
+  settingsSection: { marginBottom: 24 },
+  settingsLabel: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 8 },
+  settingsDescription: { fontSize: 13, color: '#6b7280', marginBottom: 16 },
+  settingOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, backgroundColor: '#f9fafb', borderRadius: 12, marginBottom: 8 },
+  settingOptionContent: { flex: 1, marginRight: 12 },
+  settingOptionTitle: { fontSize: 15, fontWeight: '600', color: '#111827', marginBottom: 4 },
+  settingOptionDescription: { fontSize: 12, color: '#6b7280' },
+  radioButton: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#d1d5db', justifyContent: 'center', alignItems: 'center' },
+  radioButtonActive: { borderColor: '#ec4899' },
+  radioButtonInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#ec4899' },
+  settingToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, backgroundColor: '#f9fafb', borderRadius: 12 },
+  settingToggleContent: { flex: 1, marginRight: 12 },
+  toggle: { width: 50, height: 28, borderRadius: 14, backgroundColor: '#e5e7eb', padding: 2 },
+  toggleActive: { backgroundColor: '#ec4899' },
+  toggleThumb: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#fff', transform: [{ translateX: 0 }] },
+  toggleThumbActive: { transform: [{ translateX: 22 }] },
+  saveButton: { backgroundColor: '#ec4899', paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginTop: 8 },
+  saveButtonDisabled: { opacity: 0.5 },
+  saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });
-
-

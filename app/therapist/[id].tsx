@@ -1,3 +1,23 @@
+import {
+  approveTherapistBookingRequest,
+  bookTherapistSlot,
+  createTherapistSlot,
+  getTherapistProfile,
+  getUserLite,
+  listBookingRequestsForTherapist,
+  listOpenSlotsForTherapist,
+  listReviewsForTherapist,
+  listSessionsForTherapist,
+  rejectTherapistBookingRequest,
+  TherapistBookingRequest,
+  TherapistProfile,
+  TherapistReview,
+  TherapistSession,
+  TherapistSlot,
+  upsertMyTherapistProfile,
+} from '@/app/therapist/marketplace';
+import { tokens } from '@/app/ui/tokens';
+import { auth, db } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { doc, getDoc } from 'firebase/firestore';
@@ -14,26 +34,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { auth, db } from '@/lib/firebase';
-import { tokens } from '@/app/ui/tokens';
-import {
-  approveTherapistBookingRequest,
-  bookTherapistSlot,
-  createTherapistSlot,
-  getUserLite,
-  getTherapistProfile,
-  listBookingRequestsForTherapist,
-  listOpenSlotsForTherapist,
-  rejectTherapistBookingRequest,
-  listReviewsForTherapist,
-  listSessionsForTherapist,
-  TherapistBookingRequest,
-  TherapistProfile,
-  TherapistReview,
-  TherapistSession,
-  TherapistSlot,
-  upsertMyTherapistProfile,
-} from '@/app/therapist/marketplace';
 
 function fmtSlot(iso: string) {
   const d = new Date(iso);
@@ -373,12 +373,12 @@ export default function TherapistProfileScreen() {
       </View>
 
       {loading ? (
-        <View style={styles.center}>
+        <View style={styles.topContent}>
           <ActivityIndicator color={tokens.colors.pink} />
           <Text style={styles.muted}>Loading…</Text>
         </View>
       ) : !profile ? (
-        <View style={styles.center}>
+        <View style={styles.topContent}>
           <Text style={styles.emptyTitle}>Therapist profile not found</Text>
           <Text style={styles.muted}>This therapist hasn’t created a public profile yet.</Text>
         </View>
@@ -720,9 +720,10 @@ const styles = StyleSheet.create({
   title: { fontSize: 18, fontWeight: '900', color: tokens.colors.text },
   subtitle: { marginTop: 2, fontSize: 12, fontWeight: '600', color: tokens.colors.textMuted },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 18 },
+  topContent: { flex: 1, alignItems: 'center', paddingTop: 24, gap: 10, paddingHorizontal: 18 },
   muted: { fontSize: 13, fontWeight: '600', color: tokens.colors.textMuted },
   emptyTitle: { fontSize: 16, fontWeight: '900', color: tokens.colors.text },
-  content: { padding: tokens.spacing.screenHorizontal, paddingBottom: 28, gap: 12 },
+  content: { flexGrow: 0, padding: tokens.spacing.screenHorizontal, paddingBottom: 28, gap: 12 },
   hero: {
     backgroundColor: tokens.colors.surface,
     borderRadius: tokens.radius.lg,

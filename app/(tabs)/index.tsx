@@ -1,4 +1,4 @@
-import { Feather } from '@expo/vector-icons';
+                                                        import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
@@ -495,27 +495,28 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <Pressable
-          style={styles.menuButton}
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            setMenuVisible(!menuVisible);
-          }}
-        >
-          <HamburgerMenu isOpen={menuVisible} />
-        </Pressable>
+      <View style={styles.mainContent}>
+        {/* Header */}
+        <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+          <Pressable
+            style={styles.menuButton}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setMenuVisible(!menuVisible);
+            }}
+          >
+            <HamburgerMenu isOpen={menuVisible} />
+          </Pressable>
 
-        <Text style={styles.headerTitle}>Spill</Text>
+          <Text style={styles.headerTitle}>Spill</Text>
 
-        <Pressable
-          style={styles.notificationsButton}
-          onPress={() => router.push('/notifications' as any)}
-        >
-          <Feather name="bell" size={22} color="#333" />
-        </Pressable>
-      </View>
+          <Pressable
+            style={styles.notificationsButton}
+            onPress={() => router.push('/notifications' as any)}
+          >
+            <Feather name="bell" size={22} color="#333" />
+          </Pressable>
+        </View>
 
       {/* Side Menu (Twitter-style) */}
       {menuVisible && (
@@ -942,6 +943,7 @@ export default function HomeScreen() {
         <Text style={styles.fabIcon}>+</Text>
       </Pressable>
     </View>
+    </View>
   );
 }
 
@@ -949,6 +951,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8f9fa',
+  },
+  mainContent: {
+    flex: 1,
   },
   loadingContainer: {
     flex: 1,
