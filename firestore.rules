@@ -5,7 +5,10 @@ service cloud.firestore {
     function isAdmin() {
       return request.auth != null
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.is_admin == true;
+        && (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.is_admin == true
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.is_admin == 'true'
+        );
     }
 
     // Users: anyone authenticated can read (for matching list, profiles); only own doc writable

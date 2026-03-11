@@ -5,7 +5,7 @@ import {
   youtubeThumbnailUrl,
 } from '@/app/therapist/marketplace';
 import { Feather } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -17,7 +17,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { tokens } from '@/app/ui/tokens';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -41,6 +41,7 @@ const CAT_LABELS: Record<string, string> = {
 
 export default function TherapistResourcesScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [resources, setResources] = useState<TherapistResource[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string | null>(null);
@@ -75,7 +76,8 @@ export default function TherapistResourcesScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <View style={[styles.safe, { paddingTop: insets.top }]}>
+      <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.headerBtn} hitSlop={10}>
           <Feather name="chevron-left" size={22} color={tokens.colors.text} />
@@ -196,7 +198,7 @@ export default function TherapistResourcesScreen() {
           }
         />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -206,15 +208,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 10,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: tokens.colors.border,
     backgroundColor: tokens.colors.surface,
     gap: 12,
   },
-  headerBtn: { padding: 8 },
-  title: { fontSize: 18, fontWeight: '900', color: tokens.colors.text },
-  subtitle: { fontSize: 12, color: tokens.colors.textMuted, marginTop: 2 },
+  headerBtn: { padding: 6 },
+  title: { fontSize: 17, fontWeight: '600', color: tokens.colors.text },
+  subtitle: { fontSize: 12, color: tokens.colors.textMuted, marginTop: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24 },
   muted: { fontSize: 13, color: tokens.colors.textMuted },
   filters: {
@@ -222,7 +225,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 10,
     backgroundColor: tokens.colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: tokens.colors.border,
@@ -238,7 +241,7 @@ const styles = StyleSheet.create({
   filterChipActive: { borderColor: tokens.colors.pink, backgroundColor: 'rgba(244,114,182,0.12)' },
   filterText: { fontSize: 13, fontWeight: '600', color: tokens.colors.textSecondary },
   filterTextActive: { color: tokens.colors.pink },
-  list: { padding: 16, paddingBottom: 40 },
+  list: { padding: 16, paddingTop: 12, paddingBottom: 40 },
   card: {
     backgroundColor: tokens.colors.surface,
     borderRadius: 16,
