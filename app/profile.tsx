@@ -5,26 +5,26 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View
+    ActivityIndicator,
+    Alert,
+    FlatList,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  downvotePost,
-  followUser,
-  formatTimeAgo,
-  getUserProfile,
-  handleComment,
-  Post,
-  removeVote,
-  unfollowUser,
-  upvotePost
+    downvotePost,
+    followUser,
+    formatTimeAgo,
+    getUserProfile,
+    handleComment,
+    Post,
+    removeVote,
+    unfollowUser,
+    upvotePost
 } from './functions';
 
 interface UserProfile {

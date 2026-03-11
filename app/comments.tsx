@@ -1,4 +1,6 @@
+import { extractYoutubeId, youtubeThumbnailUrl } from '@/app/therapist/marketplace';
 import * as Haptics from 'expo-haptics';
+import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -6,7 +8,9 @@ import { useEffect, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
+    Dimensions,
     KeyboardAvoidingView,
+    Modal,
     Platform,
     Pressable,
     ScrollView,
@@ -15,6 +19,7 @@ import {
     TextInput,
     View
 } from 'react-native';
+import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
     addComment,
@@ -105,6 +110,7 @@ export default function CommentsScreen() {
   const [newComment, setNewComment] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [playingYoutube, setPlayingYoutube] = useState<{ youtubeId: string; title?: string } | null>(null);
 
   const onProfilePress = (userId: string) => {
     router.push(`/profile?userId=${userId}` as any);
@@ -303,7 +309,8 @@ export default function CommentsScreen() {
   }
 
   return (
-    <KeyboardAvoidingView 
+  <>
+      <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
@@ -347,6 +354,25 @@ export default function CommentsScreen() {
                   )}
                 </View>
               )}
+              {(post.youtube_id || (post.youtube_url && extractYoutubeId(post.youtube_url))) && (
+                <Pressable
+                  style={styles.youtubeThumbWrap}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    const yid = post.youtube_id || extractYoutubeId(post.youtube_url);
+                    if (yid) setPlayingYoutube({ youtubeId: yid, title: post.content?.slice(0, 60) });
+                  }}
+                >
+                  <Image
+                    source={{ uri: youtubeThumbnailUrl(post.youtube_id || extractYoutubeId(post.youtube_url)!, false) }}
+                    style={styles.youtubeThumb}
+                    contentFit="cover"
+                  />
+                  <View style={styles.youtubePlayOverlay}>
+                    <Feather name="play-circle" size={56} color="rgba(255,255,255,0.95)" />
+                  </View>
+                </Pressable>
+              )}
             </View>
           )}
 
@@ -380,6 +406,37 @@ export default function CommentsScreen() {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+
+      <Modal
+        visible={!!playingYoutube}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setPlayingYoutube(null)}
+      >
+        <View style={styles.youtubeModal}>
+          <View style={[styles.youtubeModalHeader, { paddingTop: insets.top + 8 }]}>
+            <Pressable onPress={() => setPlayingYoutube(null)} style={styles.youtubeCloseBtn}>
+              <Feather name="x" size={24} color="#111827" />
+            </Pressable>
+            <Text style={styles.youtubeModalTitle} numberOfLines={1}>
+              {playingYoutube?.title || 'Video'}
+            </Text>
+            <View style={{ width: 44 }} />
+          </View>
+          {playingYoutube && (
+            <WebView
+              source={{ uri: `https://www.youtube.com/embed/${playingYoutube.youtubeId}?autoplay=1` }}
+              style={styles.youtubeWebView}
+              allowsFullscreenVideo
+              allowsInlineMediaPlayback
+              mediaPlaybackRequiresUserAction={false}
+              javaScriptEnabled
+              domStorageEnabled
+            />
+          )}
+        </View>
+      </Modal>
+  </>
   );
 }
 
@@ -469,6 +526,48 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 200,
     borderRadius: 8,
+  },
+  youtubeThumbWrap: {
+    marginTop: 8,
+    marginBottom: 8,
+    borderRadius: 8,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#000',
+  },
+  youtubeThumb: {
+    width: '100%',
+    height: Math.round(Dimensions.get('window').width * (9 / 16)),
+    borderRadius: 8,
+  },
+  youtubePlayOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  youtubeModal: { flex: 1, backgroundColor: '#000' },
+  youtubeModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  youtubeCloseBtn: { padding: 10, marginLeft: -10 },
+  youtubeModalTitle: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#111827',
+    marginLeft: 8,
+  },
+  youtubeWebView: {
+    flex: 1,
+    backgroundColor: '#000',
+    minHeight: Math.round(Dimensions.get('window').width * (9 / 16)),
   },
   videoContainer: {
     width: '100%',

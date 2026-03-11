@@ -23,8 +23,10 @@ import {
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Reanimated, {
+  Easing,
   useAnimatedStyle,
   useSharedValue,
+  withSequence,
   withSpring,
   withTiming
 } from 'react-native-reanimated';
@@ -289,6 +291,8 @@ export default function HomeScreen() {
   const [isPremium, setIsPremium] = useState(false);
   const [commentSheetPostId, setCommentSheetPostId] = useState<string | null>(null);
   const [playingYoutube, setPlayingYoutube] = useState<{ youtubeId: string; title?: string } | null>(null);
+  const [showStopTouching, setShowStopTouching] = useState(false);
+  const logoScale = useSharedValue(1);
   const [sheetComments, setSheetComments] = useState<SheetComment[]>([]);
   const [sheetCommentsLoading, setSheetCommentsLoading] = useState(false);
   const [newCommentText, setNewCommentText] = useState('');
@@ -299,6 +303,11 @@ export default function HomeScreen() {
   const menuAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: menuTranslateX.value }],
     opacity: menuTranslateX.value > -320 ? 1 : 0, // Hide when completely off-screen
+  }));
+
+  // Animated style for header logo - must be called unconditionally (before any early return)
+  const logoAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: logoScale.value }],
   }));
 
   const loadPosts = async () => {
@@ -512,7 +521,30 @@ export default function HomeScreen() {
             <HamburgerMenu isOpen={menuVisible} />
           </Pressable>
 
-          <Text style={styles.headerTitle}>Spill</Text>
+          <View style={styles.headerCenter}>
+            <Pressable
+              onPressIn={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setShowStopTouching(true);
+                logoScale.value = withSequence(
+                  withTiming(1.3, { duration: 300, easing: Easing.out(Easing.cubic) }),
+                  withTiming(1.0, { duration: 700, easing: Easing.inOut(Easing.cubic) })
+                );
+                setTimeout(() => setShowStopTouching(false), 1000);
+              }}
+              hitSlop={10}
+              style={styles.headerLogoPressable}
+            >
+              <Reanimated.View style={[logoAnimatedStyle, styles.headerLogoRow]}>
+                <Image
+                  source={showStopTouching ? require('@/assets/images/stop-touching.png') : require('@/assets/images/logo12.png')}
+                  style={styles.headerLogo}
+                  contentFit="contain"
+                />
+                <Text style={styles.headerTitle}>Spill</Text>
+              </Reanimated.View>
+            </Pressable>
+          </View>
 
           <Pressable
             style={styles.notificationsButton}
@@ -801,6 +833,26 @@ export default function HomeScreen() {
                   </View>
                 )}
               </Pressable>
+              {/* YouTube video – tap to play inline (separate from post content) */}
+              {(post.youtube_id || (post.youtube_url && extractYoutubeId(post.youtube_url))) && (
+                <Pressable
+                  style={styles.youtubeThumbWrap}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    const yid = post.youtube_id || extractYoutubeId(post.youtube_url);
+                    if (yid) setPlayingYoutube({ youtubeId: yid, title: post.content?.slice(0, 60) });
+                  }}
+                >
+                  <Image
+                    source={{ uri: youtubeThumbnailUrl(post.youtube_id || extractYoutubeId(post.youtube_url)!, false) }}
+                    style={styles.youtubeThumb}
+                    contentFit="cover"
+                  />
+                  <View style={styles.youtubePlayOverlay}>
+                    <Feather name="play-circle" size={56} color="rgba(255,255,255,0.95)" />
+                  </View>
+                </Pressable>
+              )}
 
               {/* Post actions: minimal, fast */}
               <View style={styles.postActions}>
@@ -939,6 +991,39 @@ export default function HomeScreen() {
         </Pressable>
       </Modal>
 
+      {/* YouTube video player modal */}
+      <Modal
+        visible={!!playingYoutube}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setPlayingYoutube(null)}
+      >
+        <View style={styles.youtubeModal}>
+          <View style={[styles.youtubeModalHeader, { paddingTop: insets.top + 8 }]}>
+            <Pressable onPress={() => setPlayingYoutube(null)} style={styles.youtubeCloseBtn}>
+              <Feather name="x" size={24} color="#111827" />
+            </Pressable>
+            <Text style={styles.youtubeModalTitle} numberOfLines={1}>
+              {playingYoutube?.title || 'Video'}
+            </Text>
+            <View style={{ width: 44 }} />
+          </View>
+          {playingYoutube && (
+            <WebView
+              source={{
+                uri: `https://www.youtube.com/embed/${playingYoutube.youtubeId}?autoplay=1`,
+              }}
+              style={styles.youtubeWebView}
+              allowsFullscreenVideo
+              allowsInlineMediaPlayback
+              mediaPlaybackRequiresUserAction={false}
+              javaScriptEnabled
+              domStorageEnabled
+            />
+          )}
+        </View>
+      </Modal>
+
       {/* Floating Action Button */}
       <Pressable
         style={[styles.fab, { bottom: 60 + insets.bottom + 24 }]}
@@ -986,12 +1071,30 @@ const styles = StyleSheet.create({
     position: 'relative',
     zIndex: 1000,
   },
+  headerCenter: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  headerLogoPressable: {
+    padding: 4,
+  },
+  headerLogoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerLogo: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+  },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 20,
     fontWeight: '800',
     color: '#ec4899',
-    flex: 1,
-    textAlign: 'center',
     letterSpacing: -0.5,
   },
   menuButton: {
@@ -1400,6 +1503,51 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 300,
     borderRadius: 8,
+  },
+  youtubeThumbWrap: {
+    marginTop: -8,
+    marginBottom: 12,
+    borderRadius: 8,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#000',
+  },
+  youtubeThumb: {
+    width: '100%',
+    height: Math.round(Dimensions.get('window').width * (9 / 16)),
+    borderRadius: 8,
+  },
+  youtubePlayOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  youtubeModal: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  youtubeModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  youtubeCloseBtn: { padding: 10, marginLeft: -10 },
+  youtubeModalTitle: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#111827',
+    marginLeft: 8,
+  },
+  youtubeWebView: {
+    flex: 1,
+    backgroundColor: '#000',
+    minHeight: Math.round(Dimensions.get('window').width * (9 / 16)),
   },
   postActions: {
     flexDirection: 'row',
