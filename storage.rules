@@ -38,6 +38,12 @@ service firebase.storage {
       allow read: if request.auth != null;
       allow write: if false;
     }
+
+    // Therapist resources (PDFs for books/articles) – uploaded via Cloud Function, therapists read
+    match /therapist_resources/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
   }
 }
 

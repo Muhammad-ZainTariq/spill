@@ -2,7 +2,7 @@ import { listOpenSlotsForTherapist, listTherapistProfiles, TherapistProfile } fr
 import TherapistList from '@/components/TherapistList';
 import { auth, db } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { doc, getDoc } from 'firebase/firestore';
@@ -166,7 +166,7 @@ export default function ConnectionsScreen() {
       const enriched = await Promise.all(
         list.map(async (p) => {
           try {
-            const slots = await listOpenSlotsForTherapist(p.id, 10);
+            const slots = await listOpenSlotsForTherapist(p.id, 100);
             return { ...p, openSlots: slots.length, nextSlotAt: slots[0]?.start_at || null };
           } catch {
             return { ...p, openSlots: 0, nextSlotAt: null };
@@ -300,6 +300,12 @@ export default function ConnectionsScreen() {
   useEffect(() => {
     if (activeTab === 'therapists') loadTherapists();
   }, [activeTab]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (activeTab === 'therapists') loadTherapists();
+    }, [activeTab])
+  );
 
   useEffect(() => {
     const delayDebounce = setTimeout(() => {
@@ -688,6 +694,8 @@ export default function ConnectionsScreen() {
               loading={loadingTherapists}
               onTherapistPress={(id: string) => router.push(`/therapist/${id}` as any)}
               style={styles.tabContent}
+              onRefresh={loadTherapists}
+              refreshing={loadingTherapists}
             />
           ) : activeTab === 'groups' ? (
             loadingGroups ? (

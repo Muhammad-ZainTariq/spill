@@ -46,6 +46,7 @@ export default function AdminLayout() {
       <Stack.Screen name="therapist-comments" />
       <Stack.Screen name="flagged" />
       <Stack.Screen name="reports" />
+      <Stack.Screen name="resources" />
     </Stack>
   );
 }

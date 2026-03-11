@@ -1,13 +1,16 @@
-import { auth, db, functions } from '@/lib/firebase';
+import { auth, db, functions, getDownloadURL, ref, storage } from '@/lib/firebase';
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
   limit,
+  orderBy,
   query,
   setDoc,
+  updateDoc,
   where,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
@@ -128,18 +131,49 @@ export const createTherapistSlot = async (durationMin: number, startAtIso: strin
   return ref.id;
 };
 
+export const listAllSlotsForTherapist = async (therapistUid: string, max: number = 100): Promise<TherapistSlot[]> => {
+  if (!auth.currentUser) return [];
+  const q = query(collection(db, 'therapist_slots'), where('therapist_uid', '==', therapistUid), limit(200));
+  const snap = await getDocs(q);
+  const now = Date.now();
+  const seen = new Set<string>();
+  const list: TherapistSlot[] = snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() as any) }))
+    .filter((s) => !['cancelled'].includes(String(s.status || '')))
+    .filter((s) => {
+      const t = Date.parse(String(s.start_at || ''));
+      return Number.isFinite(t) && t >= now;
+    })
+    .filter((s) => {
+      const key = String(s.start_at || '');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at))
+    .slice(0, max);
+  return list;
+};
+
 export const listOpenSlotsForTherapist = async (therapistUid: string, max: number = 25): Promise<TherapistSlot[]> => {
   if (!auth.currentUser) return [];
   // Keep query simple (avoid composite indexes); filter/sort in JS.
   const q = query(collection(db, 'therapist_slots'), where('therapist_uid', '==', therapistUid), limit(200));
   const snap = await getDocs(q);
   const now = Date.now();
+  const seen = new Set<string>();
   const list: TherapistSlot[] = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() as any) }))
     .filter((s) => String(s.status) === 'open')
     .filter((s) => {
       const t = Date.parse(String(s.start_at || ''));
       return Number.isFinite(t) && t >= now;
+    })
+    .filter((s) => {
+      const key = String(s.start_at || '');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     })
     .sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at))
     .slice(0, max);
@@ -212,6 +246,54 @@ export const rejectTherapistBookingRequest = async (requestId: string): Promise<
   }
 };
 
+export const cancelTherapistSlot = async (slotId: string): Promise<{ ok: boolean; error?: string }> => {
+  const u = auth.currentUser;
+  if (!u) return { ok: false, error: 'Not logged in.' };
+  try {
+    const slotRef = doc(db, 'therapist_slots', slotId);
+    const snap = await getDoc(slotRef);
+    if (!snap.exists()) return { ok: false, error: 'Slot not found.' };
+    const data = snap.data() as any;
+    if (String(data?.therapist_uid || '') !== u.uid) return { ok: false, error: 'Not your slot.' };
+    if (String(data?.status || '') !== 'open') return { ok: false, error: 'Can only cancel open slots.' };
+    await updateDoc(slotRef, { status: 'cancelled' });
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Could not cancel slot.' };
+  }
+};
+
+export const cancelTherapistSession = async (sessionId: string): Promise<{ ok: boolean; error?: string }> => {
+  if (!auth.currentUser) return { ok: false, error: 'Not logged in.' };
+  try {
+    const fn = httpsCallable<{ sessionId: string }, { ok: boolean; error?: string }>(
+      functions,
+      'cancelTherapistSession'
+    );
+    const res = await fn({ sessionId });
+    return res.data || { ok: false, error: 'Cancel failed.' };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Cancel failed.' };
+  }
+};
+
+export const rescheduleTherapistSession = async (
+  sessionId: string,
+  newSlotId: string
+): Promise<{ ok: boolean; error?: string }> => {
+  if (!auth.currentUser) return { ok: false, error: 'Not logged in.' };
+  try {
+    const fn = httpsCallable<{ sessionId: string; newSlotId: string }, { ok: boolean; error?: string }>(
+      functions,
+      'rescheduleTherapistSession'
+    );
+    const res = await fn({ sessionId, newSlotId });
+    return res.data || { ok: false, error: 'Reschedule failed.' };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Reschedule failed.' };
+  }
+};
+
 export const listSessionsForTherapist = async (therapistUid: string, max: number = 50): Promise<TherapistSession[]> => {
   if (!auth.currentUser) return [];
   const q = query(collection(db, 'therapist_sessions'), where('therapist_uid', '==', therapistUid), limit(200));
@@ -261,6 +343,102 @@ export const submitTherapistSessionReview = async (
   } catch (e: any) {
     return { ok: false, error: e?.message || 'Could not submit review.' };
   }
+};
+
+export const RESOURCE_TYPES = ['video', 'book', 'article'] as const;
+export const RESOURCE_CATEGORIES = ['clinical', 'self-care', 'research', 'legal'] as const;
+
+export type TherapistResource = {
+  id: string;
+  title: string;
+  description?: string | null;
+  /** YouTube URL for videos; external link for articles (optional) */
+  url?: string | null;
+  /** Storage download URL for uploaded PDFs (books/articles) */
+  file_url?: string | null;
+  /** Extracted from YouTube URL for thumbnail */
+  youtube_id?: string | null;
+  type: (typeof RESOURCE_TYPES)[number];
+  category: (typeof RESOURCE_CATEGORIES)[number];
+  author?: string | null;
+  order?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+/** Extract YouTube video ID from URL */
+export function extractYoutubeId(url: string | null | undefined): string | null {
+  if (!url || typeof url !== 'string') return null;
+  const u = url.trim();
+  const m1 = u.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  if (m1) return m1[1];
+  return null;
+}
+
+/** YouTube thumbnail URL (maxresdefault or hqdefault fallback) */
+export function youtubeThumbnailUrl(videoId: string, highRes = true): string {
+  return highRes
+    ? `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`
+    : `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+}
+
+export const uploadTherapistResourcePdf = async (
+  base64: string,
+  fileName: string,
+  contentType = 'application/pdf'
+): Promise<string> => {
+  const u = auth.currentUser;
+  if (!u) throw new Error('Not logged in.');
+  const fn = httpsCallable<
+    { base64: string; contentType: string; fileName: string },
+    { path: string }
+  >(functions, 'uploadTherapistResourceFile');
+  const { data } = await fn({ base64, contentType, fileName });
+  const path = String((data as any)?.path || '').trim();
+  if (!path) throw new Error('Upload failed.');
+  return getDownloadURL(ref(storage, path));
+};
+
+export const listTherapistResources = async (max: number = 100): Promise<TherapistResource[]> => {
+  if (!auth.currentUser) return [];
+  const q = query(
+    collection(db, 'therapist_resources'),
+    orderBy('created_at', 'desc'),
+    limit(max)
+  );
+  const snap = await getDocs(q);
+  const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as TherapistResource[];
+  return list.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+};
+
+export const createTherapistResource = async (
+  data: Omit<TherapistResource, 'id' | 'created_at' | 'updated_at'>
+): Promise<string> => {
+  const u = auth.currentUser;
+  if (!u) throw new Error('Not logged in.');
+  const now = new Date().toISOString();
+  const ref = await addDoc(collection(db, 'therapist_resources'), {
+    ...data,
+    created_at: now,
+    updated_at: now,
+  });
+  return ref.id;
+};
+
+export const updateTherapistResource = async (
+  id: string,
+  patch: Partial<Omit<TherapistResource, 'id' | 'created_at'>>
+): Promise<void> => {
+  const u = auth.currentUser;
+  if (!u) throw new Error('Not logged in.');
+  const now = new Date().toISOString();
+  await updateDoc(doc(db, 'therapist_resources', id), { ...patch, updated_at: now });
+};
+
+export const deleteTherapistResource = async (id: string): Promise<void> => {
+  const u = auth.currentUser;
+  if (!u) throw new Error('Not logged in.');
+  await deleteDoc(doc(db, 'therapist_resources', id));
 };
 
 export const listReviewsForTherapist = async (therapistUid: string, max: number = 30): Promise<TherapistReview[]> => {

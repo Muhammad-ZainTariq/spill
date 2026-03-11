@@ -206,6 +206,13 @@ export default function RootLayout() {
             gestureEnabled: true,
           }} 
         />
+        <Stack.Screen 
+          name="therapist-session" 
+          options={{ 
+            headerShown: false,
+            gestureEnabled: true,
+          }} 
+        />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
         <StatusBar style="auto" />

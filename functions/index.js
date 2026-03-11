@@ -220,6 +220,38 @@ exports.checkPostToxicity = functions
     }
   });
 
+// Admin-only: upload therapist resource PDF (books/articles). Body: { base64, contentType, fileName }. Returns { path }.
+exports.uploadTherapistResourceFile = functions
+  .region('us-central1')
+  .runWith({ timeoutSeconds: 60 })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+    }
+    const adminUid = context.auth.uid;
+    const adminDoc = await db.collection('users').doc(adminUid).get();
+    if (!adminDoc.exists || !adminDoc.data().is_admin) {
+      throw new functions.https.HttpsError('permission-denied', 'Only admins can upload therapist resources.');
+    }
+    const { base64, contentType, fileName } = data || {};
+    if (!base64 || typeof base64 !== 'string' || !fileName || typeof fileName !== 'string' || !fileName.trim()) {
+      throw new functions.https.HttpsError('invalid-argument', 'base64 and fileName are required.');
+    }
+    const mime = (contentType && typeof contentType === 'string') ? contentType.trim() : 'application/pdf';
+    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) || 'resource.pdf';
+    const path = `therapist_resources/${Date.now()}_${safeName}`;
+    try {
+      const buffer = Buffer.from(base64, 'base64');
+      const bucket = admin.storage().bucket('spillll.firebasestorage.app');
+      const file = bucket.file(path);
+      await file.save(buffer, { metadata: { contentType: mime } });
+      return { path };
+    } catch (err) {
+      console.error('uploadTherapistResourceFile failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Upload failed.');
+    }
+  });
+
 // Callable: upload media from base64 (avoids Blob/ArrayBuffer issues in React Native). Body: { base64, contentType, path }. Returns { path }; client uses getDownloadURL (no signBlob IAM needed).
 exports.uploadMedia = functions
   .region('us-central1')
@@ -870,6 +902,154 @@ exports.rejectTherapistBookingRequest = functions
       if (err instanceof functions.https.HttpsError) throw err;
       console.error('rejectTherapistBookingRequest failed', err);
       throw new functions.https.HttpsError('internal', err.message || 'Failed to reject booking.');
+    }
+  });
+
+// Therapist-only callable: cancel an approved session → releases slot back to open.
+// Body: { sessionId }
+exports.cancelTherapistSession = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const uid = context?.auth?.uid;
+    if (!uid) throw new functions.https.HttpsError('unauthenticated', 'You must be logged in.');
+    const sessionId = typeof data?.sessionId === 'string' ? data.sessionId.trim() : '';
+    if (!sessionId) throw new functions.https.HttpsError('invalid-argument', 'sessionId is required.');
+
+    const nowIso = new Date().toISOString();
+    const sessionRef = db.collection('therapist_sessions').doc(sessionId);
+    try {
+      const out = await db.runTransaction(async (tx) => {
+        const sessSnap = await tx.get(sessionRef);
+        if (!sessSnap.exists) throw new functions.https.HttpsError('not-found', 'Session not found.');
+        const sess = sessSnap.data() || {};
+        const therapistUid = String(sess.therapist_uid || '').trim();
+        if (!therapistUid || therapistUid !== uid) {
+          throw new functions.https.HttpsError('permission-denied', 'Not your session.');
+        }
+        const status = String(sess.status || '');
+        if (status === 'cancelled') throw new functions.https.HttpsError('failed-precondition', 'Already cancelled.');
+        const slotId = String(sess.slot_id || '').trim();
+        const userUid = String(sess.user_uid || '').trim();
+
+        tx.update(sessionRef, { status: 'cancelled', cancelled_at: nowIso });
+        if (slotId) {
+          const slotRef = db.collection('therapist_slots').doc(slotId);
+          tx.update(slotRef, {
+            status: 'open',
+            booked_by_uid: null,
+            booked_at: null,
+            session_id: null,
+          });
+        }
+        return { userUid, slotId };
+      });
+
+      try {
+        await db.collection('notifications').add({
+          recipient_id: out.userUid,
+          type: 'therapist_session_cancelled',
+          title: 'Session cancelled',
+          body: 'Your therapist cancelled the scheduled session.',
+          read: false,
+          created_at: nowIso,
+          data: { session_id: sessionId },
+        });
+      } catch (e) {}
+
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof functions.https.HttpsError) throw err;
+      console.error('cancelTherapistSession failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Failed to cancel session.');
+    }
+  });
+
+// Therapist-only callable: reschedule session to a new slot.
+// Body: { sessionId, newSlotId }
+exports.rescheduleTherapistSession = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const uid = context?.auth?.uid;
+    if (!uid) throw new functions.https.HttpsError('unauthenticated', 'You must be logged in.');
+    const sessionId = typeof data?.sessionId === 'string' ? data.sessionId.trim() : '';
+    const newSlotId = typeof data?.newSlotId === 'string' ? data.newSlotId.trim() : '';
+    if (!sessionId || !newSlotId) throw new functions.https.HttpsError('invalid-argument', 'sessionId and newSlotId required.');
+
+    const nowIso = new Date().toISOString();
+    const sessionRef = db.collection('therapist_sessions').doc(sessionId);
+    const newSlotRef = db.collection('therapist_slots').doc(newSlotId);
+    try {
+      const out = await db.runTransaction(async (tx) => {
+        const sessSnap = await tx.get(sessionRef);
+        if (!sessSnap.exists) throw new functions.https.HttpsError('not-found', 'Session not found.');
+        const sess = sessSnap.data() || {};
+        const therapistUid = String(sess.therapist_uid || '').trim();
+        if (!therapistUid || therapistUid !== uid) {
+          throw new functions.https.HttpsError('permission-denied', 'Not your session.');
+        }
+        const userUid = String(sess.user_uid || '').trim();
+        const oldSlotId = String(sess.slot_id || '').trim();
+        const dur = Number(sess.duration_min || 60);
+        if (![30, 60].includes(dur)) throw new functions.https.HttpsError('failed-precondition', 'Invalid duration.');
+
+        const newSlotSnap = await tx.get(newSlotRef);
+        if (!newSlotSnap.exists) throw new functions.https.HttpsError('not-found', 'New slot not found.');
+        const newSlot = newSlotSnap.data() || {};
+        if (String(newSlot.therapist_uid || '').trim() !== therapistUid) {
+          throw new functions.https.HttpsError('permission-denied', 'Not your slot.');
+        }
+        if (String(newSlot.status || '') !== 'open') {
+          throw new functions.https.HttpsError('failed-precondition', 'Slot is not available.');
+        }
+        const newStartIso = String(newSlot.start_at || '');
+        const newStartMs = Date.parse(newStartIso);
+        if (!Number.isFinite(newStartMs)) throw new functions.https.HttpsError('failed-precondition', 'Invalid slot time.');
+        if (newStartMs < Date.now() - 5 * 60 * 1000) {
+          throw new functions.https.HttpsError('failed-precondition', 'Slot has already passed.');
+        }
+        const newEndIso = new Date(newStartMs + dur * 60 * 1000).toISOString();
+
+        if (oldSlotId) {
+          const oldSlotRef = db.collection('therapist_slots').doc(oldSlotId);
+          tx.update(oldSlotRef, {
+            status: 'open',
+            booked_by_uid: null,
+            booked_at: null,
+            session_id: null,
+          });
+        }
+        tx.update(newSlotRef, {
+          status: 'booked',
+          booked_by_uid: userUid,
+          booked_at: nowIso,
+          session_id: sessionId,
+        });
+        tx.update(sessionRef, {
+          slot_id: newSlotId,
+          starts_at: newStartIso,
+          ends_at: newEndIso,
+          rescheduled_at: nowIso,
+        });
+        return { userUid };
+      });
+
+      try {
+        await db.collection('notifications').add({
+          recipient_id: out.userUid,
+          type: 'therapist_session_rescheduled',
+          title: 'Session rescheduled',
+          body: 'Your therapist rescheduled your session to a new time.',
+          read: false,
+          created_at: nowIso,
+          data: { session_id: sessionId },
+        });
+      } catch (e) {}
+
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof functions.https.HttpsError) throw err;
+      console.error('rescheduleTherapistSession failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Failed to reschedule session.');
     }
   });
 

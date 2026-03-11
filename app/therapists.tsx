@@ -26,7 +26,7 @@ export default function TherapistsScreen() {
       const enriched = await Promise.all(
         list.map(async (p) => {
           try {
-            const slots = await listOpenSlotsForTherapist(p.id, 10);
+            const slots = await listOpenSlotsForTherapist(p.id, 100);
             return {
               ...p,
               openSlots: slots.length,

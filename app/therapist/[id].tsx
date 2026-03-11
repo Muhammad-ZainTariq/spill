@@ -1,14 +1,18 @@
 import {
   approveTherapistBookingRequest,
   bookTherapistSlot,
+  cancelTherapistSession,
+  cancelTherapistSlot,
   createTherapistSlot,
   getTherapistProfile,
   getUserLite,
+  listAllSlotsForTherapist,
   listBookingRequestsForTherapist,
   listOpenSlotsForTherapist,
   listReviewsForTherapist,
   listSessionsForTherapist,
   rejectTherapistBookingRequest,
+  rescheduleTherapistSession,
   TherapistBookingRequest,
   TherapistProfile,
   TherapistReview,
@@ -27,6 +31,7 @@ import {
   Alert,
   Modal,
   Pressable,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -62,6 +67,7 @@ export default function TherapistProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<TherapistProfile | null>(null);
   const [slots, setSlots] = useState<TherapistSlot[]>([]);
+  const [allSlots, setAllSlots] = useState<TherapistSlot[]>([]); // All slots (open, requested, booked) for appointments
   const [sessions, setSessions] = useState<TherapistSession[]>([]);
   const [requests, setRequests] = useState<TherapistBookingRequest[]>([]);
   const [userMap, setUserMap] = useState<Record<string, any>>({});
@@ -71,12 +77,14 @@ export default function TherapistProfileScreen() {
 
   const [showCreateSlot, setShowCreateSlot] = useState(false);
   const [slotDayIdx, setSlotDayIdx] = useState(0);
-  const [slotTimeIdxs, setSlotTimeIdxs] = useState<number[]>([8]); // multi-select times (defaults to ~12:00)
+  const [slotTimeIdxs, setSlotTimeIdxs] = useState<number[]>([]); // multi-select times (none pre-selected)
 
   const [editName, setEditName] = useState('');
   const [editSpec, setEditSpec] = useState('');
   const [editLangs, setEditLangs] = useState('');
   const [editBio, setEditBio] = useState('');
+  const [userSlotDayKey, setUserSlotDayKey] = useState<string | null>(null); // For user: filter slots by day
+  const [therapistApptDayKey, setTherapistApptDayKey] = useState<string | null>(null); // For therapist: filter appointments by day
 
   const handleLogout = useCallback(() => {
     Alert.alert('Log out', 'Are you sure you want to log out?', [
@@ -101,15 +109,17 @@ export default function TherapistProfileScreen() {
     if (!therapistId) return;
     setLoading(true);
     try {
-      const [p, s, sess, revs, reqs] = await Promise.all([
+      const [p, s, allS, sess, revs, reqs] = await Promise.all([
         getTherapistProfile(therapistId),
         listOpenSlotsForTherapist(therapistId, 25),
+        isMe ? listAllSlotsForTherapist(therapistId, 100) : Promise.resolve([]),
         isMe ? listSessionsForTherapist(therapistId, 80) : Promise.resolve([]),
         isMe ? listReviewsForTherapist(therapistId, 30) : Promise.resolve([]),
         isMe ? listBookingRequestsForTherapist(therapistId, 50) : Promise.resolve([]),
       ]);
       setProfile(p);
       setSlots(s);
+      setAllSlots(allS);
       setSessions(sess);
       setReviews(revs);
       setRequests(reqs);
@@ -136,9 +146,24 @@ export default function TherapistProfileScreen() {
     }
   }, [therapistId]);
 
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }, [load]);
+
   useEffect(() => {
     load();
   }, [load]);
+
+  // Reset slot selection when opening the create-slot modal so count is accurate
+  useEffect(() => {
+    if (showCreateSlot) {
+      setSlotTimeIdxs([]);
+      setSlotDayIdx(0);
+    }
+  }, [showCreateSlot]);
 
   const isPremium = useCallback(async () => {
     if (!auth.currentUser) return false;
@@ -171,22 +196,26 @@ export default function TherapistProfileScreen() {
       {
         text: '30 min',
         onPress: async () => {
+          setSlots((prev) => prev.filter((s) => s.id !== slotId));
           const res = await bookTherapistSlot(slotId, 30);
-          if (!res.ok) Alert.alert('Error', res.error || 'Request failed.');
-          else {
+          if (!res.ok) {
+            Alert.alert('Error', res.error || 'Request failed.');
+            await load();
+          } else {
             Alert.alert('Request sent', 'Waiting for therapist approval.');
-            load();
           }
         },
       },
       {
         text: '60 min',
         onPress: async () => {
+          setSlots((prev) => prev.filter((s) => s.id !== slotId));
           const res = await bookTherapistSlot(slotId, 60);
-          if (!res.ok) Alert.alert('Error', res.error || 'Request failed.');
-          else {
+          if (!res.ok) {
+            Alert.alert('Error', res.error || 'Request failed.');
+            await load();
+          } else {
             Alert.alert('Request sent', 'Waiting for therapist approval.');
-            load();
           }
         },
       },
@@ -217,10 +246,157 @@ export default function TherapistProfileScreen() {
     return out;
   }, []);
 
+  // For selected date, which time indices are already allocated (have open slots)
+  const allocatedTimeIdxsForSelectedDay = useMemo(() => {
+    const now = new Date();
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + slotDayIdx);
+    const dayY = day.getFullYear();
+    const dayM = day.getMonth();
+    const dayD = day.getDate();
+    const allocated: number[] = [];
+    for (let idx = 0; idx < timeOptions.length; idx++) {
+      const t = timeOptions[idx]?.minutes ?? 0;
+      const hh = Math.floor(t / 60);
+      const mm = t % 60;
+      const hasSlot = slots.some((s) => {
+        const slotDate = new Date(String(s.start_at || ''));
+        if (Number.isNaN(slotDate.getTime())) return false;
+        return (
+          slotDate.getFullYear() === dayY &&
+          slotDate.getMonth() === dayM &&
+          slotDate.getDate() === dayD &&
+          slotDate.getHours() === hh &&
+          slotDate.getMinutes() === mm
+        );
+      });
+      if (hasSlot) allocated.push(idx);
+    }
+    return allocated;
+  }, [slots, slotDayIdx, timeOptions]);
+
+  // User side: group slots by day for filtering
+  const slotsByDay = useMemo(() => {
+    const map = new Map<string, TherapistSlot[]>();
+    for (const s of slots) {
+      const d = new Date(String(s.start_at || ''));
+      if (Number.isNaN(d.getTime())) continue;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(s);
+    }
+    for (const arr of map.values()) arr.sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at));
+    return map;
+  }, [slots]);
+
+  const slotDays = useMemo(() => {
+    const keys = Array.from(slotsByDay.keys()).sort();
+    return keys.map((key) => {
+      const [y, m, d] = key.split('-').map(Number);
+      const date = new Date(y, m - 1, d);
+      const today = new Date();
+      const isToday = date.toDateString() === today.toDateString();
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const isTomorrow = date.toDateString() === tomorrow.toDateString();
+      const label = isToday ? 'Today' : isTomorrow ? 'Tomorrow' : date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+      return { key, label, count: slotsByDay.get(key)!.length };
+    });
+  }, [slotsByDay]);
+
+  const filteredSlotsForUser = useMemo(() => {
+    const key = userSlotDayKey || (slotDays.length > 0 ? slotDays[0].key : null);
+    if (!key) return slots;
+    return slotsByDay.get(key) || [];
+  }, [userSlotDayKey, slotDays, slotsByDay, slots]);
+
+  // Unified appointment list: all slots with request/session info for therapist
+  const appointmentItems = useMemo(() => {
+    if (!isMe) return [];
+    const reqBySlot = new Map<string, TherapistBookingRequest>();
+    for (const r of requests) reqBySlot.set(String(r.slot_id || ''), r);
+    const sessBySlot = new Map<string, TherapistSession>();
+    for (const s of sessions) sessBySlot.set(String(s.slot_id || ''), s);
+    return allSlots.map((slot) => {
+      const req = reqBySlot.get(slot.id);
+      const sess = sessBySlot.get(slot.id);
+      const status = String(slot.status || 'open');
+      let userName: string | null = null;
+      if (req) userName = String(userMap?.[String(req.requester_uid || '')]?.display_name || userMap?.[String(req.requester_uid || '')]?.anonymous_username || req.requester_uid || 'User');
+      if (sess) userName = String(userMap?.[String(sess.user_uid || '')]?.display_name || userMap?.[String(sess.user_uid || '')]?.anonymous_username || sess.user_uid || 'User');
+      return { slot, request: req, session: sess, status, userName };
+    });
+  }, [isMe, allSlots, requests, sessions, userMap]);
+
+  // Therapist: group appointments by date for day filter
+  const appointmentDays = useMemo(() => {
+    if (!isMe) return [];
+    const map = new Map<string, typeof appointmentItems>();
+    for (const item of appointmentItems) {
+      const d = new Date(String(item.slot.start_at || ''));
+      if (Number.isNaN(d.getTime())) continue;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(item);
+    }
+    const keys = Array.from(map.keys()).sort();
+    return keys.map((key) => {
+      const [y, m, d] = key.split('-').map(Number);
+      const date = new Date(y, m - 1, d);
+      const today = new Date();
+      const isToday = date.toDateString() === today.toDateString();
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const isTomorrow = date.toDateString() === tomorrow.toDateString();
+      const label = isToday ? 'Today' : isTomorrow ? 'Tomorrow' : date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+      return { key, label, count: map.get(key)!.length };
+    });
+  }, [isMe, appointmentItems]);
+
+  const displayedAppointmentItems = useMemo(() => {
+    const key = therapistApptDayKey || (appointmentDays.length > 0 ? appointmentDays[0].key : null);
+    if (!key || appointmentDays.length === 0) return appointmentItems;
+    const day = appointmentDays.find((d) => d.key === key);
+    if (!day) return appointmentItems;
+    const map = new Map<string, typeof appointmentItems>();
+    for (const item of appointmentItems) {
+      const d = new Date(String(item.slot.start_at || ''));
+      if (Number.isNaN(d.getTime())) continue;
+      const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!map.has(k)) map.set(k, []);
+      map.get(k)!.push(item);
+    }
+    return map.get(key) || [];
+  }, [therapistApptDayKey, appointmentDays, appointmentItems]);
+
+  // Auto-select first day when therapist appointments load
+  useEffect(() => {
+    if (isMe && appointmentDays.length > 0) {
+      const keys = appointmentDays.map((d) => d.key);
+      if (!therapistApptDayKey || !keys.includes(therapistApptDayKey)) {
+        setTherapistApptDayKey(appointmentDays[0].key);
+      }
+    } else if (isMe && appointmentDays.length === 0) {
+      setTherapistApptDayKey(null);
+    }
+  }, [isMe, appointmentDays, therapistApptDayKey]);
+
+  // Auto-select first day when slots load; reset if selected day no longer has slots
+  useEffect(() => {
+    if (!isMe && slotDays.length > 0) {
+      const keys = slotDays.map((d) => d.key);
+      if (!userSlotDayKey || !keys.includes(userSlotDayKey)) {
+        setUserSlotDayKey(slotDays[0].key);
+      }
+    } else if (!isMe && slotDays.length === 0) {
+      setUserSlotDayKey(null);
+    }
+  }, [isMe, slotDays, userSlotDayKey]);
+
   const createSlotFromPicker = async () => {
     try {
-      const day = dateOptions[Math.max(0, Math.min(dateOptions.length - 1, slotDayIdx))]?.d;
-      if (!day) return;
+      // Compute day fresh from current date + selected offset (avoids stale "today" from memoized dateOptions)
+      const now = new Date();
+      const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + slotDayIdx);
       const pickedIdxs = [...new Set((slotTimeIdxs || []).map((n) => Number(n)).filter((n) => Number.isFinite(n)))].sort(
         (a, b) => a - b
       );
@@ -230,31 +406,36 @@ export default function TherapistProfileScreen() {
       }
 
       const created: string[] = [];
-      const skipped: string[] = [];
+      const skipped: { label: string; reason?: string }[] = [];
       for (const idx of pickedIdxs) {
         const t = timeOptions[Math.max(0, Math.min(timeOptions.length - 1, idx))]?.minutes ?? 9 * 60;
         const hh = Math.floor(t / 60);
         const mm = t % 60;
         const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hh, mm, 0, 0);
+        const label = timeOptions[Math.max(0, Math.min(timeOptions.length - 1, idx))]?.label || '';
         if (start.getTime() < Date.now() + 5 * 60 * 1000) {
-          skipped.push(timeOptions[Math.max(0, Math.min(timeOptions.length - 1, idx))]?.label || '');
+          skipped.push({ label, reason: 'in the past' });
+          continue;
+        }
+        if (allocatedTimeIdxsForSelectedDay.includes(idx)) {
+          skipped.push({ label, reason: 'already allocated' });
           continue;
         }
         try {
           // Therapist availability is time-only; we store 60-min blocks so users can request 30/60.
           await createTherapistSlot(60, start.toISOString());
-          created.push(timeOptions[Math.max(0, Math.min(timeOptions.length - 1, idx))]?.label || '');
-        } catch {
-          skipped.push(timeOptions[Math.max(0, Math.min(timeOptions.length - 1, idx))]?.label || '');
+          created.push(label);
+        } catch (err: any) {
+          skipped.push({ label, reason: err?.message || 'Failed to create' });
         }
       }
 
       setShowCreateSlot(false);
-      Alert.alert(
-        'Created',
-        `${created.length} slot(s) created.${skipped.length ? `\n\nSkipped: ${skipped.filter(Boolean).slice(0, 6).join(', ')}` : ''}`
-      );
-      load();
+      await load(); // Refresh slots so the list updates immediately
+      const skippedText = skipped.length
+        ? `\n\nSkipped: ${skipped.map((s) => `${s.label}${s.reason ? ` (${s.reason})` : ''}`).slice(0, 6).join(', ')}`
+        : '';
+      Alert.alert('Created', `${created.length} slot(s) created.${skippedText}`);
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'Could not create slot.');
     }
@@ -289,6 +470,88 @@ export default function TherapistProfileScreen() {
         },
       },
     ]);
+  };
+
+  const [cancellingId, setCancellingId] = useState<string | null>(null); // Prevent double-tap during cancel
+
+  const handleCancelSlot = async (slotId: string, slotLabel: string) => {
+    Alert.alert('Cancel slot', `Remove ${slotLabel} from your availability?`, [
+      { text: 'Keep it', style: 'cancel' },
+      {
+        text: 'Cancel slot',
+        style: 'destructive',
+        onPress: async () => {
+          setCancellingId(slotId);
+          // Optimistic: remove from UI immediately
+          setAllSlots((prev) => prev.filter((s) => s.id !== slotId));
+          setSlots((prev) => prev.filter((s) => s.id !== slotId));
+          const res = await cancelTherapistSlot(slotId);
+          setCancellingId(null);
+          if (!res.ok) {
+            Alert.alert('Error', res.error || 'Could not cancel slot.');
+            await load(); // Restore state from server
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleCancelSession = async (sessionId: string, userName: string) => {
+    Alert.alert('Cancel session', `Cancel the session with ${userName}? They will be notified.`, [
+      { text: 'Keep it', style: 'cancel' },
+      {
+        text: 'Cancel session',
+        style: 'destructive',
+        onPress: async () => {
+          const sess = sessions.find((s) => s.id === sessionId);
+          const slotId = sess?.slot_id;
+          setCancellingId(sessionId);
+          // Optimistic: remove session and update slot to open in UI
+          setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+          if (slotId) {
+            setAllSlots((prev) =>
+              prev.map((s) => (s.id === slotId ? { ...s, status: 'open' as const, booked_by_uid: null } : s))
+            );
+          }
+          const res = await cancelTherapistSession(sessionId);
+          setCancellingId(null);
+          if (!res.ok) {
+            Alert.alert('Error', res.error || 'Could not cancel session.');
+            await load();
+          }
+        },
+      },
+    ]);
+  };
+
+  const [showPostponeModal, setShowPostponeModal] = useState(false);
+  const [postponeSession, setPostponeSession] = useState<TherapistSession | null>(null);
+
+  const handlePostpone = (session: TherapistSession) => {
+    setPostponeSession(session);
+    setShowPostponeModal(true);
+  };
+
+  const handlePostponeToSlot = async (newSlotId: string) => {
+    if (!postponeSession) return;
+    Alert.alert(
+      'Postpone session',
+      'Reschedule this session to the selected slot? The user will be notified of the new time.',
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => setShowPostponeModal(false) },
+        {
+          text: 'Reschedule',
+          onPress: async () => {
+            const res = await rescheduleTherapistSession(postponeSession.id, newSlotId);
+            setShowPostponeModal(false);
+            setPostponeSession(null);
+            if (!res.ok) Alert.alert('Error', res.error || 'Could not reschedule.');
+            else Alert.alert('Rescheduled', 'Session moved to the new slot. User has been notified.');
+            load();
+          },
+        },
+      ]
+    );
   };
 
   const handleSaveProfile = async () => {
@@ -327,8 +590,8 @@ export default function TherapistProfileScreen() {
       const m = start.getMinutes();
       start.setMinutes(m + ((5 - (m % 5)) % 5));
       await createTherapistSlot(durationMin, start.toISOString());
+      await load(); // Refresh slots so the list updates immediately
       Alert.alert('Added', 'Slot created.');
-      load();
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'Could not create slot.');
     }
@@ -383,10 +646,24 @@ export default function TherapistProfileScreen() {
           <Text style={styles.muted}>This therapist hasn’t created a public profile yet.</Text>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={tokens.textMuted} />
+          }
+        >
           {/* Therapist dashboard for self; public profile for others */}
           {isMe ? (
             <>
+              <Pressable
+                style={styles.resourcesCard}
+                onPress={() => router.push('/therapist/resources' as any)}
+              >
+                <Feather name="book-open" size={22} color={tokens.colors.pink} />
+                <Text style={styles.resourcesCardText}>Learning resources</Text>
+                <Feather name="chevron-right" size={18} color={tokens.colors.textMuted} />
+              </Pressable>
               <View style={styles.tabs}>
                 <Pressable
                   style={[styles.tabBtn, tab === 'appointments' && styles.tabBtnActive]}
@@ -420,68 +697,113 @@ export default function TherapistProfileScreen() {
                   <View style={styles.sectionHeaderRow}>
                     <Text style={styles.sectionTitle}>Appointments</Text>
                     <Pressable style={styles.iconCircle} onPress={() => setShowCreateSlot(true)} hitSlop={10}>
-                      <Feather name="calendar" size={18} color="#fff" />
+                      <Feather name="plus" size={20} color="#fff" />
                     </Pressable>
                   </View>
-                  <Text style={styles.helperMuted}>Your scheduled sessions appear here.</Text>
+                  <Text style={styles.helperMuted}>All your slots. Open slots can be cancelled. Requested slots need approval. Approved slots can be rescheduled or cancelled.</Text>
 
-                  {requests.length ? (
-                    <View style={{ marginTop: 12 }}>
-                      <Text style={styles.subTitle}>Booking requests</Text>
-                      <View style={{ marginTop: 10, gap: 10 }}>
-                        {requests.map((r) => {
-                          const u = userMap?.[String(r.requester_uid || '')];
-                          const name = String(u?.display_name || u?.anonymous_username || r.requester_uid || 'User');
-                          return (
-                            <View key={r.id} style={styles.requestRow}>
-                              <View style={{ flex: 1 }}>
-                                <Text style={styles.apptName} numberOfLines={1}>{name}</Text>
-                                <Text style={styles.apptMeta} numberOfLines={1}>
-                                  {fmtDateRange(String(r.start_at || ''), String(r.end_at || ''))} • {Math.round(Number(r.requested_duration_min || 0) || 0)} min
-                                </Text>
-                              </View>
-                              <Pressable style={styles.approveBtn} onPress={() => handleApprove(r.id)}>
-                                <Text style={styles.approveText}>Approve</Text>
-                              </Pressable>
-                              <Pressable style={styles.rejectBtn} onPress={() => handleReject(r.id)}>
-                                <Text style={styles.rejectText}>Decline</Text>
-                              </Pressable>
-                            </View>
-                          );
-                        })}
-                      </View>
+                  {appointmentItems.length === 0 ? (
+                    <View style={styles.emptyState}>
+                      <Feather name="calendar" size={40} color={tokens.colors.textMuted} />
+                      <Text style={styles.emptyTitle}>No appointments yet</Text>
+                      <Text style={styles.emptySubtitle}>Create availability slots so users can request sessions.</Text>
+                      <Pressable style={styles.emptyCta} onPress={() => setShowCreateSlot(true)}>
+                        <Feather name="plus" size={18} color="#fff" />
+                        <Text style={styles.emptyCtaText}>Add availability</Text>
+                      </Pressable>
                     </View>
-                  ) : null}
-
-                  {sessions.length === 0 ? (
-                    <Text style={styles.muted}>No appointments yet.</Text>
                   ) : (
-                    <View style={{ marginTop: 10, gap: 10 }}>
-                      {sessions.map((s) => {
-                        const u = userMap?.[String(s.user_uid || '')];
-                        const name = String(u?.display_name || u?.anonymous_username || s.user_uid || 'User');
-                        const statusLabel = String(s.status || 'scheduled');
-                        const isNow = statusLabel === 'active';
-                        return (
-                          <View key={s.id} style={styles.apptRow}>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.apptName} numberOfLines={1}>{name}</Text>
-                              <Text style={styles.apptMeta} numberOfLines={1}>
-                                {fmtDateRange(String(s.starts_at || ''), String(s.ends_at || ''))}
-                              </Text>
-                              <View style={[styles.apptPill, isNow ? styles.apptPillActive : styles.apptPillScheduled]}>
-                                <Text style={[styles.apptPillText, isNow ? styles.apptPillTextActive : styles.apptPillTextScheduled]}>
-                                  {statusLabel}
+                    <>
+                      {appointmentDays.length > 1 ? (
+                        <>
+                          <Text style={[styles.helperMuted, { marginTop: 12 }]}>Tap a date to see appointments</Text>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={{ gap: 10, paddingVertical: 12, paddingRight: 8 }}
+                          >
+                            {appointmentDays.map((d) => (
+                              <Pressable
+                                key={d.key}
+                                style={[styles.userDayPill, therapistApptDayKey === d.key && styles.userDayPillActive]}
+                                onPress={() => setTherapistApptDayKey(d.key)}
+                              >
+                                <Text style={[styles.userDayPillText, therapistApptDayKey === d.key && styles.userDayPillTextActive]}>
+                                  {d.label}
                                 </Text>
-                              </View>
+                                <Text style={[styles.userDayPillCount, therapistApptDayKey === d.key && styles.userDayPillCountActive]}>
+                                  {d.count} slot{d.count !== 1 ? 's' : ''}
+                                </Text>
+                              </Pressable>
+                            ))}
+                          </ScrollView>
+                        </>
+                      ) : null}
+                      <View style={{ marginTop: appointmentDays.length > 1 ? 4 : 16, gap: 12 }}>
+                        {displayedAppointmentItems.map(({ slot, request, session, status, userName }) => {
+                          const isPending = !!request && !session;
+                          const isScheduled = !!session;
+                          return (
+                        <View key={slot.id} style={styles.apptCard}>
+                          <View style={styles.apptCardTop}>
+                            <Text style={styles.apptName} numberOfLines={1}>
+                              {status === 'open' ? 'Open slot' : userName || 'User'}
+                            </Text>
+                            <Text style={styles.apptMeta} numberOfLines={1}>
+                              {fmtSlot(slot.start_at)} • {Math.round(Number(slot.duration_min || 0))} min
+                            </Text>
+                            <View style={[styles.apptPill, isPending ? styles.apptPillPending : isScheduled ? styles.apptPillScheduled : styles.apptPillOpen]}>
+                              <Text style={[styles.apptPillText, isPending ? styles.apptPillTextPending : isScheduled ? styles.apptPillTextScheduled : styles.apptPillTextOpen]}>
+                                {status === 'open' ? 'Available' : isPending ? 'Pending' : 'Scheduled'}
+                              </Text>
                             </View>
-                            <Pressable style={styles.openChatBtn} onPress={() => router.push(`/therapist-session/${s.id}` as any)}>
-                              <Text style={styles.openChatText}>Open chat</Text>
-                            </Pressable>
                           </View>
-                        );
-                      })}
-                    </View>
+                          <View style={styles.apptActions}>
+                            {status === 'open' ? (
+                              <Pressable
+                                style={[styles.cancelSessionBtn, cancellingId === slot.id && { opacity: 0.5 }]}
+                                onPress={() => handleCancelSlot(slot.id, fmtSlot(slot.start_at))}
+                                disabled={!!cancellingId}
+                              >
+                                <Feather name="x-circle" size={14} color={tokens.colors.danger} />
+                                <Text style={styles.cancelSessionText}>{cancellingId === slot.id ? '…' : 'Cancel'}</Text>
+                              </Pressable>
+                            ) : isPending && request ? (
+                              <>
+                                <Pressable style={styles.approveBtn} onPress={() => handleApprove(request.id)}>
+                                  <Feather name="check" size={14} color="#fff" />
+                                  <Text style={styles.approveText}>Approve</Text>
+                                </Pressable>
+                                <Pressable style={styles.rejectBtn} onPress={() => handleReject(request.id)}>
+                                  <Feather name="x" size={14} color="#b91c1c" />
+                                  <Text style={styles.rejectText}>Decline</Text>
+                                </Pressable>
+                              </>
+                            ) : isScheduled && session ? (
+                              <>
+                                <Pressable style={styles.openChatBtn} onPress={() => router.push(`/therapist-session/${session.id}` as any)}>
+                                  <Feather name="message-circle" size={14} color="#fff" />
+                                  <Text style={styles.openChatText}>Chat</Text>
+                                </Pressable>
+                                <Pressable style={styles.postponeBtn} onPress={() => handlePostpone(session)}>
+                                  <Feather name="calendar" size={14} color={tokens.colors.blue} />
+                                  <Text style={styles.postponeBtnText}>Postpone</Text>
+                                </Pressable>
+                                <Pressable
+                                  style={[styles.cancelSessionBtn, cancellingId === session.id && { opacity: 0.5 }]}
+                                  onPress={() => handleCancelSession(session.id, userName || 'User')}
+                                  disabled={!!cancellingId}
+                                >
+                                  <Feather name="x-circle" size={14} color={tokens.colors.danger} />
+                                  <Text style={styles.cancelSessionText}>{cancellingId === session.id ? '…' : 'Cancel'}</Text>
+                                </Pressable>
+                              </>
+                            ) : null}
+                          </View>
+                        </View>
+                      );})}
+                      </View>
+                    </>
                   )}
                 </View>
               ) : tab === 'reviews' ? (
@@ -565,28 +887,43 @@ export default function TherapistProfileScreen() {
 
                   <View style={styles.sectionCard}>
                     <Text style={styles.sectionTitle}>Availability</Text>
-                    <Text style={styles.helperMuted}>Create slots so users can book sessions.</Text>
+                    <Text style={styles.helperMuted}>Open slots that users can book. Tap the X to remove a slot.</Text>
                     {slots.length === 0 ? (
-                      <Text style={styles.muted}>No open slots yet.</Text>
+                      <View style={styles.emptyStateSmall}>
+                        <Feather name="clock" size={32} color={tokens.colors.textMuted} />
+                        <Text style={styles.muted}>No open slots yet.</Text>
+                        <Text style={[styles.helperMuted, { marginTop: 4 }]}>Add slots so users can request sessions.</Text>
+                      </View>
                     ) : (
-                      <View style={{ marginTop: 10, gap: 10 }}>
+                      <View style={{ marginTop: 12, gap: 10 }}>
                         {slots.map((s) => (
-                          <View key={s.id} style={styles.slotRow}>
+                          <View key={s.id} style={styles.slotCard}>
                             <View style={{ flex: 1 }}>
                               <Text style={styles.slotWhen}>{fmtSlot(s.start_at)}</Text>
-                              <Text style={styles.slotMeta}>{Math.round(Number(s.duration_min || 0))} min</Text>
+                              <Text style={styles.slotMeta}>{Math.round(Number(s.duration_min || 0))} min • Open</Text>
                             </View>
+                            <Pressable
+                              style={[styles.cancelSlotBtn, cancellingId === s.id && { opacity: 0.5 }]}
+                              onPress={() => handleCancelSlot(s.id, fmtSlot(s.start_at))}
+                              disabled={!!cancellingId}
+                              hitSlop={8}
+                            >
+                              <Feather name="x" size={18} color={tokens.colors.danger} />
+                            </Pressable>
                           </View>
                         ))}
                       </View>
                     )}
 
-                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-                      <Pressable style={styles.secondaryBtn} onPress={() => quickAddSlot(60, 60)}>
-                        <Text style={styles.secondaryBtnText}>+ 1h (in 1h)</Text>
+                    <Text style={[styles.modalLabel, { marginTop: 16 }]}>Quick add</Text>
+                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                      <Pressable style={styles.quickAddBtn} onPress={() => quickAddSlot(60, 60)}>
+                        <Feather name="plus" size={16} color={tokens.colors.pink} />
+                        <Text style={styles.quickAddBtnText}>In 1 hour</Text>
                       </Pressable>
-                      <Pressable style={styles.secondaryBtn} onPress={() => quickAddSlot(120, 24 * 60)}>
-                        <Text style={styles.secondaryBtnText}>+ 2h (tomorrow)</Text>
+                      <Pressable style={styles.quickAddBtn} onPress={() => quickAddSlot(120, 24 * 60)}>
+                        <Feather name="plus" size={16} color={tokens.colors.pink} />
+                        <Text style={styles.quickAddBtnText}>Tomorrow</Text>
                       </Pressable>
                     </View>
                   </View>
@@ -597,49 +934,135 @@ export default function TherapistProfileScreen() {
                 <View style={styles.modalBackdrop}>
                   <View style={styles.modalCard}>
                     <View style={styles.modalHeader}>
-                      <Text style={styles.modalTitle}>Create availability</Text>
+                      <View>
+                        <Text style={styles.modalTitle}>Add availability</Text>
+                        <Text style={styles.modalSubtitle}>Select date and times for your open slots</Text>
+                      </View>
                       <Pressable style={styles.modalClose} onPress={() => setShowCreateSlot(false)} hitSlop={10}>
-                        <Feather name="x" size={18} color={tokens.colors.text} />
+                        <Feather name="x" size={20} color={tokens.colors.textSecondary} />
                       </Pressable>
                     </View>
 
-                    <Text style={styles.modalLabel}>Date</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 8 }}>
+                    <Text style={styles.modalLabel}>Pick a date</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.modalScrollContent, { paddingRight: 16 }]}>
                       {dateOptions.map((o, idx) => (
                         <Pressable
                           key={o.label}
-                          style={[styles.pillBtn, idx === slotDayIdx && styles.pillBtnActive]}
+                          style={[styles.datePill, idx === slotDayIdx && styles.datePillActive]}
                           onPress={() => setSlotDayIdx(idx)}
                         >
-                          <Text style={[styles.pillText, idx === slotDayIdx && styles.pillTextActive]}>{o.label}</Text>
+                          <Text style={[styles.datePillText, idx === slotDayIdx && styles.datePillTextActive]}>{o.label}</Text>
                         </Pressable>
                       ))}
                     </ScrollView>
 
-                    <Text style={styles.modalLabel}>Time</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 8 }}>
-                      {timeOptions.map((o, idx) => (
-                        <Pressable
-                          key={o.label}
-                          style={[styles.pillBtn, slotTimeIdxs.includes(idx) && styles.pillBtnActive]}
-                          onPress={() =>
-                            setSlotTimeIdxs((prev) => {
-                              const list = Array.isArray(prev) ? prev : [];
-                              return list.includes(idx) ? list.filter((x) => x !== idx) : [...list, idx];
-                            })
-                          }
-                        >
-                          <Text style={[styles.pillText, slotTimeIdxs.includes(idx) && styles.pillTextActive]}>{o.label}</Text>
-                        </Pressable>
-                      ))}
+                    <Text style={styles.modalLabel}>Pick times (tap to select multiple)</Text>
+                    <Text style={[styles.helperMuted, { marginBottom: 8 }]}>
+                      Times with a checkmark are already allocated for this date.
+                    </Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.modalScrollContent, { paddingRight: 16 }]}>
+                      {timeOptions.map((o, idx) => {
+                        const isAllocated = allocatedTimeIdxsForSelectedDay.includes(idx);
+                        const isSelected = slotTimeIdxs.includes(idx);
+                        return (
+                          <Pressable
+                            key={o.label}
+                            style={[
+                              styles.timePill,
+                              isAllocated && styles.timePillAllocated,
+                              isSelected && !isAllocated && styles.timePillActive,
+                            ]}
+                            onPress={() => {
+                              if (isAllocated) return; // Can't select already-allocated times
+                              setSlotTimeIdxs((prev) => {
+                                const list = Array.isArray(prev) ? prev : [];
+                                return list.includes(idx) ? list.filter((x) => x !== idx) : [...list, idx];
+                              });
+                            }}
+                            disabled={isAllocated}
+                          >
+                            {isAllocated ? (
+                              <Feather name="check-circle" size={14} color={tokens.colors.success} style={{ marginRight: 4 }} />
+                            ) : null}
+                            <Text
+                              style={[
+                                styles.timePillText,
+                                isAllocated && styles.timePillTextAllocated,
+                                isSelected && !isAllocated && styles.timePillTextActive,
+                              ]}
+                            >
+                              {o.label}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
                     </ScrollView>
 
-                    <Text style={styles.modalLabel}>Duration</Text>
-                    <Text style={styles.helperMuted}>Users will choose 30 or 60 minutes when requesting.</Text>
+                    <Text style={[styles.helperMuted, { marginTop: 4 }]}>
+                      Users will choose 30 or 60 min when booking. Each time = one 60‑min slot.
+                    </Text>
 
-                    <Pressable style={styles.createBtn} onPress={createSlotFromPicker}>
-                      <Text style={styles.createBtnText}>Create slot</Text>
+                    <Pressable
+                      style={[styles.createBtn, slotTimeIdxs.length === 0 && styles.createBtnDisabled]}
+                      onPress={createSlotFromPicker}
+                      disabled={slotTimeIdxs.length === 0}
+                    >
+                      <Feather name="calendar-plus" size={18} color={slotTimeIdxs.length === 0 ? '#94A3B8' : '#fff'} />
+                      <Text style={[styles.createBtnText, slotTimeIdxs.length === 0 && styles.createBtnTextDisabled]}>
+                        {slotTimeIdxs.length === 0
+                          ? 'Select times above'
+                          : `Create ${slotTimeIdxs.length} slot${slotTimeIdxs.length !== 1 ? 's' : ''}`}
+                      </Text>
                     </Pressable>
+                  </View>
+                </View>
+              </Modal>
+
+              <Modal visible={showPostponeModal} transparent animationType="fade" onRequestClose={() => setShowPostponeModal(false)}>
+                <View style={styles.modalBackdrop}>
+                  <View style={styles.modalCard}>
+                    <View style={styles.modalHeader}>
+                      <View>
+                        <Text style={styles.modalTitle}>Postpone session</Text>
+                        <Text style={styles.modalSubtitle}>Pick a new slot to reschedule to</Text>
+                      </View>
+                      <Pressable style={styles.modalClose} onPress={() => { setShowPostponeModal(false); setPostponeSession(null); }} hitSlop={10}>
+                        <Feather name="x" size={20} color={tokens.colors.textSecondary} />
+                      </Pressable>
+                    </View>
+                    {slots
+                      .filter((s) => {
+                        if (!postponeSession) return true;
+                        if (s.id === postponeSession.slot_id) return false;
+                        const sessionStart = postponeSession.starts_at;
+                        if (!sessionStart) return true;
+                        return s.start_at !== sessionStart;
+                      })
+                      .length === 0 ? (
+                      <Text style={styles.muted}>No other times available. Create new slots at different times.</Text>
+                    ) : (
+                      <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+                        {slots
+                          .filter((s) => {
+                            if (!postponeSession) return true;
+                            if (s.id === postponeSession.slot_id) return false;
+                            const sessionStart = postponeSession.starts_at;
+                            if (!sessionStart) return true;
+                            return s.start_at !== sessionStart;
+                          })
+                          .map((s) => (
+                          <Pressable
+                            key={s.id}
+                            style={styles.postponeSlotOption}
+                            onPress={() => handlePostponeToSlot(s.id)}
+                          >
+                            <Feather name="calendar" size={16} color={tokens.colors.textSecondary} />
+                            <Text style={styles.postponeSlotText}>{fmtSlot(s.start_at)}</Text>
+                            <Feather name="chevron-right" size={16} color={tokens.colors.textMuted} />
+                          </Pressable>
+                        ))}
+                      </ScrollView>
+                    )}
                   </View>
                 </View>
               </Modal>
@@ -674,19 +1097,46 @@ export default function TherapistProfileScreen() {
                 {slots.length === 0 ? (
                   <Text style={styles.muted}>No open slots yet.</Text>
                 ) : (
-                  <View style={{ marginTop: 10, gap: 10 }}>
-                    {slots.map((s) => (
-                      <View key={s.id} style={styles.slotRow}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.slotWhen}>{fmtSlot(s.start_at)}</Text>
-                          <Text style={styles.slotMeta}>{Math.round(Number(s.duration_min || 0))} min</Text>
+                  <>
+                    {slotDays.length > 1 ? (
+                      <>
+                        <Text style={[styles.helperMuted, { marginTop: 6 }]}>Choose a day to see available times</Text>
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={{ gap: 10, paddingVertical: 12, paddingRight: 8 }}
+                        >
+                          {slotDays.map((d) => (
+                            <Pressable
+                              key={d.key}
+                              style={[styles.userDayPill, userSlotDayKey === d.key && styles.userDayPillActive]}
+                              onPress={() => setUserSlotDayKey(d.key)}
+                            >
+                              <Text style={[styles.userDayPillText, userSlotDayKey === d.key && styles.userDayPillTextActive]}>
+                                {d.label}
+                              </Text>
+                              <Text style={[styles.userDayPillCount, userSlotDayKey === d.key && styles.userDayPillCountActive]}>
+                                {d.count} slot{d.count !== 1 ? 's' : ''}
+                              </Text>
+                            </Pressable>
+                          ))}
+                        </ScrollView>
+                      </>
+                    ) : null}
+                    <View style={{ marginTop: slotDays.length > 1 ? 4 : 10, gap: 10 }}>
+                      {filteredSlotsForUser.map((s) => (
+                        <View key={s.id} style={styles.slotRow}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.slotWhen}>{fmtSlot(s.start_at)}</Text>
+                            <Text style={styles.slotMeta}>{Math.round(Number(s.duration_min || 0))} min</Text>
+                          </View>
+                          <Pressable style={styles.bookBtn} onPress={() => handleBook(s.id)}>
+                            <Text style={styles.bookBtnText}>Book</Text>
+                          </Pressable>
                         </View>
-                        <Pressable style={styles.bookBtn} onPress={() => handleBook(s.id)}>
-                          <Text style={styles.bookBtnText}>Book</Text>
-                        </Pressable>
-                      </View>
-                    ))}
-                  </View>
+                      ))}
+                    </View>
+                  </>
                 )}
               </View>
             </>
@@ -749,10 +1199,35 @@ const styles = StyleSheet.create({
   badgeTextVerified: { color: tokens.colors.success },
   badgeTextPending: { color: tokens.colors.textSecondary },
 
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 32,
+    paddingHorizontal: 24,
+    gap: 12,
+  },
+  emptyStateSmall: {
+    alignItems: 'center',
+    paddingVertical: 24,
+    gap: 8,
+  },
+  emptyTitle: { fontSize: 17, fontWeight: '800', color: tokens.colors.text },
+  emptySubtitle: { fontSize: 14, color: tokens.colors.textMuted, textAlign: 'center' },
+  emptyCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: tokens.colors.pink,
+  },
+  emptyCtaText: { color: '#fff', fontSize: 14, fontWeight: '800' },
+  subSectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionCard: {
     backgroundColor: tokens.colors.surface,
     borderRadius: tokens.radius.lg,
-    padding: 14,
+    padding: 18,
     borderWidth: 1,
     borderColor: tokens.colors.border,
   },
@@ -769,6 +1244,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   subTitle: { marginTop: 14, fontSize: 12, fontWeight: '900', color: tokens.colors.textSecondary },
+
+  userDayPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+  },
+  userDayPillActive: {
+    backgroundColor: 'rgba(244,114,182,0.12)',
+    borderColor: 'rgba(244,114,182,0.4)',
+  },
+  userDayPillText: { fontSize: 14, fontWeight: '800', color: tokens.colors.text },
+  userDayPillTextActive: { color: tokens.colors.pink },
+  userDayPillCount: { marginTop: 2, fontSize: 11, fontWeight: '700', color: tokens.colors.textMuted },
+  userDayPillCountActive: { color: tokens.colors.pink },
 
   slotRow: {
     flexDirection: 'row',
@@ -825,25 +1317,38 @@ const styles = StyleSheet.create({
   },
   secondaryBtnText: { color: tokens.colors.pink, fontSize: 13, fontWeight: '900' },
 
+  resourcesCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: 'rgba(244,114,182,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(244,114,182,0.2)',
+    marginBottom: 14,
+  },
+  resourcesCardText: { flex: 1, fontSize: 15, fontWeight: '700', color: tokens.colors.text },
   tabs: {
     flexDirection: 'row',
-    gap: 10,
-    padding: 6,
-    borderRadius: 16,
+    gap: 14,
+    padding: 10,
+    borderRadius: 18,
     backgroundColor: tokens.colors.surfaceOverlay,
     borderWidth: 1,
     borderColor: tokens.colors.border,
   },
   tabBtn: {
     flex: 1,
-    height: 40,
-    borderRadius: 12,
+    height: 48,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 8,
     backgroundColor: 'transparent',
   },
   tabBtnActive: { backgroundColor: tokens.colors.pink },
-  tabText: { fontSize: 12, fontWeight: '900', color: tokens.colors.textSecondary, textAlign: 'center' },
+  tabText: { fontSize: 14, fontWeight: '800', color: tokens.colors.textSecondary, textAlign: 'center' },
   tabTextActive: { color: '#ffffff' },
 
   apptRow: {
@@ -858,50 +1363,147 @@ const styles = StyleSheet.create({
   apptName: { fontSize: 13, fontWeight: '900', color: tokens.colors.text },
   apptMeta: { marginTop: 3, fontSize: 12, fontWeight: '700', color: tokens.colors.textSecondary },
   apptPill: { alignSelf: 'flex-start', marginTop: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
+  apptPillOpen: { backgroundColor: 'rgba(100,116,139,0.12)' },
+  apptPillPending: { backgroundColor: 'rgba(245,158,11,0.14)' },
   apptPillScheduled: { backgroundColor: 'rgba(244,114,182,0.14)' },
   apptPillActive: { backgroundColor: 'rgba(16,185,129,0.12)' },
   apptPillText: { fontSize: 11, fontWeight: '900', textTransform: 'capitalize' },
+  apptPillTextOpen: { color: tokens.colors.textSecondary },
+  apptPillTextPending: { color: tokens.colors.warning },
   apptPillTextScheduled: { color: tokens.colors.pink },
   apptPillTextActive: { color: tokens.colors.success },
-  openChatBtn: {
-    height: 40,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    backgroundColor: tokens.colors.pink,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  openChatText: { color: '#fff', fontSize: 13, fontWeight: '900' },
-
-  requestRow: {
+  postponeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingVertical: 10,
+    gap: 6,
     paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(14,165,233,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(14,165,233,0.25)',
+  },
+  postponeBtnText: { fontSize: 12, fontWeight: '800', color: tokens.colors.blue },
+  postponeSlotOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
     borderRadius: 14,
     backgroundColor: tokens.colors.surfaceOverlay,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+    marginBottom: 8,
   },
-  approveBtn: {
+  postponeSlotText: { flex: 1, fontSize: 14, fontWeight: '700', color: tokens.colors.text },
+  openChatBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: tokens.colors.pink,
+    justifyContent: 'center',
+  },
+  openChatText: { color: '#fff', fontSize: 13, fontWeight: '800' },
+
+  requestCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+  },
+  requestActions: { flexDirection: 'row', gap: 8 },
+  apptCard: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+  },
+  apptCardTop: { marginBottom: 12 },
+  apptActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
+  },
+  cancelSessionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(239,68,68,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.2)',
+  },
+  cancelSessionText: { fontSize: 12, fontWeight: '800', color: tokens.colors.danger },
+  slotCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+  },
+  cancelSlotBtn: {
+    width: 36,
     height: 36,
-    paddingHorizontal: 10,
+    borderRadius: 18,
+    backgroundColor: 'rgba(239,68,68,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickAddBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    borderWidth: 1,
+    borderColor: 'rgba(244,114,182,0.3)',
+  },
+  quickAddBtnText: { fontSize: 13, fontWeight: '800', color: tokens.colors.pink },
+  approveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 40,
+    paddingHorizontal: 14,
     borderRadius: 12,
     backgroundColor: tokens.colors.success,
-    alignItems: 'center',
     justifyContent: 'center',
   },
-  approveText: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  approveText: { color: '#fff', fontSize: 13, fontWeight: '800' },
   rejectBtn: {
-    height: 36,
-    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 40,
+    paddingHorizontal: 14,
     borderRadius: 12,
-    backgroundColor: 'rgba(239,68,68,0.12)',
+    backgroundColor: 'rgba(239,68,68,0.08)',
     borderWidth: 1,
     borderColor: 'rgba(239,68,68,0.25)',
-    alignItems: 'center',
     justifyContent: 'center',
   },
-  rejectText: { color: '#b91c1c', fontSize: 12, fontWeight: '900' },
+  rejectText: { color: '#b91c1c', fontSize: 13, fontWeight: '800' },
 
   reviewRow: {
     paddingVertical: 10,
@@ -915,50 +1517,75 @@ const styles = StyleSheet.create({
 
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    backgroundColor: 'rgba(0,0,0,0.4)',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 16,
+    padding: 20,
   },
   modalCard: {
     width: '100%',
-    maxWidth: 520,
+    maxWidth: 400,
     backgroundColor: tokens.colors.surface,
-    borderRadius: 18,
-    padding: 14,
+    borderRadius: 24,
+    padding: 20,
     borderWidth: 1,
     borderColor: tokens.colors.border,
   },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  modalTitle: { fontSize: 16, fontWeight: '900', color: tokens.colors.text },
+  modalHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: tokens.colors.text },
+  modalSubtitle: { marginTop: 4, fontSize: 13, color: tokens.colors.textMuted },
   modalClose: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalLabel: { marginTop: 16, marginBottom: 8, fontSize: 13, fontWeight: '800', color: tokens.colors.textSecondary },
+  modalScrollContent: { gap: 10, paddingVertical: 4, paddingHorizontal: 2 },
+  datePill: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderRadius: 14,
     backgroundColor: tokens.colors.surfaceOverlay,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
   },
-  modalLabel: { marginTop: 12, fontSize: 12, fontWeight: '900', color: tokens.colors.textSecondary },
-  pillBtn: {
-    paddingHorizontal: 12,
+  datePillActive: { backgroundColor: 'rgba(244,114,182,0.12)', borderColor: 'rgba(244,114,182,0.4)' },
+  datePillText: { fontSize: 13, fontWeight: '700', color: tokens.colors.textSecondary },
+  datePillTextActive: { color: tokens.colors.pink },
+  timePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
     paddingVertical: 10,
-    borderRadius: 999,
+    borderRadius: 12,
     backgroundColor: tokens.colors.surfaceOverlay,
     borderWidth: 1,
     borderColor: tokens.colors.border,
   },
-  pillBtnActive: { backgroundColor: 'rgba(244,114,182,0.16)', borderColor: 'rgba(244,114,182,0.35)' },
-  pillText: { fontSize: 12, fontWeight: '800', color: tokens.colors.textSecondary },
-  pillTextActive: { color: tokens.colors.pink },
+  timePillActive: { backgroundColor: 'rgba(244,114,182,0.12)', borderColor: 'rgba(244,114,182,0.4)' },
+  timePillAllocated: {
+    backgroundColor: 'rgba(16,185,129,0.08)',
+    borderColor: 'rgba(16,185,129,0.3)',
+    opacity: 0.9,
+  },
+  timePillText: { fontSize: 13, fontWeight: '700', color: tokens.colors.textSecondary },
+  timePillTextActive: { color: tokens.colors.pink },
+  timePillTextAllocated: { color: tokens.colors.success },
   createBtn: {
-    marginTop: 14,
-    height: 46,
-    borderRadius: 16,
-    backgroundColor: tokens.colors.pink,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 10,
+    marginTop: 20,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: tokens.colors.pink,
   },
-  createBtnText: { color: '#fff', fontSize: 13, fontWeight: '900' },
+  createBtnDisabled: { backgroundColor: tokens.colors.surfaceOverlay, opacity: 0.8 },
+  createBtnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  createBtnTextDisabled: { color: tokens.colors.textMuted },
 });
 

@@ -117,6 +117,20 @@ export default function AdminDashboard() {
           style={styles.card}
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push('/admin/resources' as any);
+          }}
+        >
+          <Feather name="book-open" size={28} color="#0ea5e9" />
+          <View style={styles.cardText}>
+            <Text style={styles.cardTitle}>Therapist resources</Text>
+            <Text style={styles.cardDesc}>Add YouTube videos and PDF books/articles for therapists.</Text>
+          </View>
+          <Feather name="chevron-right" size={22} color="#9ca3af" />
+        </Pressable>
+        <Pressable
+          style={styles.card}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             router.replace('/(tabs)');
           }}
         >

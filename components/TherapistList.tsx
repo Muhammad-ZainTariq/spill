@@ -16,6 +16,8 @@ interface TherapistListProps {
   onTherapistPress: (id: string) => void;
   loading?: boolean;
   style?: StyleProp<ViewStyle>;
+  onRefresh?: () => void | Promise<void>;
+  refreshing?: boolean;
 }
 
 function fmtWhenSlot(iso?: string | null) {
@@ -25,7 +27,7 @@ function fmtWhenSlot(iso?: string | null) {
   return d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-export default function TherapistList({ therapists, onTherapistPress, loading, style }: TherapistListProps) {
+export default function TherapistList({ therapists, onTherapistPress, loading, style, onRefresh, refreshing }: TherapistListProps) {
   const renderTherapist = ({ item }: { item: Therapist }) => (
     <Pressable style={styles.therapistCard} onPress={() => onTherapistPress(item.id)}>
       <View style={styles.therapistTop}>
@@ -73,6 +75,8 @@ export default function TherapistList({ therapists, onTherapistPress, loading, s
       keyExtractor={(item) => item.id}
       renderItem={renderTherapist}
       contentContainerStyle={styles.listContent}
+      refreshing={refreshing ?? false}
+      onRefresh={onRefresh}
       ListHeaderComponent={
         <View style={{ paddingBottom: 16 }}>
           <Text style={{ fontSize: 13, fontWeight: '700', color: '#6b7280', marginBottom: 10, textTransform: 'uppercase' }}>

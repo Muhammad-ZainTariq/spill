@@ -1,23 +1,23 @@
 import { Feather } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import {
   addDoc,
   collection,
   doc,
-  getDoc,
   limit,
   onSnapshot,
   orderBy,
   query,
   setDoc,
 } from 'firebase/firestore';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Keyboard, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth, db } from '@/lib/firebase';
-import { KeyboardAwareLayout } from '@/app/KeyboardAwareLayout.native';
+import { getUserLite, submitTherapistSessionReview } from '@/app/therapist/marketplace';
+import { SharedChatLayout, chatStyles, type ChatDataItem } from '@/components/SharedChatUI';
+import { HuzzPressable } from '@/app/ui/components/HuzzPressable.native';
 import { tokens } from '@/app/ui/tokens';
-import { submitTherapistSessionReview } from '@/app/therapist/marketplace';
 
 type Session = {
   therapist_uid: string;
@@ -47,6 +47,12 @@ function fmtCountdown(ms: number) {
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
+function fmtSlot(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 function detectCrisisIntent(raw: string): boolean {
   const t = String(raw || '')
     .toLowerCase()
@@ -74,9 +80,34 @@ function detectCrisisIntent(raw: string): boolean {
   return phrases.some((p) => t.includes(p));
 }
 
+function toChatData(messages: Msg[]): ChatDataItem[] {
+  const sorted = [...messages].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
+  const out: ChatDataItem[] = [];
+  let lastDay: string | null = null;
+  for (const m of sorted) {
+    const d = new Date(m.created_at);
+    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    if (key !== lastDay) {
+      out.push({ _type: 'day', id: `day-${key}`, day: d });
+      lastDay = key;
+    }
+    out.push({
+      _type: 'msg',
+      id: m.id,
+      fromUid: m.sender_uid,
+      text: m.text,
+      createdAt: d,
+    });
+  }
+  return out.reverse();
+}
+
 export default function TherapistSessionScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
+  const insets = useSafeAreaInsets();
   const sessionId = String(params?.id || '').trim();
   const meUid = auth.currentUser?.uid || null;
 
@@ -85,9 +116,7 @@ export default function TherapistSessionScreen() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
-  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [tick, setTick] = useState(0);
-  const listRef = useRef<FlatList>(null);
   const [crisisStatus, setCrisisStatus] = useState<'active' | 'cleared' | null>(null);
   const [crisisSnippet, setCrisisSnippet] = useState<string | null>(null);
   const [showReview, setShowReview] = useState(false);
@@ -95,6 +124,7 @@ export default function TherapistSessionScreen() {
   const [reviewText, setReviewText] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
   const [didReview, setDidReview] = useState(false);
+  const [otherUserName, setOtherUserName] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -157,15 +187,6 @@ export default function TherapistSessionScreen() {
     };
   }, [sessionId]);
 
-  // Keep latest visible above keyboard
-  useEffect(() => {
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const sub = Keyboard.addListener(showEvent, () => {
-      requestAnimationFrame(() => listRef.current?.scrollToOffset?.({ offset: 0, animated: true }));
-    });
-    return () => sub?.remove?.();
-  }, []);
-
   useEffect(() => {
     const i = setInterval(() => setTick((x) => x + 1), 1000);
     return () => clearInterval(i);
@@ -176,7 +197,7 @@ export default function TherapistSessionScreen() {
     return meUid === session.user_uid || meUid === session.therapist_uid;
   }, [meUid, session]);
 
-  const nowMs = Date.now() + tick * 0; // tick forces rerender
+  const nowMs = Date.now() + tick * 0;
   const startsMs = useMemo(() => Date.parse(String(session?.starts_at || '')), [session?.starts_at]);
   const endsMs = useMemo(() => Date.parse(String(session?.ends_at || '')), [session?.ends_at]);
   const hasStarted = Number.isFinite(startsMs) ? nowMs >= startsMs : true;
@@ -193,6 +214,17 @@ export default function TherapistSessionScreen() {
     return meUid === session.user_uid ? session.therapist_uid : session.user_uid;
   }, [session, meUid]);
 
+  useEffect(() => {
+    if (!otherUid) return;
+    let cancelled = false;
+    getUserLite(otherUid).then((u) => {
+      if (!cancelled && u) {
+        setOtherUserName(String(u.display_name || u.anonymous_username || 'User'));
+      }
+    });
+    return () => { cancelled = true; };
+  }, [otherUid]);
+
   const sendNow = async (messageText: string) => {
     await addDoc(collection(db, 'therapist_sessions', sessionId, 'messages'), {
       sender_uid: meUid,
@@ -200,7 +232,6 @@ export default function TherapistSessionScreen() {
       created_at: new Date().toISOString(),
     });
     setText('');
-    listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
   };
 
   const upsertCrisisSignal = async (status: 'active' | 'cleared', snippet?: string | null) => {
@@ -230,7 +261,7 @@ export default function TherapistSessionScreen() {
           'Are you safe right now?',
           'If you are in immediate danger, call your local emergency number.\n\nUK: Samaritans 116 123\nUS/CA: 988\nEU: 112\n\nYou can also lock this session so only the therapist can respond.',
           [
-            { text: 'Cancel', style: 'cancel' },
+            { text: 'Cancel', style: 'cancel', onPress: () => setSending(false) },
             {
               text: 'Send (no lock)',
               onPress: async () => {
@@ -238,6 +269,8 @@ export default function TherapistSessionScreen() {
                   await sendNow(text);
                 } catch (e: any) {
                   Alert.alert('Error', e?.message || 'Could not send message.');
+                } finally {
+                  setSending(false);
                 }
               },
             },
@@ -250,6 +283,8 @@ export default function TherapistSessionScreen() {
                   await sendNow(text);
                 } catch (e: any) {
                   Alert.alert('Error', e?.message || 'Could not send message.');
+                } finally {
+                  setSending(false);
                 }
               },
             },
@@ -265,6 +300,8 @@ export default function TherapistSessionScreen() {
       setSending(false);
     }
   };
+
+  const chatData = useMemo(() => toChatData(messages), [messages]);
 
   const handleSubmitReview = async () => {
     if (!sessionId || !session || !meUid || !isPatient) return;
@@ -292,255 +329,194 @@ export default function TherapistSessionScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe}>
+      <View style={[styles.safe, { paddingTop: insets.top }]}>
         <View style={styles.center}>
           <ActivityIndicator color={tokens.colors.pink} />
           <Text style={styles.muted}>Loading session…</Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (!session || !isParticipant) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.headerBtn} hitSlop={10}>
-            <Feather name="arrow-left" size={20} color={tokens.colors.text} />
-          </Pressable>
-          <Text style={styles.headerTitle}>Private session</Text>
-          <View style={{ width: 40 }} />
+      <View style={[styles.safe, { paddingTop: insets.top }]}>
+        <View style={[chatStyles.header, { paddingHorizontal: 16 }]}>
+          <HuzzPressable style={chatStyles.headerBtn} onPress={() => router.back()} haptic="light">
+            <Feather name="chevron-left" size={20} color={tokens.colors.text} />
+          </HuzzPressable>
+          <Text style={chatStyles.title}>Private session</Text>
+          <View style={{ width: 44 }} />
         </View>
         <View style={styles.center}>
           <Text style={styles.emptyTitle}>Session not available</Text>
-          <Text style={styles.muted}>You don’t have access to this session.</Text>
+          <Text style={styles.muted}>You don't have access to this session.</Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
-  return (
-    <SafeAreaView style={styles.safe} edges={['top'] as any}>
-      <KeyboardAwareLayout>
-        <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.headerBtn} hitSlop={10}>
-            <Feather name="arrow-left" size={20} color={tokens.colors.text} />
-          </Pressable>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.headerTitle}>Private session</Text>
-            <Text style={styles.headerSubtitle}>
-              {Number.isFinite(startsMs) && Number.isFinite(endsMs)
-                ? `${fmtClock(session.starts_at)}–${fmtClock(session.ends_at)} • ${hasEnded ? 'Ended' : hasStarted ? fmtCountdown(remainingMs) : 'Not started'}`
-                : hasEnded
-                  ? 'Ended'
-                  : hasStarted
-                    ? 'Active'
-                    : 'Not started'}
-            </Text>
-          </View>
-          <Pressable
-            onPress={() => {
-              Alert.alert(
-                'Crisis resources',
-                'If you feel unsafe right now, call your local emergency number.\n\nUK: Samaritans 116 123\nUS/CA: 988\nEU: 112'
-              );
-            }}
-            style={styles.headerBtn}
-            hitSlop={10}
-          >
-            <Feather name="alert-triangle" size={18} color={tokens.colors.danger} />
-          </Pressable>
-        </View>
+  const header = (
+    <View style={chatStyles.header}>
+      <HuzzPressable style={chatStyles.headerBtn} onPress={() => router.back()} haptic="light">
+        <Feather name="chevron-left" size={20} color={tokens.colors.text} />
+      </HuzzPressable>
+      <View style={{ flex: 1, alignItems: 'center' }}>
+        <Text style={chatStyles.title} numberOfLines={1}>
+          {otherUserName || 'Session'}
+        </Text>
+        <Text style={chatStyles.subtitle}>
+          {Number.isFinite(startsMs) && Number.isFinite(endsMs)
+            ? `${fmtClock(session.starts_at)}–${fmtClock(session.ends_at)} • ${hasEnded ? 'Ended' : hasStarted ? fmtCountdown(remainingMs) : 'Not started'}`
+            : hasEnded
+              ? 'Ended'
+              : hasStarted
+                ? 'Active'
+                : 'Not started'}
+        </Text>
+      </View>
+      <HuzzPressable
+        style={chatStyles.headerBtn}
+        onPress={() => {
+          Alert.alert(
+            'Crisis resources',
+            'If you feel unsafe right now, call your local emergency number.\n\nUK: Samaritans 116 123\nUS/CA: 988\nEU: 112'
+          );
+        }}
+        haptic="light"
+      >
+        <Feather name="alert-triangle" size={18} color={tokens.colors.danger} />
+      </HuzzPressable>
+    </View>
+  );
 
-        <View style={styles.boundaryBanner}>
-          <Text style={styles.boundaryTitle}>Support, not emergency care</Text>
-          <Text style={styles.boundaryText}>
-            This chat is for support and coping strategies. If you’re in immediate danger, use the crisis button.
+  const contentAboveList = (
+    <>
+      <View style={styles.boundaryBanner}>
+        <Text style={styles.boundaryTitle}>Support, not emergency care</Text>
+        <Text style={styles.boundaryText}>
+          This chat is for support and coping strategies. If you're in immediate danger, use the crisis button.
+        </Text>
+      </View>
+      {therapistOnlyMode ? (
+        <View style={styles.crisisBanner}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.crisisTitle}>Therapist-only mode is active</Text>
+            <Text style={styles.crisisText}>
+              A crisis message was detected/reported. Patient replies are locked until the therapist clears it.
+            </Text>
+            {crisisSnippet ? <Text style={styles.crisisSnippet}>"{crisisSnippet}"</Text> : null}
+          </View>
+          {isTherapist ? (
+            <Pressable
+              style={styles.crisisClearBtn}
+              onPress={async () => {
+                try {
+                  await upsertCrisisSignal('cleared', null);
+                } catch (e: any) {
+                  Alert.alert('Error', e?.message || 'Could not clear lock.');
+                }
+              }}
+            >
+              <Text style={styles.crisisClearText}>Clear</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+    </>
+  );
+
+  const contentBelowList = (
+    <>
+      {!hasStarted ? (
+        <View style={styles.lockRow}>
+          <Feather name="lock" size={16} color={tokens.colors.textSecondary} />
+          <Text style={styles.lockText}>
+            Session starts at {fmtSlot(session.starts_at)}. You'll be able to chat once it begins.
           </Text>
         </View>
-
-        {therapistOnlyMode ? (
-          <View style={styles.crisisBanner}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.crisisTitle}>Therapist-only mode is active</Text>
-              <Text style={styles.crisisText}>
-                A crisis message was detected/reported. Patient replies are locked until the therapist clears it.
-              </Text>
-              {crisisSnippet ? <Text style={styles.crisisSnippet}>“{crisisSnippet}”</Text> : null}
-            </View>
-            {isTherapist ? (
-              <Pressable
-                style={styles.crisisClearBtn}
-                onPress={async () => {
-                  try {
-                    await upsertCrisisSignal('cleared', null);
-                  } catch (e: any) {
-                    Alert.alert('Error', e?.message || 'Could not clear lock.');
-                  }
-                }}
-              >
-                <Text style={styles.crisisClearText}>Clear</Text>
-              </Pressable>
-            ) : null}
-          </View>
-        ) : null}
-
-        <View style={{ flex: 1, minHeight: 0 }}>
-          <FlatList
-            ref={listRef}
-            data={messages}
-            keyExtractor={(m) => m.id}
-            inverted
-            style={{ flex: 1, minHeight: 0 }}
-            contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 12 }}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
-            onScroll={(e) => {
-              const y = e?.nativeEvent?.contentOffset?.y ?? 0;
-              setShowScrollToBottom(y > 80);
-            }}
-            scrollEventThrottle={100}
-            renderItem={({ item }) => {
-              const mine = item.sender_uid === meUid;
-              return (
-                <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
-                  <Text style={[styles.bubbleText, mine ? styles.bubbleTextMine : styles.bubbleTextTheirs]}>
-                    {item.text}
-                  </Text>
-                  <Text style={[styles.bubbleTime, mine ? styles.bubbleTimeMine : styles.bubbleTimeTheirs]}>
-                    {fmtClock(item.created_at)}
-                  </Text>
-                </View>
-              );
-            }}
-          />
+      ) : hasEnded ? (
+        <View style={styles.lockRow}>
+          <Feather name="clock" size={16} color={tokens.colors.textSecondary} />
+          <Text style={styles.lockText}>This session has ended. Messaging is locked.</Text>
         </View>
+      ) : null}
 
-        {!hasStarted ? (
-          <View style={styles.lockRow}>
-            <Feather name="lock" size={16} color={tokens.colors.textSecondary} />
-            <Text style={styles.lockText}>
-              Session starts at {fmtSlot(session.starts_at)}. You’ll be able to chat once it begins.
-            </Text>
-          </View>
-        ) : hasEnded ? (
-          <View style={styles.lockRow}>
-            <Feather name="clock" size={16} color={tokens.colors.textSecondary} />
-            <Text style={styles.lockText}>This session has ended. Messaging is locked.</Text>
-          </View>
-        ) : null}
+      {hasEnded && isPatient && !didReview ? (
+        <View style={styles.reviewCard}>
+          <Text style={styles.reviewTitle}>Leave a review</Text>
+          <Text style={styles.reviewHint}>Only the therapist and admins can see your feedback.</Text>
+          <Pressable style={styles.reviewBtn} onPress={() => setShowReview((v) => !v)}>
+            <Text style={styles.reviewBtnText}>{showReview ? 'Hide' : 'Write review'}</Text>
+          </Pressable>
 
-        {hasEnded && isPatient && !didReview ? (
-          <View style={styles.reviewCard}>
-            <Text style={styles.reviewTitle}>Leave a review</Text>
-            <Text style={styles.reviewHint}>Only the therapist and admins can see your feedback.</Text>
-            <Pressable style={styles.reviewBtn} onPress={() => setShowReview((v) => !v)}>
-              <Text style={styles.reviewBtnText}>{showReview ? 'Hide' : 'Write review'}</Text>
-            </Pressable>
-
-            {showReview ? (
-              <View style={{ marginTop: 12, gap: 10 }}>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  {[1, 2, 3, 4, 5].map((n) => (
-                    <Pressable
-                      key={n}
-                      onPress={() => setReviewRating(n)}
-                      style={[styles.starBtn, reviewRating >= n && styles.starBtnActive]}
-                    >
-                      <Text style={[styles.starText, reviewRating >= n && styles.starTextActive]}>★</Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <TextInput
-                  value={reviewText}
-                  onChangeText={setReviewText}
-                  style={styles.reviewInput}
-                  placeholder="Optional comment (e.g. good listener, helpful advice)…"
-                  multiline
-                />
-                <Pressable
-                  style={[styles.submitReviewBtn, submittingReview && { opacity: 0.6 }]}
-                  onPress={handleSubmitReview}
-                  disabled={submittingReview}
-                >
-                  <Text style={styles.submitReviewText}>{submittingReview ? 'Submitting…' : 'Submit review'}</Text>
-                </Pressable>
+          {showReview ? (
+            <View style={{ marginTop: 12, gap: 10 }}>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <Pressable
+                    key={n}
+                    onPress={() => setReviewRating(n)}
+                    style={[styles.starBtn, reviewRating >= n && styles.starBtnActive]}
+                  >
+                    <Text style={[styles.starText, reviewRating >= n && styles.starTextActive]}>★</Text>
+                  </Pressable>
+                ))}
               </View>
-            ) : null}
-          </View>
-        ) : null}
-
-        <View style={styles.composer}>
-          <TextInput
-            value={text}
-            onChangeText={setText}
-            style={styles.input}
-            placeholder={
-              hasEnded ? 'Session ended' : !hasStarted ? 'Session not started' : patientLocked ? 'Locked (therapist-only)' : 'Message…'
-            }
-            editable={!hasEnded && hasStarted && !patientLocked}
-            multiline
-          />
-          <Pressable
-            style={[styles.sendBtn, { opacity: canSend && !sending ? 1 : 0.5 }]}
-            disabled={!canSend || sending}
-            onPress={handleSend}
-          >
-            <Text style={styles.sendText}>{sending ? '…' : 'Send'}</Text>
-          </Pressable>
+              <TextInput
+                value={reviewText}
+                onChangeText={setReviewText}
+                style={styles.reviewInput}
+                placeholder="Optional comment (e.g. good listener, helpful advice)…"
+                multiline
+              />
+              <Pressable
+                style={[styles.submitReviewBtn, submittingReview && { opacity: 0.6 }]}
+                onPress={handleSubmitReview}
+                disabled={submittingReview}
+              >
+                <Text style={styles.submitReviewText}>{submittingReview ? 'Submitting…' : 'Submit review'}</Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
-
-        {showScrollToBottom ? (
-          <Pressable
-            style={styles.scrollToBottomBtn}
-            onPress={() => {
-              listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
-              setShowScrollToBottom(false);
-            }}
-          >
-            <Text style={styles.scrollToBottomText}>↓</Text>
-          </Pressable>
-        ) : null}
-      </KeyboardAwareLayout>
-    </SafeAreaView>
+      ) : null}
+    </>
   );
-}
 
-function fmtSlot(iso: string) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return (
+    <View style={[styles.safe, { paddingTop: insets.top }]}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <SharedChatLayout
+        header={header}
+        chatData={chatData}
+        currentUserId={meUid}
+        text={text}
+        setText={setText}
+        onSend={handleSend}
+        canSend={canSend}
+        sending={sending}
+        contentAboveList={contentAboveList}
+        contentBelowList={contentBelowList}
+        showEmoji={true}
+        placeholder={
+          hasEnded ? 'Session ended' : !hasStarted ? 'Session not started' : patientLocked ? 'Locked (therapist-only)' : 'Message…'
+        }
+        inputEditable={!hasEnded && hasStarted && !patientLocked}
+      />
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: tokens.colors.bg },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: tokens.colors.border,
-    backgroundColor: tokens.colors.surface,
-  },
-  headerBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
-    backgroundColor: tokens.colors.surfaceElevated,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitle: { fontSize: 16, fontWeight: '900', color: tokens.colors.text },
-  headerSubtitle: { marginTop: 2, fontSize: 12, fontWeight: '700', color: tokens.colors.textMuted },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 18 },
   muted: { fontSize: 13, fontWeight: '600', color: tokens.colors.textMuted, textAlign: 'center' },
   emptyTitle: { fontSize: 16, fontWeight: '900', color: tokens.colors.text },
   boundaryBanner: {
     marginHorizontal: 16,
-    marginTop: 12,
-    marginBottom: 6,
+    marginTop: 8,
+    marginBottom: 4,
     borderRadius: 16,
     padding: 12,
     backgroundColor: 'rgba(244,114,182,0.10)',
@@ -573,24 +549,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   crisisClearText: { color: '#fff', fontSize: 12, fontWeight: '900' },
-
-  bubble: {
-    maxWidth: '80%',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 16,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: tokens.colors.border,
-  },
-  bubbleMine: { alignSelf: 'flex-end', backgroundColor: tokens.colors.pink, borderColor: 'rgba(244,114,182,0.50)' },
-  bubbleTheirs: { alignSelf: 'flex-start', backgroundColor: tokens.colors.surfaceOverlay },
-  bubbleText: { fontSize: 14, fontWeight: '600', lineHeight: 20 },
-  bubbleTextMine: { color: '#fff' },
-  bubbleTextTheirs: { color: tokens.colors.text },
-  bubbleTime: { marginTop: 4, fontSize: 10, fontWeight: '800' },
-  bubbleTimeMine: { color: 'rgba(255,255,255,0.85)' },
-  bubbleTimeTheirs: { color: tokens.colors.textMuted },
 
   lockRow: {
     marginHorizontal: 16,
@@ -661,51 +619,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   submitReviewText: { color: '#fff', fontSize: 13, fontWeight: '900' },
-
-  composer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 10,
-    padding: 12,
-    borderTopWidth: 1,
-    borderTopColor: tokens.colors.border,
-    backgroundColor: tokens.colors.surface,
-  },
-  input: {
-    flex: 1,
-    backgroundColor: tokens.colors.surfaceElevated,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: tokens.colors.border,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    fontWeight: '600',
-    color: tokens.colors.text,
-    minHeight: 44,
-    maxHeight: 120,
-  },
-  sendBtn: {
-    height: 44,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    backgroundColor: tokens.colors.pink,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sendText: { color: '#fff', fontSize: 13, fontWeight: '900' },
-  scrollToBottomBtn: {
-    position: 'absolute',
-    right: 16,
-    bottom: 96,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: tokens.colors.pink,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 4,
-  },
-  scrollToBottomText: { color: '#fff', fontSize: 18, fontWeight: '900' },
 });
-
