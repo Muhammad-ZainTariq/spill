@@ -608,29 +608,24 @@ export default function TherapistProfileScreen() {
       <Stack.Screen options={{ headerShown: false, gestureEnabled: !isMe }} />
       <View style={styles.header}>
         {isMe ? (
-          <Pressable onPress={load} style={styles.headerBtn} hitSlop={10}>
-            <Feather name="refresh-cw" size={18} color="#ffffff" />
+          <Pressable onPress={load} style={styles.headerIconBtn} hitSlop={10}>
+            <Feather name="refresh-cw" size={20} color={tokens.colors.text} />
           </Pressable>
         ) : (
-          <Pressable onPress={() => router.back()} style={styles.headerBtn} hitSlop={10}>
-            <Feather name="arrow-left" size={20} color="#ffffff" />
+          <Pressable onPress={() => router.back()} style={styles.headerIconBtn} hitSlop={10}>
+            <Feather name="chevron-left" size={24} color={tokens.colors.text} />
           </Pressable>
         )}
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title} numberOfLines={1}>
-            {profile?.display_name || 'Therapist'}
-          </Text>
-          <Text style={styles.subtitle} numberOfLines={1}>
-            {profile?.verified ? 'Verified therapist' : 'Profile'}
-          </Text>
-        </View>
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {isMe ? (profile?.display_name?.trim() || 'Therapist') : profile?.display_name || 'Therapist'}
+        </Text>
         {isMe ? (
-          <Pressable onPress={handleLogout} style={styles.headerBtn} hitSlop={10}>
-            <Feather name="log-out" size={18} color="#ffffff" />
+          <Pressable onPress={handleLogout} style={styles.headerIconBtn} hitSlop={10}>
+            <Feather name="log-out" size={20} color={tokens.colors.text} />
           </Pressable>
         ) : (
-          <Pressable onPress={load} style={styles.headerBtn} hitSlop={10}>
-            <Feather name="refresh-cw" size={18} color="#ffffff" />
+          <Pressable onPress={load} style={styles.headerIconBtn} hitSlop={10}>
+            <Feather name="refresh-cw" size={20} color={tokens.colors.text} />
           </Pressable>
         )}
       </View>
@@ -669,26 +664,40 @@ export default function TherapistProfileScreen() {
                   style={[styles.tabBtn, tab === 'appointments' && styles.tabBtnActive]}
                   onPress={() => setTab('appointments')}
                 >
-                  <Text
-                    style={[styles.tabText, tab === 'appointments' && styles.tabTextActive]}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {tokens.isSmallDevice ? 'Appts' : 'Appointments'}
-                  </Text>
+                  <View style={styles.tabInner}>
+                    <Feather
+                      name="calendar"
+                      size={16}
+                      color={tab === 'appointments' ? '#ffffff' : tokens.colors.textSecondary}
+                    />
+                    <Text style={[styles.tabText, tab === 'appointments' && styles.tabTextActive]}>Appts</Text>
+                  </View>
                 </Pressable>
                 <Pressable
                   style={[styles.tabBtn, tab === 'reviews' && styles.tabBtnActive]}
                   onPress={() => setTab('reviews')}
                 >
-                  <Text style={[styles.tabText, tab === 'reviews' && styles.tabTextActive]} numberOfLines={1}>
-                    Reviews
-                  </Text>
+                  <View style={styles.tabInner}>
+                    <Feather
+                      name="star"
+                      size={16}
+                      color={tab === 'reviews' ? '#ffffff' : tokens.colors.textSecondary}
+                    />
+                    <Text style={[styles.tabText, tab === 'reviews' && styles.tabTextActive]}>Reviews</Text>
+                  </View>
                 </Pressable>
-                <Pressable style={[styles.tabBtn, tab === 'profile' && styles.tabBtnActive]} onPress={() => setTab('profile')}>
-                  <Text style={[styles.tabText, tab === 'profile' && styles.tabTextActive]} numberOfLines={1}>
-                    Profile
-                  </Text>
+                <Pressable
+                  style={[styles.tabBtn, tab === 'profile' && styles.tabBtnActive]}
+                  onPress={() => setTab('profile')}
+                >
+                  <View style={styles.tabInner}>
+                    <Feather
+                      name="user"
+                      size={16}
+                      color={tab === 'profile' ? '#ffffff' : tokens.colors.textSecondary}
+                    />
+                    <Text style={[styles.tabText, tab === 'profile' && styles.tabTextActive]}>Profile</Text>
+                  </View>
                 </Pressable>
               </View>
 
@@ -1152,23 +1161,29 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'space-between',
     paddingHorizontal: tokens.spacing.screenHorizontal,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: tokens.colors.border,
     backgroundColor: tokens.colors.surface,
   },
-  headerBtn: {
+  headerIconBtn: {
     width: 40,
     height: 40,
-    borderRadius: tokens.radius.sm,
-    backgroundColor: tokens.colors.pink,
+    borderRadius: 20,
+    backgroundColor: '#f3f4f6',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  title: { fontSize: 18, fontWeight: '900', color: tokens.colors.text },
-  subtitle: { marginTop: 2, fontSize: 12, fontWeight: '600', color: tokens.colors.textMuted },
+  headerTitle: {
+    flex: 1,
+    marginHorizontal: 12,
+    fontSize: 18,
+    fontWeight: '800',
+    color: tokens.colors.text,
+    textAlign: 'center',
+  },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 18 },
   topContent: { flex: 1, alignItems: 'center', paddingTop: 24, gap: 10, paddingHorizontal: 18 },
   muted: { fontSize: 13, fontWeight: '600', color: tokens.colors.textMuted },
@@ -1331,24 +1346,45 @@ const styles = StyleSheet.create({
   resourcesCardText: { flex: 1, fontSize: 15, fontWeight: '700', color: tokens.colors.text },
   tabs: {
     flexDirection: 'row',
-    gap: 14,
-    padding: 10,
-    borderRadius: 18,
-    backgroundColor: tokens.colors.surfaceOverlay,
+    alignItems: 'stretch',
+    gap: 6,
+    padding: 4,
+    borderRadius: 999,
+    backgroundColor: '#F1F5F9',
     borderWidth: 1,
     borderColor: tokens.colors.border,
   },
   tabBtn: {
     flex: 1,
-    height: 48,
-    borderRadius: 14,
+    minHeight: 44,
+    borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
     backgroundColor: 'transparent',
   },
-  tabBtnActive: { backgroundColor: tokens.colors.pink },
-  tabText: { fontSize: 14, fontWeight: '800', color: tokens.colors.textSecondary, textAlign: 'center' },
+  tabBtnActive: {
+    backgroundColor: tokens.colors.pink,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  tabInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  tabText: {
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    color: tokens.colors.textSecondary,
+    textAlign: 'center',
+  },
   tabTextActive: { color: '#ffffff' },
 
   apptRow: {

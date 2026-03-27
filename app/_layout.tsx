@@ -82,6 +82,7 @@ export default function RootLayout() {
           }} 
         />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="therapist" options={{ headerShown: false }} />
         <Stack.Screen name="admin" options={{ headerShown: false }} />
         <Stack.Screen 
           name="createpost" 
@@ -207,7 +208,7 @@ export default function RootLayout() {
           }} 
         />
         <Stack.Screen 
-          name="therapist-session" 
+          name="therapist-session/[id]" 
           options={{ 
             headerShown: false,
             gestureEnabled: true,

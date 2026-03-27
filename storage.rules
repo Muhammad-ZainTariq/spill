@@ -1,10 +1,7 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // Default: deny
-    match /{allPaths=**} {
-      allow read, write: if false;
-    }
+    // Specific paths first — the catch-all below must NOT come first or it blocks everything.
 
     // Avatars (user profile images)
     match /avatars/{userId}/{fileName} {
@@ -25,25 +22,43 @@ service firebase.storage {
     }
 
     // Therapist verification documents
-    // Written by Cloud Functions with admin SDK, but therapists need to be able
-    // to read the file via getDownloadURL after upload.
     match /therapist-docs/{userId}/{fileName} {
       allow read: if request.auth != null;
-      // No direct client writes; uploads go through the uploadMedia Cloud Function.
       allow write: if false;
     }
 
-    // (Optional) If you later store videos in a separate folder.
     match /therapist-videos/{userId}/{fileName} {
       allow read: if request.auth != null;
       allow write: if false;
     }
 
-    // Therapist resources (PDFs for books/articles) – uploaded via Cloud Function, therapists read
+    // Therapist resources — PDFs by type (books vs articles); Cloud Function uploads; auth reads
+    match /therapist_resources/books/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /therapist_resources/articles/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    // PDF first-page cover PNGs (Cloud Function uploads)
+    match /therapist_resources/covers/books/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /therapist_resources/covers/articles/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    // Legacy flat paths (older uploads before folders)
     match /therapist_resources/{fileName} {
       allow read: if request.auth != null;
       allow write: if false;
     }
+
+    // Default: deny anything not matched above
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
   }
 }
-

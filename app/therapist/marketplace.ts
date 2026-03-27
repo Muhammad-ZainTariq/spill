@@ -346,7 +346,78 @@ export const submitTherapistSessionReview = async (
 };
 
 export const RESOURCE_TYPES = ['video', 'book', 'article'] as const;
-export const RESOURCE_CATEGORIES = ['clinical', 'self-care', 'research', 'legal'] as const;
+
+/** Display labels for therapist library categories (clinical / modality topics). Alphabetically sorted IDs. */
+export const RESOURCE_CATEGORY_LABELS: Record<string, string> = {
+  anxiety_disorders: 'Anxiety disorders',
+  behavior_therapy: 'Behavior therapy',
+  borderline_syndromes: 'Borderline syndromes',
+  brief_therapy: 'Brief therapy',
+  child_therapy: 'Child therapy',
+  couple_therapy: 'Couple therapy',
+  crisis: 'Crisis',
+  depression: 'Depression',
+  eating_disorders: 'Eating disorders',
+  family_therapy: 'Family therapy',
+  group_therapy: 'Group therapy',
+  legal_ethics: 'Legal / ethics',
+  mood_disorders: 'Mood disorders',
+  object_relations: 'Object relations',
+  psychiatry: 'Psychiatry',
+  psychoanalysis: 'Psychoanalysis',
+  psychosomatic: 'Psychosomatic',
+  psychotherapy: 'Psychotherapy',
+  psychotherapy_fiction: 'Psychotherapy & fiction',
+  research: 'Research',
+  schizophrenia: 'Schizophrenia',
+  self_care: 'Self-care',
+  sex_therapy: 'Sex therapy',
+  substance_abuse: 'Substance abuse',
+  suicide: 'Suicide',
+  supervision: 'Supervision',
+};
+
+/** Sorted by label A–Z for chip UIs */
+export const RESOURCE_CATEGORIES: string[] = Object.entries(RESOURCE_CATEGORY_LABELS)
+  .sort(([, a], [, b]) => a.localeCompare(b))
+  .map(([id]) => id);
+
+const LEGACY_CATEGORY_LABELS: Record<string, string> = {
+  clinical: 'Clinical',
+  'self-care': 'Self-care',
+  research: 'Research',
+  legal: 'Legal / Ethics',
+};
+
+/** Map old Firestore category values to current IDs (for forms / migrations on save). */
+const LEGACY_CATEGORY_IDS: Record<string, string> = {
+  clinical: 'psychotherapy',
+  'self-care': 'self_care',
+  research: 'research',
+  legal: 'legal_ethics',
+};
+
+export function getResourceCategoryLabel(category: string | null | undefined): string {
+  if (!category) return '—';
+  if (RESOURCE_CATEGORY_LABELS[category]) return RESOURCE_CATEGORY_LABELS[category];
+  if (LEGACY_CATEGORY_LABELS[category]) return LEGACY_CATEGORY_LABELS[category];
+  return category.replace(/_/g, ' ');
+}
+
+/** Coerce stored category to a canonical id (legacy docs → new ids; unknown ids pass through). */
+export function normalizeResourceCategoryId(category: string | null | undefined): string {
+  const raw = String(category || '').trim();
+  if (!raw) return 'psychotherapy';
+  if (RESOURCE_CATEGORY_LABELS[raw]) return raw;
+  if (LEGACY_CATEGORY_IDS[raw]) return LEGACY_CATEGORY_IDS[raw];
+  return raw;
+}
+
+/** Id safe to use in category pickers (falls back if stored value is unknown). */
+export function resolvePickerCategoryId(category: string | null | undefined): string {
+  const id = normalizeResourceCategoryId(category);
+  return RESOURCE_CATEGORIES.includes(id) ? id : 'psychotherapy';
+}
 
 export type TherapistResource = {
   id: string;
@@ -356,15 +427,24 @@ export type TherapistResource = {
   url?: string | null;
   /** Storage download URL for uploaded PDFs (books/articles) */
   file_url?: string | null;
+  /** Cover image URL (usually first page of PDF, generated on upload; optional manual override in admin). */
+  cover_url?: string | null;
   /** Extracted from YouTube URL for thumbnail */
   youtube_id?: string | null;
   type: (typeof RESOURCE_TYPES)[number];
-  category: (typeof RESOURCE_CATEGORIES)[number];
+  /** Category id (see RESOURCE_CATEGORY_LABELS); legacy values still readable via getResourceCategoryLabel */
+  category: string;
   author?: string | null;
+  /** @deprecated No longer set in app; list order is by date */
   order?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
+
+/** Google Viewer embed URL for in-app PDF display (storage download URLs stay server-controlled). */
+export function googlePdfViewerUrl(pdfUrl: string): string {
+  return `https://docs.google.com/viewer?url=${encodeURIComponent(pdfUrl)}&embedded=true`;
+}
 
 /** Extract YouTube video ID from URL */
 export function extractYoutubeId(url: string | null | undefined): string | null {
@@ -382,20 +462,44 @@ export function youtubeThumbnailUrl(videoId: string, highRes = true): string {
     : `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
 }
 
+export type TherapistResourcePdfUploadResult = {
+  fileUrl: string;
+};
+
 export const uploadTherapistResourcePdf = async (
   base64: string,
   fileName: string,
-  contentType = 'application/pdf'
+  contentType = 'application/pdf',
+  /** Storage folder; must match Firestore `type` for books vs articles. */
+  resourceType: 'book' | 'article' = 'book'
+): Promise<TherapistResourcePdfUploadResult> => {
+  const u = auth.currentUser;
+  if (!u) throw new Error('Not logged in.');
+  const fn = httpsCallable<
+    { base64: string; contentType: string; fileName: string; resourceType: 'book' | 'article' },
+    { path: string }
+  >(functions, 'uploadTherapistResourceFile');
+  const { data } = await fn({ base64, contentType, fileName, resourceType });
+  const path = String((data as any)?.path || '').trim();
+  if (!path) throw new Error('Upload failed.');
+  const fileUrl = await getDownloadURL(ref(storage, path));
+  return { fileUrl };
+};
+
+/** Upload PNG (raw base64, no data: prefix) from client-rendered PDF first page. Admin-only callable. */
+export const uploadTherapistResourceCoverPng = async (
+  pngBase64: string,
+  resourceType: 'book' | 'article'
 ): Promise<string> => {
   const u = auth.currentUser;
   if (!u) throw new Error('Not logged in.');
   const fn = httpsCallable<
-    { base64: string; contentType: string; fileName: string },
+    { base64: string; resourceType: 'book' | 'article' },
     { path: string }
-  >(functions, 'uploadTherapistResourceFile');
-  const { data } = await fn({ base64, contentType, fileName });
+  >(functions, 'uploadTherapistResourceCover');
+  const { data } = await fn({ base64: pngBase64, resourceType });
   const path = String((data as any)?.path || '').trim();
-  if (!path) throw new Error('Upload failed.');
+  if (!path) throw new Error('Cover upload failed.');
   return getDownloadURL(ref(storage, path));
 };
 
@@ -407,8 +511,7 @@ export const listTherapistResources = async (max: number = 100): Promise<Therapi
     limit(max)
   );
   const snap = await getDocs(q);
-  const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as TherapistResource[];
-  return list.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as TherapistResource[];
 };
 
 export const createTherapistResource = async (

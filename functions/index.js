@@ -220,7 +220,7 @@ exports.checkPostToxicity = functions
     }
   });
 
-// Admin-only: upload therapist resource PDF (books/articles). Body: { base64, contentType, fileName }. Returns { path }.
+// Admin-only: upload therapist resource PDF (books/articles). Body: { base64, contentType, fileName, resourceType?: 'book'|'article' }. Storage path: therapist_resources/books|articles/.... Returns { path }.
 exports.uploadTherapistResourceFile = functions
   .region('us-central1')
   .runWith({ timeoutSeconds: 60 })
@@ -233,13 +233,17 @@ exports.uploadTherapistResourceFile = functions
     if (!adminDoc.exists || !adminDoc.data().is_admin) {
       throw new functions.https.HttpsError('permission-denied', 'Only admins can upload therapist resources.');
     }
-    const { base64, contentType, fileName } = data || {};
+    const { base64, contentType, fileName, resourceType } = data || {};
     if (!base64 || typeof base64 !== 'string' || !fileName || typeof fileName !== 'string' || !fileName.trim()) {
       throw new functions.https.HttpsError('invalid-argument', 'base64 and fileName are required.');
     }
+    const folder = resourceType === 'article' ? 'articles' : 'books';
+    if (resourceType && resourceType !== 'book' && resourceType !== 'article') {
+      throw new functions.https.HttpsError('invalid-argument', 'resourceType must be book or article.');
+    }
     const mime = (contentType && typeof contentType === 'string') ? contentType.trim() : 'application/pdf';
     const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) || 'resource.pdf';
-    const path = `therapist_resources/${Date.now()}_${safeName}`;
+    const path = `therapist_resources/${folder}/${Date.now()}_${safeName}`;
     try {
       const buffer = Buffer.from(base64, 'base64');
       const bucket = admin.storage().bucket('spillll.firebasestorage.app');
@@ -249,6 +253,39 @@ exports.uploadTherapistResourceFile = functions
     } catch (err) {
       console.error('uploadTherapistResourceFile failed', err);
       throw new functions.https.HttpsError('internal', err.message || 'Upload failed.');
+    }
+  });
+
+// Admin-only: PNG cover (first page rendered on client). Body: { base64, resourceType: 'book'|'article' }. Returns { path }.
+exports.uploadTherapistResourceCover = functions
+  .region('us-central1')
+  .runWith({ timeoutSeconds: 60 })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+    }
+    const adminUid = context.auth.uid;
+    const adminDoc = await db.collection('users').doc(adminUid).get();
+    if (!adminDoc.exists || !adminDoc.data().is_admin) {
+      throw new functions.https.HttpsError('permission-denied', 'Only admins can upload resource covers.');
+    }
+    const { base64, resourceType } = data || {};
+    if (!base64 || typeof base64 !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'base64 is required.');
+    }
+    const folder = resourceType === 'article' ? 'articles' : 'books';
+    if (resourceType !== 'book' && resourceType !== 'article') {
+      throw new functions.https.HttpsError('invalid-argument', 'resourceType must be book or article.');
+    }
+    const coverPath = `therapist_resources/covers/${folder}/${Date.now()}_cover.png`;
+    try {
+      const buffer = Buffer.from(base64, 'base64');
+      const bucket = admin.storage().bucket('spillll.firebasestorage.app');
+      await bucket.file(coverPath).save(buffer, { metadata: { contentType: 'image/png' } });
+      return { path: coverPath };
+    } catch (err) {
+      console.error('uploadTherapistResourceCover failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Cover upload failed.');
     }
   });
 
@@ -1056,59 +1093,59 @@ exports.rescheduleTherapistSession = functions
 async function sendPushToUser(recipientId, title, body, payload) {
   const userId = recipientId.trim();
   const userSnap = await db.collection('users').doc(userId).get();
-  if (!userSnap.exists) {
+    if (!userSnap.exists) {
     console.warn('sendPushToUser: user not found', { recipientId: userId });
-    return { ok: false, error: 'User not found' };
-  }
-  const expoPushToken = userSnap.data().expo_push_token;
-  if (!expoPushToken || typeof expoPushToken !== 'string' || !expoPushToken.startsWith('ExponentPushToken[')) {
+      return { ok: false, error: 'User not found' };
+    }
+    const expoPushToken = userSnap.data().expo_push_token;
+    if (!expoPushToken || typeof expoPushToken !== 'string' || !expoPushToken.startsWith('ExponentPushToken[')) {
     console.warn('sendPushToUser: missing or invalid expo_push_token', {
       recipientId: userId,
       expoPushToken,
     });
-    return { ok: false, error: 'No push token' };
-  }
-  const recipientIdTrimmed = recipientId.trim();
-  let badge = 0;
-  try {
+      return { ok: false, error: 'No push token' };
+    }
+    const recipientIdTrimmed = recipientId.trim();
+    let badge = 0;
+    try {
     const unreadSnap = await db
       .collection('notifications')
-      .where('recipient_id', '==', recipientIdTrimmed)
-      .where('read', '==', false)
-      .limit(500)
-      .get();
-    badge = unreadSnap.size;
-  } catch (e) {
-    // ignore badge count failure
-  }
-  try {
+        .where('recipient_id', '==', recipientIdTrimmed)
+        .where('read', '==', false)
+        .limit(500)
+        .get();
+      badge = unreadSnap.size;
+    } catch (e) {
+      // ignore badge count failure
+    }
+    try {
     console.log('sendPushToUser: sending push', {
       recipientId: recipientIdTrimmed,
       title,
       body,
       hasPayload: !!payload,
     });
-    const res = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        to: expoPushToken,
-        title: title.substring(0, 100),
-        body: (body || '').substring(0, 200),
-        data: payload || {},
-        sound: 'default',
-        channelId: 'default',
-        badge,
-      }),
-    });
-    if (!res.ok) {
-      const text = await res.text();
+      const res = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: expoPushToken,
+          title: title.substring(0, 100),
+          body: (body || '').substring(0, 200),
+          data: payload || {},
+          sound: 'default',
+          channelId: 'default',
+          badge,
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
       console.error('sendPushToUser: Expo push error', res.status, text);
-      return { ok: false, error: text };
-    }
+        return { ok: false, error: text };
+      }
     console.log('sendPushToUser: push sent successfully', { recipientId: recipientIdTrimmed });
-    return { ok: true };
-  } catch (err) {
+      return { ok: true };
+    } catch (err) {
     console.error('sendPushToUser failed', { recipientId: recipientIdTrimmed, error: err });
     return { ok: false, error: err.message || 'Failed to send push.' };
   }
