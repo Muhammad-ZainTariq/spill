@@ -19,7 +19,7 @@ import {
   TherapistSession,
   TherapistSlot,
   upsertMyTherapistProfile,
-} from '@/app/therapist/marketplace';
+} from '@/app/therapist/_marketplace';
 import { tokens } from '@/app/ui/tokens';
 import { auth, db } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
@@ -32,13 +32,13 @@ import {
   Modal,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 function fmtSlot(iso: string) {
   const d = new Date(iso);

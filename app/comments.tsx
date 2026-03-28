@@ -1,4 +1,4 @@
-import { extractYoutubeId, youtubeThumbnailUrl } from '@/app/therapist/marketplace';
+import { extractYoutubeId, youtubeThumbnailUrl } from '@/app/therapist/_marketplace';
 import * as Haptics from 'expo-haptics';
 import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';

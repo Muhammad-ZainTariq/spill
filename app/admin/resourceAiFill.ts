@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import { RESOURCE_CATEGORIES, RESOURCE_CATEGORY_LABELS } from '@/app/therapist/marketplace';
+import { RESOURCE_CATEGORIES, RESOURCE_CATEGORY_LABELS } from '@/app/therapist/_marketplace';
 
 function getOpenAiKey(): string | null {
   const extra = Constants.expoConfig?.extra as { openaiApiKey?: string } | undefined;

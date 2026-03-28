@@ -1,4 +1,4 @@
-import { extractYoutubeId } from '@/app/therapist/marketplace';
+import { extractYoutubeId } from '@/app/therapist/_marketplace';
 import { Feather } from '@expo/vector-icons';
 import { auth, db, functions, getDownloadURL, ref, storage } from '@/lib/firebase';
 import * as FileSystem from 'expo-file-system/legacy';

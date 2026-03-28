@@ -221,6 +221,14 @@ export default function RootLayout() {
             gestureEnabled: true,
           }} 
         />
+        <Stack.Screen
+          name="resource-pdf-reader"
+          options={{
+            headerShown: false,
+            gestureEnabled: true,
+            animation: 'slide_from_right',
+          }}
+        />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
         <StatusBar style="auto" />

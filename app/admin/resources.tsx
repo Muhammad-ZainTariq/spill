@@ -13,7 +13,7 @@ import {
   uploadTherapistResourceCoverPng,
   uploadTherapistResourcePdf,
   youtubeThumbnailUrl,
-} from '@/app/therapist/marketplace';
+} from '@/app/therapist/_marketplace';
 import {
   isResourceAiConfigured,
   suggestResourceAuthor,

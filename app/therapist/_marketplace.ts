@@ -441,11 +441,6 @@ export type TherapistResource = {
   updated_at?: string | null;
 };
 
-/** Google Viewer embed URL for in-app PDF display (storage download URLs stay server-controlled). */
-export function googlePdfViewerUrl(pdfUrl: string): string {
-  return `https://docs.google.com/viewer?url=${encodeURIComponent(pdfUrl)}&embedded=true`;
-}
-
 /** Extract YouTube video ID from URL */
 export function extractYoutubeId(url: string | null | undefined): string | null {
   if (!url || typeof url !== 'string') return null;

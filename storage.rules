@@ -32,27 +32,10 @@ service firebase.storage {
       allow write: if false;
     }
 
-    // Therapist resources — PDFs by type (books vs articles); Cloud Function uploads; auth reads
-    match /therapist_resources/books/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if false;
-    }
-    match /therapist_resources/articles/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if false;
-    }
-    // PDF first-page cover PNGs (Cloud Function uploads)
-    match /therapist_resources/covers/books/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if false;
-    }
-    match /therapist_resources/covers/articles/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if false;
-    }
-    // Legacy flat paths (older uploads before folders)
-    match /therapist_resources/{fileName} {
-      allow read: if request.auth != null;
+    // Therapist resources (PDFs + cover PNGs). Download URLs use access tokens; SDK reads also allowed.
+    // Public read: tokenized URLs work without auth; direct GET without token still needs a matching rule.
+    match /therapist_resources/{allPaths=**} {
+      allow read: if true;
       allow write: if false;
     }
 

@@ -14,7 +14,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth, db } from '@/lib/firebase';
-import { getUserLite, submitTherapistSessionReview } from '@/app/therapist/marketplace';
+import { getUserLite, submitTherapistSessionReview } from '@/app/therapist/_marketplace';
 import { SharedChatLayout, chatStyles, type ChatDataItem } from '@/components/SharedChatUI';
 import { HuzzPressable } from '@/app/ui/components/HuzzPressable.native';
 import { tokens } from '@/app/ui/tokens';

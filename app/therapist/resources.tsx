@@ -7,7 +7,7 @@ import {
   RESOURCE_CATEGORY_LABELS,
   TherapistResource,
   youtubeThumbnailUrl,
-} from '@/app/therapist/marketplace';
+} from '@/app/therapist/_marketplace';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Stack, useRouter } from 'expo-router';
@@ -27,7 +27,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { tokens } from '@/app/ui/tokens';
-import { BookCoverImage, ResourcePdfModal } from '@/app/components/LearningResourceWidgets';
+import { BookCoverImage } from '@/app/components/LearningResourceWidgets';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const VIDEO_HEIGHT = Math.round(SCREEN_WIDTH * (9 / 16));
@@ -55,7 +55,6 @@ export default function TherapistResourcesScreen() {
   const [filter, setFilter] = useState<string | null>(null);
   const [topicPickerOpen, setTopicPickerOpen] = useState(false);
   const [playingVideo, setPlayingVideo] = useState<{ youtubeId: string; title: string } | null>(null);
-  const [pdfViewer, setPdfViewer] = useState<{ url: string; title: string } | null>(null);
 
   const topicPickerRows = useMemo(
     () => [
@@ -96,7 +95,9 @@ export default function TherapistResourcesScreen() {
       if (yid) setPlayingVideo({ youtubeId: yid, title: item.title });
       else Linking.openURL(item.url);
     } else if (item.file_url && (item.type === 'book' || item.type === 'article')) {
-      setPdfViewer({ url: item.file_url, title: item.title });
+      router.push(
+        `/resource-pdf-reader?url=${encodeURIComponent(item.file_url)}&title=${encodeURIComponent(item.title ?? '')}`
+      );
     } else if (item.file_url) {
       Linking.openURL(item.file_url);
     } else if (item.url) {
@@ -373,14 +374,6 @@ export default function TherapistResourcesScreen() {
         </View>
       </Modal>
 
-      {pdfViewer ? (
-        <ResourcePdfModal
-          visible
-          url={pdfViewer.url}
-          title={pdfViewer.title}
-          onClose={() => setPdfViewer(null)}
-        />
-      ) : null}
     </View>
   );
 }

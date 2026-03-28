@@ -1,4 +1,4 @@
-import { listOpenSlotsForTherapist, listTherapistProfiles, TherapistProfile } from '@/app/therapist/marketplace';
+import { listOpenSlotsForTherapist, listTherapistProfiles, TherapistProfile } from '@/app/therapist/_marketplace';
 import TherapistList from '@/components/TherapistList';
 import { auth, db } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';

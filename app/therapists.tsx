@@ -1,9 +1,10 @@
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { tokens } from '@/app/ui/tokens';
-import { listOpenSlotsForTherapist, listTherapistProfiles, TherapistProfile } from '@/app/therapist/marketplace';
+import { listOpenSlotsForTherapist, listTherapistProfiles, TherapistProfile } from '@/app/therapist/_marketplace';
 
 type TherapistCard = TherapistProfile & { nextSlotAt?: string | null; openSlots?: number };
 
