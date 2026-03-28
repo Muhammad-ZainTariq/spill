@@ -11,7 +11,7 @@ const READER_HTML = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes"/>
 <style>
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: #dfe3ea; -webkit-overflow-scrolling: touch; }
+  html, body { margin: 0; padding: 0; background: #ece8e1; -webkit-overflow-scrolling: touch; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
@@ -19,7 +19,7 @@ const READER_HTML = `<!DOCTYPE html>
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 14px 8px 40px;
+    padding: 86px 10px 88px;
   }
   .page-shell {
     margin: 0 0 16px;
@@ -29,7 +29,7 @@ const READER_HTML = `<!DOCTYPE html>
     overflow: hidden;
     background: #fff;
     border-radius: 10px;
-    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+    box-shadow: 0 12px 28px rgba(56, 44, 24, 0.10);
   }
   .page-card.placeholder::after {
     content: "";
@@ -70,11 +70,14 @@ const READER_HTML = `<!DOCTYPE html>
     pageStates: [],
     queue: [],
     activeRenders: 0,
-    maxConcurrent: 2,
+    maxConcurrent: 1,
     firstPaintSent: false,
     estWidth: 0,
     estHeight: 0,
     resizeTick: 0,
+    totalPages: 0,
+    currentPage: 0,
+    prefetchTimer: 0,
   };
 
   function getCssMetrics(page) {
@@ -124,11 +127,39 @@ const READER_HTML = `<!DOCTYPE html>
     }
   }
 
+  function detectCurrentPage() {
+    if (!state.pageStates.length) return 1;
+    var center = window.scrollY + window.innerHeight / 2;
+    var bestPage = 1;
+    var bestDistance = Number.POSITIVE_INFINITY;
+    for (var i = 0; i < state.pageStates.length; i++) {
+      var st = state.pageStates[i];
+      var top = st.shell.offsetTop;
+      var mid = top + st.cssHeight / 2;
+      var distance = Math.abs(mid - center);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestPage = st.pageNum;
+      }
+    }
+    return bestPage;
+  }
+
+  function emitCurrentPage() {
+    var page = detectCurrentPage();
+    if (page !== state.currentPage) {
+      state.currentPage = page;
+      send({ type: 'page', page: state.currentPage, pages: state.totalPages });
+    }
+  }
+
   function releaseFarPages(viewTop, viewBottom) {
-    var farPad = window.innerHeight * 3;
+    var farPad = window.innerHeight * 10;
+    var current = state.currentPage || detectCurrentPage();
     for (var i = 0; i < state.pageStates.length; i++) {
       var st = state.pageStates[i];
       if (st.status !== 'rendered') continue;
+      if (Math.abs(st.pageNum - current) <= 8) continue;
       var top = st.shell.offsetTop;
       var bottom = top + st.cssHeight;
       if (bottom < viewTop - farPad || top > viewBottom + farPad) {
@@ -142,7 +173,7 @@ const READER_HTML = `<!DOCTYPE html>
     if (!state.pdf || !state.pageStates.length) return;
     var viewTop = window.scrollY;
     var viewBottom = viewTop + window.innerHeight;
-    var nearPad = window.innerHeight * 1.5;
+    var nearPad = window.innerHeight * 2.75;
     var center = viewTop + window.innerHeight / 2;
     var candidates = [];
 
@@ -171,6 +202,7 @@ const READER_HTML = `<!DOCTYPE html>
     }
 
     releaseFarPages(viewTop, viewBottom);
+    emitCurrentPage();
     pumpQueue();
   }
 
@@ -190,6 +222,30 @@ const READER_HTML = `<!DOCTYPE html>
     canvas.style.height = Math.ceil(st.cssHeight) + 'px';
     canvas.className = 'page-card';
     st.shell.appendChild(canvas);
+  }
+
+  function scheduleIdlePrefetch() {
+    if (state.prefetchTimer) return;
+    state.prefetchTimer = window.setTimeout(function () {
+      state.prefetchTimer = 0;
+      if (!state.pdf || state.activeRenders > 0 || state.queue.length > 0) return;
+
+      var base = state.currentPage || detectCurrentPage();
+      var targets = [];
+      for (var d = 0; d <= 4; d++) {
+        if (base + d <= state.totalPages) targets.push(base + d);
+        if (d > 0 && base - d >= 1) targets.push(base - d);
+      }
+
+      for (var i = 0; i < targets.length; i++) {
+        var st = state.pageStates[targets[i] - 1];
+        if (st && st.status === 'idle') {
+          st.status = 'queued';
+          state.queue.push(st.pageNum);
+        }
+      }
+      pumpQueue();
+    }, 120);
   }
 
   function renderPage(pageNum) {
@@ -230,15 +286,20 @@ const READER_HTML = `<!DOCTYPE html>
       .finally(function () {
         state.activeRenders -= 1;
         pumpQueue();
+        scheduleIdlePrefetch();
       });
   }
 
   function pumpQueue() {
     while (state.activeRenders < state.maxConcurrent && state.queue.length > 0) {
       var nextPage = state.queue.shift();
-      renderPage(nextPage).catch(function (e) {
-        send({ type: 'error', err: String(e && e.message ? e.message : e) });
+      renderPage(nextPage).catch(function () {
+        // Non-fatal page render hiccups should not collapse the whole reader.
+        // The page stays idle and can be retried later when it comes back into view.
       });
+    }
+    if (state.activeRenders === 0 && state.queue.length === 0) {
+      scheduleIdlePrefetch();
     }
   }
 
@@ -247,6 +308,12 @@ const READER_HTML = `<!DOCTYPE html>
     state.activeRenders = 0;
     state.firstPaintSent = false;
     state.pageStates = [];
+    state.totalPages = 0;
+    state.currentPage = 0;
+    if (state.prefetchTimer) {
+      clearTimeout(state.prefetchTimer);
+      state.prefetchTimer = 0;
+    }
     var pagesEl = document.getElementById('pages');
     if (pagesEl) pagesEl.innerHTML = '';
   }
@@ -279,12 +346,16 @@ const READER_HTML = `<!DOCTYPE html>
       .getDocument({ data: bytes })
       .promise.then(function (pdf) {
         state.pdf = pdf;
+        state.totalPages = pdf.numPages;
         return pdf.getPage(1).then(function (firstPage) {
           var m = getCssMetrics(firstPage);
           state.estWidth = m.cssWidth;
           state.estHeight = m.cssHeight;
           buildShells(pdf.numPages);
+          state.currentPage = 1;
+          send({ type: 'page', page: 1, pages: pdf.numPages });
           queueVisiblePages();
+          scheduleIdlePrefetch();
           send({ type: 'document', pages: pdf.numPages });
         });
       })
@@ -302,6 +373,7 @@ const READER_HTML = `<!DOCTYPE html>
 type Props = {
   pdfBase64: string;
   onRenderFailed?: () => void;
+  onPageChange?: (page: number, totalPages: number) => void;
 };
 
 function escapeForInject(chunk: string): string {
@@ -326,7 +398,7 @@ async function injectPdfBase64(webView: WebView | null, pdfBase64: string): Prom
   webView.injectJavaScript('window.__pdfLoad && window.__pdfLoad(); true;');
 }
 
-export function PdfJsReaderWebView({ pdfBase64, onRenderFailed }: Props) {
+function PdfJsReaderWebViewInner({ pdfBase64, onRenderFailed, onPageChange }: Props) {
   const ref = useRef<WebView>(null);
   const failed = useRef(false);
   const [shellReady, setShellReady] = useState(false);
@@ -355,7 +427,7 @@ export function PdfJsReaderWebView({ pdfBase64, onRenderFailed }: Props) {
   const onMsg = useCallback(
     (e: { nativeEvent: { data: string } }) => {
       try {
-        const data = JSON.parse(e.nativeEvent.data) as { type?: string };
+        const data = JSON.parse(e.nativeEvent.data) as { type?: string; page?: number; pages?: number };
         if (data.type === 'ready') {
           setShellReady(true);
           return;
@@ -364,15 +436,21 @@ export function PdfJsReaderWebView({ pdfBase64, onRenderFailed }: Props) {
           setInteractive(true);
           return;
         }
+        if (data.type === 'page' && typeof data.page === 'number' && typeof data.pages === 'number') {
+          onPageChange?.(data.page, data.pages);
+          return;
+        }
         if (data.type === 'error') {
-          failed.current = true;
-          onRenderFailed?.();
+          if (!interactive) {
+            failed.current = true;
+            onRenderFailed?.();
+          }
         }
       } catch {
         /* ignore */
       }
     },
-    [onRenderFailed]
+    [interactive, onPageChange, onRenderFailed]
   );
 
   return (
@@ -406,9 +484,11 @@ export function PdfJsReaderWebView({ pdfBase64, onRenderFailed }: Props) {
   );
 }
 
+export const PdfJsReaderWebView = React.memo(PdfJsReaderWebViewInner);
+
 const styles = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: '#dfe3ea' },
-  webview: { flex: 1, backgroundColor: '#dfe3ea' },
+  wrap: { flex: 1, backgroundColor: '#ece8e1' },
+  webview: { flex: 1, backgroundColor: '#ece8e1' },
   loading: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',

@@ -33,6 +33,18 @@ export default function ResourcePdfReaderScreen() {
   const [pdfBase64, setPdfBase64] = useState<string | null>(null);
   const [preparingPdf, setPreparingPdf] = useState(true);
   const [readerFailed, setReaderFailed] = useState(false);
+  const [pageInfo, setPageInfo] = useState<{ page: number; total: number } | null>(null);
+
+  const handleRenderFailed = useCallback(() => {
+    setReaderFailed(true);
+  }, []);
+
+  const handlePageChange = useCallback((page: number, total: number) => {
+    setPageInfo((prev) => {
+      if (prev?.page === page && prev.total === total) return prev;
+      return { page, total };
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -119,16 +131,20 @@ export default function ResourcePdfReaderScreen() {
   }, [displayUrl, urlParam]);
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+    <View style={[styles.root, { paddingBottom: insets.bottom }]}>
       <Stack.Screen options={{ headerShown: false }} />
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back">
-          <Feather name="chevron-left" size={26} color={tokens.colors.text} />
-        </Pressable>
-        <Text style={styles.headerTitle} numberOfLines={2}>
-          {title}
-        </Text>
-        <View style={styles.headerSpacer} />
+      <View pointerEvents="box-none" style={[styles.topOverlay, { top: insets.top + 8 }]}>
+        <View style={styles.readerBar}>
+          <Pressable onPress={() => router.back()} style={styles.floatingBackBtn} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back">
+            <Feather name="chevron-left" size={22} color={tokens.colors.text} />
+          </Pressable>
+          <View style={styles.titleWrap}>
+            <Text style={styles.titleEyebrow}>Book Reader</Text>
+            <Text style={styles.headerTitle} numberOfLines={1}>
+              {title}
+            </Text>
+          </View>
+        </View>
       </View>
 
       {!urlParam ? (
@@ -153,7 +169,22 @@ export default function ResourcePdfReaderScreen() {
           </Pressable>
         </View>
       ) : (
-        <PdfJsReaderWebView pdfBase64={pdfBase64 ?? ''} onRenderFailed={() => setReaderFailed(true)} />
+        <>
+          <PdfJsReaderWebView
+            pdfBase64={pdfBase64 ?? ''}
+            onRenderFailed={handleRenderFailed}
+            onPageChange={handlePageChange}
+          />
+          {pageInfo ? (
+            <View pointerEvents="none" style={styles.bottomOverlay}>
+              <View style={styles.pagePill}>
+                <Text style={styles.pagePillText}>
+                  {pageInfo.page} / {pageInfo.total}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+        </>
       )}
     </View>
   );
@@ -162,30 +193,83 @@ export default function ResourcePdfReaderScreen() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: tokens.colors.surface,
+    backgroundColor: '#ece8e1',
   },
-  header: {
+  topOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    paddingHorizontal: 14,
+  },
+  readerBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
+    gap: 12,
+    paddingHorizontal: 10,
     paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: tokens.colors.border,
-    backgroundColor: tokens.colors.surface,
-    gap: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(120,93,54,0.10)',
+    shadowColor: '#5f4b32',
+    shadowOpacity: 0.10,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
   },
-  backBtn: {
-    padding: 8,
-    marginLeft: -4,
+  floatingBackBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(120,93,54,0.12)',
+    shadowColor: '#6b5a40',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  titleWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingRight: 8,
+  },
+  titleEyebrow: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+    color: '#8a7356',
+    marginBottom: 1,
   },
   headerTitle: {
-    flex: 1,
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: '700',
     color: tokens.colors.text,
   },
-  headerSpacer: {
-    width: 40,
+  bottomOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 16,
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  pagePill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(33, 24, 12, 0.76)',
+  },
+  pagePillText: {
+    color: '#fffaf2',
+    fontSize: 13,
+    fontWeight: '700',
   },
   center: {
     flex: 1,
