@@ -19,7 +19,7 @@ const READER_HTML = `<!DOCTYPE html>
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 86px 10px 88px;
+    padding: 12px 10px 88px;
   }
   .page-shell {
     margin: 0 0 16px;

@@ -46,23 +46,27 @@ function fmtSlot(iso: string) {
   return d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-function fmtDateRange(startIso: string, endIso: string) {
-  const s = new Date(startIso);
-  const e = new Date(endIso);
-  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return `${startIso} → ${endIso}`;
-  const day = s.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-  const start = s.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const end = e.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return `${day} • ${start}–${end}`;
-}
-
 export default function TherapistProfileScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const therapistId = String(params?.id || '').trim();
+  const viewParam = String(params?.view || '').trim();
 
   const meUid = auth.currentUser?.uid || null;
   const isMe = !!meUid && meUid === therapistId;
+  const activeSection: 'home' | 'appointments' | 'reviews' | 'profile' =
+    isMe && (viewParam === 'appointments' || viewParam === 'reviews' || viewParam === 'profile')
+      ? viewParam
+      : 'home';
+  const isSectionScreen = isMe && activeSection !== 'home';
+  const sectionTitle =
+    activeSection === 'appointments'
+      ? 'Appointments'
+      : activeSection === 'reviews'
+        ? 'Reviews'
+        : activeSection === 'profile'
+          ? 'Profile'
+          : 'Therapist';
 
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<TherapistProfile | null>(null);
@@ -73,7 +77,6 @@ export default function TherapistProfileScreen() {
   const [userMap, setUserMap] = useState<Record<string, any>>({});
   const [reviews, setReviews] = useState<TherapistReview[]>([]);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<'appointments' | 'reviews' | 'profile'>('appointments');
 
   const [showCreateSlot, setShowCreateSlot] = useState(false);
   const [slotDayIdx, setSlotDayIdx] = useState(0);
@@ -104,6 +107,17 @@ export default function TherapistProfileScreen() {
       },
     ]);
   }, [router]);
+
+  const openSection = useCallback(
+    (section: 'appointments' | 'reviews' | 'profile') => {
+      router.push({ pathname: '/therapist/[id]' as any, params: { id: therapistId, view: section } });
+    },
+    [router, therapistId]
+  );
+
+  const backToHub = useCallback(() => {
+    router.replace({ pathname: '/therapist/[id]' as any, params: { id: therapistId } });
+  }, [router, therapistId]);
 
   const load = useCallback(async () => {
     if (!therapistId) return;
@@ -144,7 +158,7 @@ export default function TherapistProfileScreen() {
     } finally {
       setLoading(false);
     }
-  }, [therapistId]);
+  }, [isMe, therapistId]);
 
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
@@ -571,8 +585,6 @@ export default function TherapistProfileScreen() {
         bio: editBio.trim() || null,
       });
       Alert.alert('Saved', 'Profile updated.');
-      // After saving, take therapist back to their main view (appointments).
-      setTab('appointments');
       load();
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'Failed to save profile.');
@@ -605,21 +617,19 @@ export default function TherapistProfileScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <Stack.Screen options={{ headerShown: false, gestureEnabled: !isMe }} />
+      <Stack.Screen options={{ headerShown: false, gestureEnabled: !isMe || isSectionScreen }} />
       <View style={styles.header}>
-        {isMe ? (
+        {isMe && !isSectionScreen ? (
           <Pressable onPress={load} style={styles.headerIconBtn} hitSlop={10}>
             <Feather name="refresh-cw" size={20} color={tokens.colors.text} />
           </Pressable>
         ) : (
-          <Pressable onPress={() => router.back()} style={styles.headerIconBtn} hitSlop={10}>
+          <Pressable onPress={isSectionScreen ? backToHub : () => router.back()} style={styles.headerIconBtn} hitSlop={10}>
             <Feather name="chevron-left" size={24} color={tokens.colors.text} />
           </Pressable>
         )}
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          {isMe ? (profile?.display_name?.trim() || 'Therapist') : profile?.display_name || 'Therapist'}
-        </Text>
-        {isMe ? (
+        <Text style={styles.headerTitle} numberOfLines={1}>spill</Text>
+        {isMe && !isSectionScreen ? (
           <Pressable onPress={handleLogout} style={styles.headerIconBtn} hitSlop={10}>
             <Feather name="log-out" size={20} color={tokens.colors.text} />
           </Pressable>
@@ -628,6 +638,17 @@ export default function TherapistProfileScreen() {
             <Feather name="refresh-cw" size={20} color={tokens.colors.text} />
           </Pressable>
         )}
+      </View>
+      <View style={styles.headerSub}>
+        <Text style={styles.headerSubEyebrow}>{isMe ? 'Dashboard' : 'Directory'}</Text>
+        <Text style={styles.headerSubTitle} numberOfLines={1}>{sectionTitle}</Text>
+        <Text style={styles.headerSubMeta} numberOfLines={1}>
+          {isSectionScreen
+            ? (profile?.display_name?.trim() || 'Therapist')
+            : isMe
+              ? 'Manage your therapist workspace'
+              : (profile?.display_name?.trim() || 'Therapist')}
+        </Text>
       </View>
 
       {loading ? (
@@ -651,57 +672,66 @@ export default function TherapistProfileScreen() {
           {/* Therapist dashboard for self; public profile for others */}
           {isMe ? (
             <>
-              <Pressable
-                style={styles.resourcesCard}
-                onPress={() => router.push('/therapist/resources' as any)}
-              >
-                <Feather name="book-open" size={22} color={tokens.colors.pink} />
-                <Text style={styles.resourcesCardText}>Learning resources</Text>
-                <Feather name="chevron-right" size={18} color={tokens.colors.textMuted} />
-              </Pressable>
-              <View style={styles.tabs}>
-                <Pressable
-                  style={[styles.tabBtn, tab === 'appointments' && styles.tabBtnActive]}
-                  onPress={() => setTab('appointments')}
-                >
-                  <View style={styles.tabInner}>
-                    <Feather
-                      name="calendar"
-                      size={16}
-                      color={tab === 'appointments' ? '#ffffff' : tokens.colors.textSecondary}
-                    />
-                    <Text style={[styles.tabText, tab === 'appointments' && styles.tabTextActive]}>Appts</Text>
+              {activeSection === 'home' ? (
+                <>
+                  <Pressable
+                    style={styles.resourcesCard}
+                    onPress={() => router.push('/therapist/resources' as any)}
+                  >
+                    <View style={styles.resourcesHeroTop}>
+                      <View style={styles.resourcesHeroIcon}>
+                        <Feather name="book-open" size={24} color={tokens.colors.pink} />
+                      </View>
+                      <View style={styles.resourcesHeroArrow}>
+                        <Feather name="arrow-up-right" size={18} color={tokens.colors.pink} />
+                      </View>
+                    </View>
+                    <Text style={styles.resourcesCardLabel}>Library</Text>
+                    <Text style={styles.resourcesCardText}>Learning resources</Text>
+                    <Text style={styles.resourcesCardSubtext}>
+                      Open your books, articles, and reading material.
+                    </Text>
+                  </Pressable>
+                  <View style={styles.sectionMenu}>
+                    <Pressable style={styles.sectionMenuCard} onPress={() => openSection('appointments')}>
+                      <View style={styles.sectionMenuIcon}>
+                        <Feather name="calendar" size={18} color={tokens.colors.pink} />
+                      </View>
+                      <Text style={styles.sectionMenuMeta}>{appointmentItems.length} items</Text>
+                      <Text style={styles.sectionMenuTitle}>Appointments</Text>
+                      <Text style={styles.sectionMenuText}>Manage availability, requests, and sessions.</Text>
+                      <View style={styles.sectionMenuLink}>
+                        <Text style={styles.sectionMenuLinkText}>Open</Text>
+                        <Feather name="chevron-right" size={16} color={tokens.colors.pink} />
+                      </View>
+                    </Pressable>
+                    <Pressable style={styles.sectionMenuCard} onPress={() => openSection('reviews')}>
+                      <View style={styles.sectionMenuIcon}>
+                        <Feather name="star" size={18} color={tokens.colors.pink} />
+                      </View>
+                      <Text style={styles.sectionMenuMeta}>{reviews.length} reviews</Text>
+                      <Text style={styles.sectionMenuTitle}>Reviews</Text>
+                      <Text style={styles.sectionMenuText}>Read private feedback left after sessions.</Text>
+                      <View style={styles.sectionMenuLink}>
+                        <Text style={styles.sectionMenuLinkText}>Open</Text>
+                        <Feather name="chevron-right" size={16} color={tokens.colors.pink} />
+                      </View>
+                    </Pressable>
+                    <Pressable style={[styles.sectionMenuCard, styles.sectionMenuCardWide]} onPress={() => openSection('profile')}>
+                      <View style={styles.sectionMenuIcon}>
+                        <Feather name="user" size={18} color={tokens.colors.pink} />
+                      </View>
+                      <Text style={styles.sectionMenuMeta}>{(profile?.display_name || 'Public')} view</Text>
+                      <Text style={styles.sectionMenuTitle}>Profile</Text>
+                      <Text style={styles.sectionMenuText}>Edit your public profile and availability settings.</Text>
+                      <View style={styles.sectionMenuLink}>
+                        <Text style={styles.sectionMenuLinkText}>Open</Text>
+                        <Feather name="chevron-right" size={16} color={tokens.colors.pink} />
+                      </View>
+                    </Pressable>
                   </View>
-                </Pressable>
-                <Pressable
-                  style={[styles.tabBtn, tab === 'reviews' && styles.tabBtnActive]}
-                  onPress={() => setTab('reviews')}
-                >
-                  <View style={styles.tabInner}>
-                    <Feather
-                      name="star"
-                      size={16}
-                      color={tab === 'reviews' ? '#ffffff' : tokens.colors.textSecondary}
-                    />
-                    <Text style={[styles.tabText, tab === 'reviews' && styles.tabTextActive]}>Reviews</Text>
-                  </View>
-                </Pressable>
-                <Pressable
-                  style={[styles.tabBtn, tab === 'profile' && styles.tabBtnActive]}
-                  onPress={() => setTab('profile')}
-                >
-                  <View style={styles.tabInner}>
-                    <Feather
-                      name="user"
-                      size={16}
-                      color={tab === 'profile' ? '#ffffff' : tokens.colors.textSecondary}
-                    />
-                    <Text style={[styles.tabText, tab === 'profile' && styles.tabTextActive]}>Profile</Text>
-                  </View>
-                </Pressable>
-              </View>
-
-              {tab === 'appointments' ? (
+                </>
+              ) : activeSection === 'appointments' ? (
                 <View style={styles.sectionCard}>
                   <View style={styles.sectionHeaderRow}>
                     <Text style={styles.sectionTitle}>Appointments</Text>
@@ -815,7 +845,7 @@ export default function TherapistProfileScreen() {
                     </>
                   )}
                 </View>
-              ) : tab === 'reviews' ? (
+              ) : activeSection === 'reviews' ? (
                 <View style={styles.sectionCard}>
                   <Text style={styles.sectionTitle}>Reviews (private)</Text>
                   <Text style={styles.helperMuted}>Only you and admins can see feedback.</Text>
@@ -1163,9 +1193,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: tokens.spacing.screenHorizontal,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: tokens.colors.border,
+    paddingTop: 10,
+    paddingBottom: 12,
     backgroundColor: tokens.colors.surface,
   },
   headerIconBtn: {
@@ -1179,10 +1208,38 @@ const styles = StyleSheet.create({
   headerTitle: {
     flex: 1,
     marginHorizontal: 12,
-    fontSize: 18,
-    fontWeight: '800',
-    color: tokens.colors.text,
+    fontSize: 24,
+    fontWeight: '900',
+    color: tokens.colors.pink,
     textAlign: 'center',
+    letterSpacing: 0.2,
+  },
+  headerSub: {
+    paddingHorizontal: tokens.spacing.screenHorizontal,
+    paddingTop: 4,
+    paddingBottom: 14,
+    backgroundColor: tokens.colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: tokens.colors.border,
+  },
+  headerSubEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: tokens.colors.textMuted,
+  },
+  headerSubTitle: {
+    marginTop: 6,
+    fontSize: 24,
+    fontWeight: '900',
+    color: tokens.colors.text,
+  },
+  headerSubMeta: {
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: '700',
+    color: tokens.colors.textSecondary,
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 18 },
   topContent: { flex: 1, alignItems: 'center', paddingTop: 24, gap: 10, paddingHorizontal: 18 },
@@ -1225,7 +1282,6 @@ const styles = StyleSheet.create({
     paddingVertical: 24,
     gap: 8,
   },
-  emptyTitle: { fontSize: 17, fontWeight: '800', color: tokens.colors.text },
   emptySubtitle: { fontSize: 14, color: tokens.colors.textMuted, textAlign: 'center' },
   emptyCta: {
     flexDirection: 'row',
@@ -1333,17 +1389,118 @@ const styles = StyleSheet.create({
   secondaryBtnText: { color: tokens.colors.pink, fontSize: 13, fontWeight: '900' },
 
   resourcesCard: {
+    padding: 18,
+    borderRadius: 24,
+    backgroundColor: '#fff4f8',
+    borderWidth: 1,
+    borderColor: 'rgba(244,114,182,0.22)',
+    marginBottom: 16,
+    shadowColor: '#ec4899',
+    shadowOpacity: 0.07,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+  },
+  resourcesHeroTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    padding: 14,
-    borderRadius: 16,
-    backgroundColor: 'rgba(244,114,182,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(244,114,182,0.2)',
-    marginBottom: 14,
+    justifyContent: 'space-between',
+    marginBottom: 18,
   },
-  resourcesCardText: { flex: 1, fontSize: 15, fontWeight: '700', color: tokens.colors.text },
+  resourcesHeroIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(244,114,182,0.10)',
+  },
+  resourcesHeroArrow: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: 'rgba(244,114,182,0.18)',
+  },
+  resourcesCardLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+    color: tokens.colors.pink,
+    marginBottom: 6,
+  },
+  resourcesCardText: { fontSize: 24, fontWeight: '900', color: tokens.colors.text, lineHeight: 30 },
+  resourcesCardSubtext: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+    color: tokens.colors.textSecondary,
+  },
+  sectionMenu: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  sectionMenuCard: {
+    backgroundColor: tokens.colors.surface,
+    borderRadius: 22,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+    width: '48%',
+    minHeight: 188,
+  },
+  sectionMenuCardWide: {
+    width: '100%',
+    minHeight: 156,
+  },
+  sectionMenuIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(244,114,182,0.10)',
+    marginBottom: 16,
+  },
+  sectionMenuMeta: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: tokens.colors.textMuted,
+    marginBottom: 8,
+  },
+  sectionMenuTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: tokens.colors.text,
+  },
+  sectionMenuText: {
+    marginTop: 6,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: tokens.colors.textSecondary,
+  },
+  sectionMenuLink: {
+    marginTop: 'auto',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingTop: 16,
+  },
+  sectionMenuLinkText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: tokens.colors.pink,
+  },
   tabs: {
     flexDirection: 'row',
     alignItems: 'stretch',

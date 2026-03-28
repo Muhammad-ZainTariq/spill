@@ -133,10 +133,10 @@ export default function ResourcePdfReaderScreen() {
   return (
     <View style={[styles.root, { paddingBottom: insets.bottom }]}>
       <Stack.Screen options={{ headerShown: false }} />
-      <View pointerEvents="box-none" style={[styles.topOverlay, { top: insets.top + 8 }]}>
+      <View style={[styles.headerShell, { paddingTop: insets.top + 8 }]}>
         <View style={styles.readerBar}>
           <Pressable onPress={() => router.back()} style={styles.floatingBackBtn} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back">
-            <Feather name="chevron-left" size={22} color={tokens.colors.text} />
+            <Feather name="chevron-left" size={20} color={tokens.colors.text} />
           </Pressable>
           <View style={styles.titleWrap}>
             <Text style={styles.titleEyebrow}>Book Reader</Text>
@@ -195,44 +195,35 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ece8e1',
   },
-  topOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
+  headerShell: {
     paddingHorizontal: 14,
+    paddingBottom: 10,
   },
   readerBar: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.92)',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,250,242,0.96)',
     borderWidth: 1,
-    borderColor: 'rgba(120,93,54,0.10)',
+    borderColor: 'rgba(120,93,54,0.08)',
     shadowColor: '#5f4b32',
-    shadowOpacity: 0.10,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 4,
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
   floatingBackBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.82)',
+    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: 'rgba(120,93,54,0.12)',
-    shadowColor: '#6b5a40',
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
+    borderColor: 'rgba(120,93,54,0.10)',
   },
   titleWrap: {
     flex: 1,
@@ -248,9 +239,9 @@ const styles = StyleSheet.create({
     marginBottom: 1,
   },
   headerTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: tokens.colors.text,
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#2a2117',
   },
   bottomOverlay: {
     position: 'absolute',
