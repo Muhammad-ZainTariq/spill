@@ -5,7 +5,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { auth } from '@/lib/firebase';
 import { savePushTokenToFirestore, showLocalNotification } from '@/lib/pushNotifications';
 import * as Notifications from 'expo-notifications';
@@ -13,7 +12,6 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { getConversations, getUnreadNotificationCount, markNotificationRead, setGameInviteDeclined, subscribeToGameInvites, subscribeToUnreadNotificationCount } from '@/app/functions';
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
@@ -24,18 +22,18 @@ export default function TabLayout() {
     loadUnreadCounts();
     const interval = setInterval(loadUnreadCounts, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       if (user) savePushTokenToFirestore();
     });
     return () => unsub();
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const d = response.notification.request.content.data as { type?: string; match_id?: string; game_type?: string; group_id?: string };
+      const d = response.notification.request.content.data as { type?: string; match_id?: string; game_type?: string; group_id?: string; room_id?: string };
       if (d?.type === 'game_invite' && d?.match_id) {
         const gameType = (d?.game_type || 'tictactoe').toLowerCase();
         router.push({ pathname: '/game-webview', params: { room: d.match_id, gameType } } as any);
@@ -43,10 +41,12 @@ export default function TabLayout() {
         router.push(`/group?groupId=${d.group_id}` as any);
       } else if (d?.type === 'match_accepted') {
         router.replace('/(tabs)/matches' as any);
+      } else if (d?.type === 'live_podcast_started' && d?.room_id) {
+        router.push(`/live/${d.room_id}` as any);
       }
     });
     return () => sub.remove();
-  }, []);
+  }, [router]);
 
   // Keep app icon badge in sync with unread notification count
   useEffect(() => {
@@ -56,7 +56,7 @@ export default function TabLayout() {
       Notifications.setBadgeCountAsync(count).catch(() => {});
     });
     return () => unsub();
-  }, []);
+  }, [router]);
 
   // Listen for game invites app-wide (any tab) — only subscribe once auth is ready
   useEffect(() => {
@@ -99,7 +99,7 @@ export default function TabLayout() {
       inviteUnsub?.();
       authUnsub();
     };
-  }, []);
+  }, [router]);
 
   const loadUnreadCounts = async () => {
     try {

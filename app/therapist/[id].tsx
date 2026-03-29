@@ -692,6 +692,24 @@ export default function TherapistProfileScreen() {
                       Open your books, articles, and reading material.
                     </Text>
                   </Pressable>
+                  <Pressable
+                    style={styles.podcastCard}
+                    onPress={() => router.push('/live' as any)}
+                  >
+                    <View style={styles.resourcesHeroTop}>
+                      <View style={[styles.resourcesHeroIcon, styles.podcastHeroIcon]}>
+                        <Feather name="radio" size={24} color="#2563eb" />
+                      </View>
+                      <View style={styles.resourcesHeroArrow}>
+                        <Feather name="arrow-up-right" size={18} color="#2563eb" />
+                      </View>
+                    </View>
+                    <Text style={styles.podcastCardLabel}>Live</Text>
+                    <Text style={styles.podcastCardText}>Podcast spaces</Text>
+                    <Text style={styles.resourcesCardSubtext}>
+                      Start a room, go live, and keep listeners with you while they browse the app.
+                    </Text>
+                  </Pressable>
                   <View style={styles.sectionMenu}>
                     <Pressable style={styles.sectionMenuCard} onPress={() => openSection('appointments')}>
                       <View style={styles.sectionMenuIcon}>
@@ -1401,6 +1419,19 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 3,
   },
+  podcastCard: {
+    padding: 18,
+    borderRadius: 24,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: 'rgba(37,99,235,0.20)',
+    marginBottom: 16,
+    shadowColor: '#2563eb',
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+  },
   resourcesHeroTop: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1414,6 +1445,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(244,114,182,0.10)',
+  },
+  podcastHeroIcon: {
+    backgroundColor: 'rgba(37,99,235,0.10)',
   },
   resourcesHeroArrow: {
     width: 38,
@@ -1433,7 +1467,16 @@ const styles = StyleSheet.create({
     color: tokens.colors.pink,
     marginBottom: 6,
   },
+  podcastCardLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+    color: '#2563eb',
+    marginBottom: 6,
+  },
   resourcesCardText: { fontSize: 24, fontWeight: '900', color: tokens.colors.text, lineHeight: 30 },
+  podcastCardText: { fontSize: 24, fontWeight: '900', color: tokens.colors.text, lineHeight: 30 },
   resourcesCardSubtext: {
     marginTop: 8,
     fontSize: 14,

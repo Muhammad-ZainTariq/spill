@@ -49,6 +49,7 @@ import {
   subscribeToPosts,
   upvotePost
 } from '../functions';
+import { LivePodcastRoom, subscribeLivePodcastRooms } from '@/lib/livePodcasts';
 
 type SheetComment = {
   id: string;
@@ -280,6 +281,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [posts, setPosts] = useState<Post[]>([]);
+  const [liveRooms, setLiveRooms] = useState<LivePodcastRoom[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
@@ -379,6 +381,13 @@ export default function HomeScreen() {
     })();
     return () => { cancelled = true; };
   }, [commentSheetPostId]);
+
+  useEffect(() => {
+    const unsub = subscribeLivePodcastRooms((rooms) => {
+      setLiveRooms(rooms.filter((room) => room.status === 'live').slice(0, 3));
+    });
+    return () => unsub();
+  }, []);
 
   const handleAddCommentSheet = async () => {
     if (!commentSheetPostId || !newCommentText.trim() || submittingComment) return;
@@ -648,6 +657,17 @@ export default function HomeScreen() {
                   style={styles.sideMenuItem}
                   onPress={() => {
                     setMenuVisible(false);
+                    router.push('/live' as any);
+                  }}
+                >
+                  <Feather name="radio" size={20} color="#2563eb" />
+                  <Text style={[styles.sideMenuItemText, { color: '#2563eb', fontWeight: '700' }]}>Podcast Spaces</Text>
+                  <Feather name="chevron-right" size={20} color="#9ca3af" />
+                </Pressable>
+                <Pressable
+                  style={styles.sideMenuItem}
+                  onPress={() => {
+                    setMenuVisible(false);
                     router.push('/settings' as any);
                   }}
                 >
@@ -688,6 +708,28 @@ export default function HomeScreen() {
           ))}
         </View>
       </View>
+
+      {liveRooms.length > 0 ? (
+        <View style={styles.liveCapsuleWrap}>
+          <Pressable
+            style={styles.liveCapsule}
+            onPress={() => router.push(`/live/${liveRooms[0].id}` as any)}
+          >
+            <View style={styles.liveCapsuleDot} />
+            <View style={styles.liveCapsuleTextWrap}>
+              <Text style={styles.liveCapsuleTitle} numberOfLines={1}>
+                {liveRooms[0].title}
+              </Text>
+              <Text style={styles.liveCapsuleMeta} numberOfLines={1}>
+                {liveRooms[0].host_name || 'Therapist'} is live now · Tap to listen while browsing
+              </Text>
+            </View>
+            <View style={styles.liveCapsuleBadge}>
+              <Text style={styles.liveCapsuleBadgeText}>LIVE</Text>
+            </View>
+          </Pressable>
+        </View>
+      ) : null}
 
       {/* Posts Feed */}
       <ScrollView
@@ -1112,6 +1154,51 @@ const styles = StyleSheet.create({
   catChipTextActive: {
     color: '#fff',
     fontWeight: '700',
+  },
+  liveCapsuleWrap: {
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    backgroundColor: '#fff',
+  },
+  liveCapsule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#2563eb',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  liveCapsuleDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#93c5fd',
+  },
+  liveCapsuleTextWrap: {
+    flex: 1,
+  },
+  liveCapsuleTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  liveCapsuleMeta: {
+    marginTop: 2,
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  liveCapsuleBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  liveCapsuleBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '900',
   },
   menuBackdrop: {
     position: 'absolute',

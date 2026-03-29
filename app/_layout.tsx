@@ -10,6 +10,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import 'react-native-reanimated';
 
+import { LivePodcastProvider } from '@/app/components/live/LivePodcastProvider';
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
 
@@ -17,6 +19,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <KeyboardProvider statusBarTranslucent navigationBarTranslucent>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <LivePodcastProvider>
           <Stack>
         <Stack.Screen 
           name="index" 
@@ -82,6 +85,7 @@ export default function RootLayout() {
           }} 
         />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="live" options={{ headerShown: false }} />
         <Stack.Screen name="therapist" options={{ headerShown: false }} />
         <Stack.Screen name="admin" options={{ headerShown: false }} />
         <Stack.Screen 
@@ -232,6 +236,7 @@ export default function RootLayout() {
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
         <StatusBar style="auto" />
+        </LivePodcastProvider>
       </ThemeProvider>
       </KeyboardProvider>
     </GestureHandlerRootView>
