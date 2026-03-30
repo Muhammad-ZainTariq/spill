@@ -314,6 +314,7 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
         presentedRoomId={presentedRoomId}
         leaveRoom={leaveRoom}
         someoneSpeaking={someoneSpeaking}
+        micEnabled={micEnabled}
         playbackMuted={playbackMuted}
         dominantSpeakerLevel={dominantSpeakerLevel}
         togglePlayback={togglePlayback}

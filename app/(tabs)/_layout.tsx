@@ -44,7 +44,10 @@ export default function TabLayout() {
           router.push(`/group?groupId=${d.group_id}` as any);
         } else if (d?.type === 'match_accepted') {
           router.replace('/(tabs)/matches' as any);
-        } else if (d?.type === 'live_podcast_started' && d?.room_id) {
+        } else if (
+          (d?.type === 'live_podcast_started' || d?.type === 'live_podcast_soon') &&
+          d?.room_id
+        ) {
           router.push(`/live/${d.room_id}` as any);
         }
       });
@@ -113,23 +116,20 @@ export default function TabLayout() {
         const latest = unread[0];
         if (!latest || livePodcastsShownRef.current.has(latest.id)) return;
         livePodcastsShownRef.current.add(latest.id);
-        showLocalNotification(
-          `${latest.host_name || 'Therapist'} is live now`,
-          latest.body || 'A live podcast has started. Tap to join.',
-          {
-            type: 'live_podcast_started',
-            room_id: latest.room_id,
-          }
-        ).then((shown) => {
+        const isSoon = latest.type === 'live_podcast_soon';
+        const title = isSoon
+          ? `Starting soon · ${latest.host_name || 'Therapist'}`
+          : `${latest.host_name || 'Therapist'} is live now`;
+        const body = latest.body || (isSoon ? 'A live podcast is starting soon. Tap to open the room.' : 'A live podcast has started. Tap to join.');
+        showLocalNotification(title, body, {
+          type: latest.type,
+          room_id: latest.room_id,
+        }).then((shown) => {
           if (shown || notificationsRuntimeSupported()) return;
-          Alert.alert(
-            `${latest.host_name || 'Therapist'} is live now`,
-            latest.body || 'A live podcast has started. Tap to join.',
-            [
-              { text: 'Later' },
-              { text: 'Open room', onPress: () => router.push(`/live/${latest.room_id}` as any) },
-            ]
-          );
+          Alert.alert(title, body, [
+            { text: 'Later' },
+            { text: 'Open room', onPress: () => router.push(`/live/${latest.room_id}` as any) },
+          ]);
         });
       });
     });

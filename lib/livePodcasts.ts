@@ -1,4 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { getApp } from 'firebase/app';
 import { httpsCallable } from 'firebase/functions';
 import {
   collection,
@@ -12,7 +14,7 @@ import {
   Unsubscribe,
   where,
 } from 'firebase/firestore';
-import { auth, db, functions, getDownloadURL, ref, storage, uploadString } from '@/lib/firebase';
+import { auth, db, functions, getDownloadURL, ref, storage } from '@/lib/firebase';
 
 export type LivePodcastRoomStatus = 'scheduled' | 'live' | 'ended' | 'cancelled';
 export type LivePodcastRecordMode = 'none' | 'draft' | 'publish';
@@ -38,6 +40,9 @@ export type LivePodcastRoom = {
   allow_listener_speaking?: boolean;
   livekit_room_name?: string;
   co_host_ids?: string[];
+  /** ISO time when server should send “starting soon” reminder pushes (subscribers + host). */
+  reminder_fire_at?: string | null;
+  scheduled_reminder_sent?: boolean;
   listener_count_current?: number;
   listener_count_peak?: number;
   total_join_count?: number;
@@ -183,33 +188,92 @@ export async function createLivePodcastRoom(input: {
   allow_raise_hand?: boolean;
   allow_listener_speaking?: boolean;
 }) {
-  const fn = httpsCallable(functions, 'createLivePodcastRoom');
+  const fn = httpsCallable(functions, 'createLivePodcastRoom', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
   const { data } = await fn(input as any);
   return data as { room: LivePodcastRoom };
 }
 
-export async function uploadLivePodcastCoverFromUri(uri: string, contentType?: string | null) {
+async function ensureReadableFileUri(uri: string): Promise<string> {
+  const trimmed = String(uri || '').trim();
+  if (!trimmed) {
+    throw new Error('Missing image file.');
+  }
+  if (trimmed.startsWith('file://')) {
+    return trimmed;
+  }
+  const baseDir = FileSystem.cacheDirectory;
+  if (!baseDir) {
+    throw new Error('This device cannot prepare the image for upload.');
+  }
+  const dest = `${baseDir}live_podcast_cover_${Date.now()}.jpg`;
+  await FileSystem.copyAsync({ from: trimmed, to: dest });
+  return dest;
+}
+
+const LIVE_PODCAST_COVER_MAX_EDGE = 1200;
+const LIVE_PODCAST_COVER_JPEG_QUALITY = 0.82;
+/** Base64 uploads can be slow; must stay under client + function limits. */
+const UPLOAD_COVER_TIMEOUT_MS = 300000;
+/** Cold starts + LiveKit / notifications can exceed the default ~70s client deadline. */
+const LIVE_PODCAST_FN_TIMEOUT_MS = 120000;
+
+export async function uploadLivePodcastCoverFromUri(uri: string, _contentType?: string | null) {
   const uid = auth.currentUser?.uid;
   if (!uid) {
     throw new Error('You must be logged in to upload a podcast cover.');
   }
-  const base64Data = await FileSystem.readAsStringAsync(uri, {
+  const fileUri = await ensureReadableFileUri(uri);
+  const optimized = await ImageManipulator.manipulateAsync(
+    fileUri,
+    [{ resize: { width: LIVE_PODCAST_COVER_MAX_EDGE } }],
+    { compress: LIVE_PODCAST_COVER_JPEG_QUALITY, format: ImageManipulator.SaveFormat.JPEG }
+  );
+  const base64Data = await FileSystem.readAsStringAsync(optimized.uri, {
     encoding: FileSystem.EncodingType.Base64,
   });
   if (!base64Data?.length) {
     throw new Error('Could not read the selected image.');
   }
 
-  const mime = contentType?.trim() || 'image/jpeg';
-  const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
-  const path = `live_podcast_covers/${uid}/${Date.now()}.${ext}`;
-  const storageRef = ref(storage, path);
-  await uploadString(storageRef, base64Data, 'base64', { contentType: mime });
-  return getDownloadURL(storageRef);
+  const mime = 'image/jpeg';
+  const storageBucket = getApp().options.storageBucket || '(unknown)';
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    // eslint-disable-next-line no-console
+    console.log('[livePodcastCover] client → callable upload', {
+      storageBucket,
+      base64Chars: base64Data.length,
+      approxKb: Math.round((base64Data.length * 3) / 4 / 1024),
+    });
+  }
+
+  const fn = httpsCallable(functions, 'uploadLivePodcastCover', { timeout: UPLOAD_COVER_TIMEOUT_MS });
+  const { data } = await fn({ base64: base64Data, contentType: mime });
+  const path = String((data as { path?: string })?.path || '').trim();
+  if (!path) {
+    throw new Error('Upload did not return a storage path.');
+  }
+  const downloadUrl = await getDownloadURL(ref(storage, path));
+
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    // eslint-disable-next-line no-console
+    console.log('[livePodcastCover] client ← done', {
+      storageBucket,
+      path,
+      downloadHost: (() => {
+        try {
+          return new URL(downloadUrl).host;
+        } catch {
+          return 'parse-error';
+        }
+      })(),
+    });
+  }
+
+  return downloadUrl;
 }
 
 export async function startLivePodcastRoom(roomId: string) {
-  const fn = httpsCallable(functions, 'startLivePodcastRoom');
+  const fn = httpsCallable(functions, 'startLivePodcastRoom', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
   await fn({ roomId });
 }
 
@@ -225,14 +289,20 @@ export async function createLivePodcastTranscriptToken(roomId: string) {
 }
 
 export async function endLivePodcastRoom(roomId: string) {
-  const fn = httpsCallable(functions, 'endLivePodcastRoom');
+  const fn = httpsCallable(functions, 'endLivePodcastRoom', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
   const { data } = await fn({ roomId });
   return data as { ok: true; replayStatus: string };
 }
 
 export async function joinLivePodcastRoom(roomId: string, inviteCode?: string) {
-  const fn = httpsCallable(functions, 'joinLivePodcastRoom');
+  const fn = httpsCallable(functions, 'joinLivePodcastRoom', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
   const { data } = await fn({ roomId, inviteCode: inviteCode || null });
+  return data as LivePodcastSession;
+}
+
+export async function joinLivePodcastByInviteCode(inviteCode: string) {
+  const fn = httpsCallable(functions, 'joinLivePodcastByInviteCode', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
+  const { data } = await fn({ inviteCode });
   return data as LivePodcastSession;
 }
 

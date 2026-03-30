@@ -3915,7 +3915,9 @@ export const subscribeToGameInvites = (
 };
 
 export const subscribeToLivePodcastNotifications = (
-  onNotifications: (items: { id: string; room_id: string; host_name: string; body: string; read: boolean; created_at: string }[]) => void
+  onNotifications: (
+    items: { id: string; type: string; room_id: string; host_name: string; body: string; read: boolean; created_at: string }[]
+  ) => void
 ): (() => void) => {
   const uid = auth.currentUser?.uid;
   if (!uid) return () => {};
@@ -3924,8 +3926,8 @@ export const subscribeToLivePodcastNotifications = (
   const q = query(
     notifRef,
     where('recipient_id', '==', uid),
-    where('type', '==', 'live_podcast_started'),
-    limit(30)
+    where('type', 'in', ['live_podcast_started', 'live_podcast_soon']),
+    limit(40)
   );
   const unsub = onSnapshot(
     q,
@@ -3934,6 +3936,7 @@ export const subscribeToLivePodcastNotifications = (
         const data = d.data() as any;
         return {
           id: d.id,
+          type: String(data.type || 'live_podcast_started'),
           room_id: data.room_id || '',
           host_name: data.host_name || 'Therapist',
           body: data.body || '',

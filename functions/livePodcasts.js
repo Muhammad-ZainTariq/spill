@@ -13,6 +13,9 @@ const COLLECTIONS = {
   auditLogs: 'live_podcast_audit_logs',
 };
 
+/** Must match client `storageBucket` (e.g. *.firebasestorage.app). `admin.storage().bucket()` defaults to *.appspot.com and will not write to this bucket. */
+const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'spillll.firebasestorage.app';
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -135,6 +138,53 @@ async function notifyPodcastStarted(roomId, room) {
   );
 }
 
+async function notifyPodcastScheduledSoon(roomId, room) {
+  const reminderSnap = await db.collection(COLLECTIONS.reminders).where('room_id', '==', roomId).get();
+  const recipientIds = [...new Set(reminderSnap.docs.map((d) => String(d.data()?.user_uid || '').trim()).filter(Boolean))];
+  if (!recipientIds.length) return;
+
+  let startLabel = 'soon';
+  try {
+    if (room.scheduled_for) {
+      const d = new Date(String(room.scheduled_for));
+      if (!Number.isNaN(d.getTime())) {
+        startLabel = d.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+      }
+    }
+  } catch (_) {
+    /* ignore */
+  }
+
+  const title = `Starting soon · ${room.title || 'Podcast space'}`;
+  const body = `${room.host_name || 'Therapist'} is scheduled to go live around ${startLabel}. Open the app when you are ready.`;
+
+  await Promise.all(
+    recipientIds.map(async (recipientId) => {
+      try {
+        await db.collection('notifications').add({
+          recipient_id: recipientId,
+          from_user_id: room.host_uid,
+          title,
+          body,
+          type: 'live_podcast_soon',
+          room_id: roomId,
+          cover_url: room.cover_url || null,
+          host_name: room.host_name || 'Therapist',
+          read: false,
+          created_at: nowIso(),
+        });
+        await sendPushToUser(recipientId, title, body, {
+          type: 'live_podcast_soon',
+          room_id: roomId,
+          cover_url: room.cover_url || '',
+        });
+      } catch (error) {
+        console.error('Failed to send scheduled podcast reminder', { recipientId, roomId, error });
+      }
+    })
+  );
+}
+
 function generateInviteCode() {
   return randomBytes(4).toString('hex').toUpperCase();
 }
@@ -152,6 +202,8 @@ function sanitizeRoom(data, id) {
     status: String(data.status || 'scheduled'),
     visibility: String(data.visibility || 'public'),
     scheduled_for: data.scheduled_for || null,
+    reminder_fire_at: data.reminder_fire_at || null,
+    scheduled_reminder_sent: !!data.scheduled_reminder_sent,
     started_at: data.started_at || null,
     ended_at: data.ended_at || null,
     record_mode: String(data.record_mode || 'draft'),
@@ -176,6 +228,73 @@ function resolveRole({ room, uid, inviteDoc }) {
   if (role === 'co_host') return 'co_host';
   if (role === 'speaker_guest') return 'speaker';
   return 'listener';
+}
+
+async function getInviteDocByRoomAndCode(roomId, inviteCode) {
+  const inviteSnap = await db.collection(COLLECTIONS.invites).where('room_id', '==', roomId).where('code', '==', inviteCode).limit(1).get();
+  const invite = inviteSnap.docs[0];
+  if (!invite) throw new functions.https.HttpsError('not-found', 'Invite code not found.');
+  const data = invite.data() || {};
+  if (!data.is_active) throw new functions.https.HttpsError('failed-precondition', 'Invite code is inactive.');
+  if (Number(data.uses_count || 0) >= Number(data.max_uses || 1)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invite code has already been used.');
+  }
+  if (typeof data.expires_at === 'string' && Date.parse(data.expires_at) < Date.now()) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invite code expired.');
+  }
+  return { id: invite.id, ...data };
+}
+
+async function createJoinSession({ uid, roomId, room, roomRef, inviteDoc }) {
+  const role = resolveRole({ room, uid, inviteDoc });
+  const isPrivileged = role === 'host' || role === 'co_host' || role === 'speaker';
+  if (room.status !== 'live' && !isPrivileged) {
+    throw new functions.https.HttpsError('failed-precondition', 'Room is not live yet.');
+  }
+
+  const userRef = db.collection('users').doc(uid);
+  const userSnap = await userRef.get();
+  const user = userSnap.exists ? userSnap.data() || {} : {};
+  const premium = !!user.is_premium;
+  const freeAlreadyUsed = !!user.first_live_podcast_used_at;
+
+  if (!isPrivileged && !premium && freeAlreadyUsed) {
+    throw new functions.https.HttpsError('failed-precondition', 'premium-required-for-live-podcast');
+  }
+
+  const token = await createAccessToken({
+    uid,
+    displayName: String(user.display_name || user.anonymous_username || 'Listener'),
+    roomName: room.livekit_room_name,
+    role,
+  });
+
+  await roomRef.update({
+    listener_count_current: admin.firestore.FieldValue.increment(1),
+    total_join_count: admin.firestore.FieldValue.increment(1),
+    updated_at: nowIso(),
+  });
+
+  if (!isPrivileged && !premium && !freeAlreadyUsed) {
+    await userRef.set({ first_live_podcast_used_at: nowIso() }, { merge: true });
+  }
+
+  if (inviteDoc) {
+    await db.collection(COLLECTIONS.invites).doc(inviteDoc.id).update({
+      uses_count: admin.firestore.FieldValue.increment(1),
+    });
+  }
+
+  await logAudit(roomId, uid, 'room_joined', null, { role });
+  const { serverUrl } = getLiveKitConfig();
+  return {
+    room,
+    role,
+    token,
+    serverUrl,
+    usedFreeAccess: !isPrivileged && !premium && !freeAlreadyUsed,
+    premiumUnlocked: premium,
+  };
 }
 
 async function createAccessToken({ uid, displayName, roomName, role }) {
@@ -207,6 +326,103 @@ async function logAudit(roomId, actorUid, action, targetUid = null, metadata = {
   });
 }
 
+/** Client Storage uploads hit React Native Blob limits; write cover bytes on the server instead. */
+exports.uploadLivePodcastCover = functions
+  .region('us-central1')
+  .runWith({ timeoutSeconds: 300, memory: '1GB' })
+  .https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+  }
+  const uid = context.auth.uid;
+  const canHost = await isTherapistOrAdmin(uid);
+  if (!canHost) {
+    throw new functions.https.HttpsError('permission-denied', 'Only therapists can upload podcast covers.');
+  }
+
+  console.info('[uploadLivePodcastCover] invoked', {
+    bucket: STORAGE_BUCKET,
+    uid,
+  });
+
+  let b64 = String(data?.base64 || '')
+    .trim()
+    .replace(/\s/g, '');
+  const dataUrl = /^data:image\/\w+;base64,(.+)$/i.exec(b64);
+  if (dataUrl) {
+    b64 = dataUrl[1];
+  }
+  if (!b64) {
+    throw new functions.https.HttpsError('invalid-argument', 'Image data is required.');
+  }
+  const maxB64Len = 7 * 1024 * 1024;
+  if (b64.length > maxB64Len) {
+    throw new functions.https.HttpsError('invalid-argument', 'Image is too large. Choose a smaller photo.');
+  }
+
+  let buffer;
+  try {
+    buffer = Buffer.from(b64, 'base64');
+  } catch (e) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid image data.');
+  }
+  if (!buffer.length || buffer.length > 5 * 1024 * 1024) {
+    throw new functions.https.HttpsError('invalid-argument', 'Image is too large.');
+  }
+
+  console.info('[uploadLivePodcastCover] payload ready', {
+    bucket: STORAGE_BUCKET,
+    uid,
+    base64Chars: b64.length,
+    decodedBytes: buffer.length,
+  });
+
+  let mime = String(data?.contentType || 'image/jpeg').trim().toLowerCase();
+  if (!mime.startsWith('image/')) {
+    mime = 'image/jpeg';
+  }
+  const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+  const objectPath = `live_podcast_covers/${uid}/${Date.now()}.${ext}`;
+  const bucket = admin.storage().bucket(STORAGE_BUCKET);
+  const file = bucket.file(objectPath);
+
+  console.info('[uploadLivePodcastCover] writing to Storage', {
+    bucket: STORAGE_BUCKET,
+    gsUri: `gs://${STORAGE_BUCKET}/${objectPath}`,
+    objectPath,
+    contentType: mime,
+    bytes: buffer.length,
+  });
+
+  try {
+    await file.save(buffer, {
+      resumable: false,
+      metadata: { contentType: mime },
+    });
+  } catch (err) {
+    console.error('uploadLivePodcastCover save failed', {
+      bucket: STORAGE_BUCKET,
+      path: objectPath,
+      message: err?.message,
+      code: err?.code,
+    });
+    throw new functions.https.HttpsError(
+      'internal',
+      err?.message || 'Could not save the cover image. Try again or use a smaller photo.'
+    );
+  }
+
+  console.info('[uploadLivePodcastCover] save OK', {
+    bucket: STORAGE_BUCKET,
+    gsUri: `gs://${STORAGE_BUCKET}/${objectPath}`,
+    objectPath,
+    contentType: mime,
+    bytes: buffer.length,
+  });
+
+  return { path: objectPath };
+  });
+
 exports.createLivePodcastRoom = functions.region('us-central1').https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
@@ -223,6 +439,17 @@ exports.createLivePodcastRoom = functions.region('us-central1').https.onCall(asy
     throw new functions.https.HttpsError('invalid-argument', 'Room title is required.');
   }
 
+  let scheduledForIso = data?.scheduled_for ? String(data.scheduled_for).trim() : null;
+  let reminderFireAt = null;
+  if (scheduledForIso) {
+    const scheduledAt = Date.parse(scheduledForIso);
+    if (Number.isNaN(scheduledAt) || scheduledAt <= Date.now()) {
+      throw new functions.https.HttpsError('invalid-argument', 'scheduled_for must be a valid future date and time.');
+    }
+    const fireAtMs = scheduledAt - 10 * 60 * 1000;
+    reminderFireAt = new Date(Math.max(fireAtMs, Date.now())).toISOString();
+  }
+
   const ref = db.collection(COLLECTIONS.rooms).doc();
   const room = {
     title,
@@ -234,7 +461,9 @@ exports.createLivePodcastRoom = functions.region('us-central1').https.onCall(asy
     host_name: String(user.display_name || user.anonymous_username || 'Therapist'),
     status: 'scheduled',
     visibility: 'public',
-    scheduled_for: data?.scheduled_for ? String(data.scheduled_for) : null,
+    scheduled_for: scheduledForIso,
+    reminder_fire_at: reminderFireAt,
+    scheduled_reminder_sent: false,
     started_at: null,
     ended_at: null,
     record_mode: ['none', 'draft', 'publish'].includes(String(data?.record_mode || ''))
@@ -252,37 +481,84 @@ exports.createLivePodcastRoom = functions.region('us-central1').https.onCall(asy
     updated_at: nowIso(),
   };
   await ref.set(room);
+  if (scheduledForIso) {
+    await db
+      .collection(COLLECTIONS.reminders)
+      .doc(`${ref.id}_${uid}`)
+      .set(
+        {
+          room_id: ref.id,
+          user_uid: uid,
+          created_at: nowIso(),
+          source: 'host_schedule',
+        },
+        { merge: true }
+      );
+  }
   await logAudit(ref.id, uid, 'room_created', null, { status: room.status });
   return { room: sanitizeRoom(room, ref.id) };
 });
 
-exports.startLivePodcastRoom = functions.region('us-central1').https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
-  const uid = context.auth.uid;
-  const roomId = String(data?.roomId || '').trim();
-  if (!roomId) throw new functions.https.HttpsError('invalid-argument', 'roomId is required.');
+exports.tickLivePodcastScheduledReminders = functions
+  .region('us-central1')
+  .pubsub.schedule('every 5 minutes')
+  .timeZone('Etc/UTC')
+  .onRun(async () => {
+    const cutoff = nowIso();
+    const snap = await db
+      .collection(COLLECTIONS.rooms)
+      .where('status', '==', 'scheduled')
+      .where('reminder_fire_at', '<=', cutoff)
+      .limit(40)
+      .get();
 
-  const ref = db.collection(COLLECTIONS.rooms).doc(roomId);
-  const snap = await ref.get();
-  if (!snap.exists) throw new functions.https.HttpsError('not-found', 'Room not found.');
-  const room = snap.data() || {};
-  if (room.host_uid !== uid) throw new functions.https.HttpsError('permission-denied', 'Only host can start the room.');
-
-  const nextRoom = {
-    ...room,
-    status: 'live',
-    started_at: room.started_at || nowIso(),
-    updated_at: nowIso(),
-  };
-  await ref.update({
-    status: 'live',
-    started_at: room.started_at || nowIso(),
-    updated_at: nowIso(),
+    for (const doc of snap.docs) {
+      const roomId = doc.id;
+      const raw = doc.data() || {};
+      if (!raw.reminder_fire_at || raw.scheduled_reminder_sent) continue;
+      try {
+        await notifyPodcastScheduledSoon(roomId, sanitizeRoom(raw, roomId));
+        await doc.ref.update({
+          scheduled_reminder_sent: true,
+          updated_at: nowIso(),
+        });
+      } catch (error) {
+        console.error('tickLivePodcastScheduledReminders failed', { roomId, error });
+      }
+    }
+    return null;
   });
-  await notifyPodcastStarted(roomId, nextRoom);
-  await logAudit(roomId, uid, 'room_started');
-  return { ok: true };
-});
+
+exports.startLivePodcastRoom = functions
+  .region('us-central1')
+  .runWith({ timeoutSeconds: 120, memory: '512MB' })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+    const uid = context.auth.uid;
+    const roomId = String(data?.roomId || '').trim();
+    if (!roomId) throw new functions.https.HttpsError('invalid-argument', 'roomId is required.');
+
+    const ref = db.collection(COLLECTIONS.rooms).doc(roomId);
+    const snap = await ref.get();
+    if (!snap.exists) throw new functions.https.HttpsError('not-found', 'Room not found.');
+    const room = snap.data() || {};
+    if (room.host_uid !== uid) throw new functions.https.HttpsError('permission-denied', 'Only host can start the room.');
+
+    const nextRoom = {
+      ...room,
+      status: 'live',
+      started_at: room.started_at || nowIso(),
+      updated_at: nowIso(),
+    };
+    await ref.update({
+      status: 'live',
+      started_at: room.started_at || nowIso(),
+      updated_at: nowIso(),
+    });
+    await notifyPodcastStarted(roomId, nextRoom);
+    await logAudit(roomId, uid, 'room_started');
+    return { ok: true };
+  });
 
 exports.createLivePodcastTranscriptToken = functions.region('us-central1').https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
@@ -407,70 +683,34 @@ exports.joinLivePodcastRoom = functions.region('us-central1').https.onCall(async
 
   let inviteDoc = null;
   if (inviteCode) {
-    const inviteSnap = await db.collection(COLLECTIONS.invites).where('room_id', '==', roomId).where('code', '==', inviteCode).limit(1).get();
-    const invite = inviteSnap.docs[0];
-    if (!invite) throw new functions.https.HttpsError('not-found', 'Invite code not found.');
-    const data = invite.data() || {};
-    if (!data.is_active) throw new functions.https.HttpsError('failed-precondition', 'Invite code is inactive.');
-    if (Number(data.uses_count || 0) >= Number(data.max_uses || 1)) {
-      throw new functions.https.HttpsError('failed-precondition', 'Invite code has already been used.');
-    }
-    if (typeof data.expires_at === 'string' && Date.parse(data.expires_at) < Date.now()) {
-      throw new functions.https.HttpsError('failed-precondition', 'Invite code expired.');
-    }
-    inviteDoc = { id: invite.id, ...data };
+    inviteDoc = await getInviteDocByRoomAndCode(roomId, inviteCode);
+  }
+  return createJoinSession({ uid, roomId, room, roomRef, inviteDoc });
+});
+
+exports.joinLivePodcastByInviteCode = functions.region('us-central1').https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+  const uid = context.auth.uid;
+  const inviteCode = String(data?.inviteCode || '').trim().toUpperCase();
+  if (!inviteCode) throw new functions.https.HttpsError('invalid-argument', 'inviteCode is required.');
+
+  const inviteSnap = await db.collection(COLLECTIONS.invites).where('code', '==', inviteCode).limit(1).get();
+  const invite = inviteSnap.docs[0];
+  if (!invite) throw new functions.https.HttpsError('not-found', 'Invite code not found.');
+  const inviteData = invite.data() || {};
+  const roomId = String(inviteData.room_id || '').trim();
+  if (!roomId) throw new functions.https.HttpsError('failed-precondition', 'Invite code is missing a room.');
+
+  const roomRef = db.collection(COLLECTIONS.rooms).doc(roomId);
+  const roomSnap = await roomRef.get();
+  if (!roomSnap.exists) throw new functions.https.HttpsError('not-found', 'Room not found.');
+  const room = sanitizeRoom(roomSnap.data() || {}, roomId);
+  if (room.status !== 'live') {
+    throw new functions.https.HttpsError('failed-precondition', 'The host must start the broadcast before co-hosts can join.');
   }
 
-  const role = resolveRole({ room, uid, inviteDoc });
-  const isPrivileged = role === 'host' || role === 'co_host' || role === 'speaker';
-  if (room.status !== 'live' && !isPrivileged) {
-    throw new functions.https.HttpsError('failed-precondition', 'Room is not live yet.');
-  }
-
-  const userRef = db.collection('users').doc(uid);
-  const userSnap = await userRef.get();
-  const user = userSnap.exists ? userSnap.data() || {} : {};
-  const premium = !!user.is_premium;
-  const freeAlreadyUsed = !!user.first_live_podcast_used_at;
-
-  if (!isPrivileged && !premium && freeAlreadyUsed) {
-    throw new functions.https.HttpsError('failed-precondition', 'premium-required-for-live-podcast');
-  }
-
-  const token = await createAccessToken({
-    uid,
-    displayName: String(user.display_name || user.anonymous_username || 'Listener'),
-    roomName: room.livekit_room_name,
-    role,
-  });
-
-  const updates = {
-    listener_count_current: admin.firestore.FieldValue.increment(1),
-    total_join_count: admin.firestore.FieldValue.increment(1),
-    updated_at: nowIso(),
-  };
-  await roomRef.update(updates);
-
-  if (!isPrivileged && !premium && !freeAlreadyUsed) {
-    await userRef.set({ first_live_podcast_used_at: nowIso() }, { merge: true });
-  }
-
-  if (inviteDoc) {
-    await db.collection(COLLECTIONS.invites).doc(inviteDoc.id).update({
-      uses_count: admin.firestore.FieldValue.increment(1),
-    });
-  }
-
-  await logAudit(roomId, uid, 'room_joined', null, { role });
-  const { serverUrl } = getLiveKitConfig();
-  return {
-    room,
-    role,
-    token,
-    serverUrl,
-    usedFreeAccess: !isPrivileged && !premium && !freeAlreadyUsed,
-    premiumUnlocked: premium,
-  };
+  const inviteDoc = await getInviteDocByRoomAndCode(roomId, inviteCode);
+  return createJoinSession({ uid, roomId, room, roomRef, inviteDoc });
 });
 
 exports.leaveLivePodcastRoom = functions.region('us-central1').https.onCall(async (data, context) => {

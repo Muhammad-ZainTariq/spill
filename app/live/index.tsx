@@ -2,13 +2,15 @@ import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useLivePodcast } from '@/app/components/live/LivePodcastProvider';
 import { tokens } from '@/app/ui/tokens';
 import { auth } from '@/lib/firebase';
 import {
   currentUserCanHostLivePodcasts,
+  joinLivePodcastByInviteCode,
   LivePodcastRoom,
   setLivePodcastReminder,
   subscribeLivePodcastRooms,
@@ -23,8 +25,11 @@ function fmtStart(iso?: string | null) {
 
 export default function LivePodcastHubScreen() {
   const router = useRouter();
+  const { connectToRoom } = useLivePodcast();
   const [rooms, setRooms] = useState<LivePodcastRoom[]>([]);
   const [canHost, setCanHost] = useState(false);
+  const [coHostCode, setCoHostCode] = useState('');
+  const [joiningByCode, setJoiningByCode] = useState(false);
   const therapistHomePath = auth.currentUser?.uid ? `/therapist/${auth.currentUser.uid}` : null;
 
   useEffect(() => {
@@ -36,6 +41,30 @@ export default function LivePodcastHubScreen() {
   const liveRooms = useMemo(() => rooms.filter((r) => r.status === 'live'), [rooms]);
   const scheduledRooms = useMemo(() => rooms.filter((r) => r.status === 'scheduled'), [rooms]);
   const replayRooms = useMemo(() => rooms.filter((r) => r.status === 'ended' && r.replay_status === 'published'), [rooms]);
+
+  const handleJoinByCode = async () => {
+    const normalizedCode = coHostCode.trim().toUpperCase();
+    if (!normalizedCode) {
+      Alert.alert('Missing code', 'Enter the co-host code the host shared with you.');
+      return;
+    }
+    setJoiningByCode(true);
+    try {
+      const session = await joinLivePodcastByInviteCode(normalizedCode);
+      connectToRoom({
+        room: session.room,
+        role: session.role,
+        token: session.token,
+        serverUrl: session.serverUrl,
+      });
+      setCoHostCode('');
+      router.push(`/live/${session.room.id}` as any);
+    } catch (error: any) {
+      Alert.alert('Could not join as co-host', error?.message || 'Check the code and try again.');
+    } finally {
+      setJoiningByCode(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -80,6 +109,30 @@ export default function LivePodcastHubScreen() {
             <Text style={styles.heroDesc}>Create a room, schedule it, invite co-hosts, and talk live inside the app.</Text>
           </Pressable>
         ) : null}
+
+        <View style={styles.codeCard}>
+          <View style={styles.codeHead}>
+            <View style={styles.codeIcon}>
+              <Feather name="key" size={18} color="#2563eb" />
+            </View>
+            <View style={styles.codeTextWrap}>
+              <Text style={styles.codeTitle}>Join as co-host</Text>
+              <Text style={styles.codeDesc}>If the host shared a co-host code, enter it here and jump straight into the live room.</Text>
+            </View>
+          </View>
+          <TextInput
+            value={coHostCode}
+            onChangeText={setCoHostCode}
+            placeholder="Enter co-host code"
+            placeholderTextColor={tokens.colors.textMuted}
+            autoCapitalize="characters"
+            style={styles.codeInput}
+          />
+          <Pressable style={[styles.codeBtn, joiningByCode && styles.codeBtnDisabled]} onPress={handleJoinByCode} disabled={joiningByCode}>
+            <Text style={styles.codeBtnText}>{joiningByCode ? 'Joining...' : 'Join with code'}</Text>
+          </Pressable>
+          <Text style={styles.codeHelper}>The host still starts the broadcast. This is only for invited co-hosts and speakers.</Text>
+        </View>
 
         <Section title="Live now" icon="radio">
           {liveRooms.length === 0 ? (
@@ -270,6 +323,74 @@ const styles = StyleSheet.create({
   heroEyebrow: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.7, color: tokens.colors.pink },
   heroTitle: { marginTop: 6, fontSize: 24, fontWeight: '900', color: tokens.colors.text },
   heroDesc: { marginTop: 8, fontSize: 14, lineHeight: 20, fontWeight: '600', color: tokens.colors.textSecondary },
+  codeCard: {
+    padding: 18,
+    borderRadius: 24,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: 'rgba(37,99,235,0.16)',
+    gap: 12,
+  },
+  codeHead: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  codeIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  codeTextWrap: {
+    flex: 1,
+  },
+  codeTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: tokens.colors.text,
+  },
+  codeDesc: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: tokens.colors.textSecondary,
+  },
+  codeInput: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+    backgroundColor: '#fff',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    fontWeight: '800',
+    color: tokens.colors.text,
+  },
+  codeBtn: {
+    minHeight: 46,
+    borderRadius: 16,
+    backgroundColor: '#2563eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  codeBtnDisabled: {
+    opacity: 0.65,
+  },
+  codeBtnText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  codeHelper: {
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '700',
+    color: tokens.colors.textSecondary,
+  },
   section: { gap: 10 },
   sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionTitle: { fontSize: 15, fontWeight: '900', color: tokens.colors.text },

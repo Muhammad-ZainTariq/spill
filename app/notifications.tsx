@@ -31,7 +31,8 @@ interface Notification {
     | 'game_invite'
     | 'post_flagged'
     | 'post_approved_safe'
-    | 'live_podcast_started';
+    | 'live_podcast_started'
+    | 'live_podcast_soon';
   created_at: string;
   read: boolean;
   profiles: {
@@ -162,6 +163,8 @@ export default function NotificationsScreen() {
         return 'Your flagged post was approved as safe. It’s visible on the feed again.';
       case 'live_podcast_started':
         return notification.body || `${notification.host_name || username} started a live podcast.`;
+      case 'live_podcast_soon':
+        return notification.body || `${notification.host_name || username} has a live podcast starting soon.`;
       default:
         return 'New notification';
     }
@@ -195,14 +198,18 @@ export default function NotificationsScreen() {
       router.push('/admin/flagged' as any);
     } else if (notification.type === 'post_approved_safe' && notification.post_id) {
       router.push(`/comments?postId=${notification.post_id}` as any);
-    } else if (notification.type === 'live_podcast_started' && notification.room_id) {
+    } else if (
+      (notification.type === 'live_podcast_started' || notification.type === 'live_podcast_soon') &&
+      notification.room_id
+    ) {
       router.push(`/live/${notification.room_id}` as any);
     }
   };
 
   const renderNotification = ({ item }: { item: Notification }) => {
     const username = item.profiles?.display_name || item.profiles?.anonymous_username || 'Someone';
-    const isLivePodcast = item.type === 'live_podcast_started';
+    const isLivePodcast = item.type === 'live_podcast_started' || item.type === 'live_podcast_soon';
+    const isLiveSoon = item.type === 'live_podcast_soon';
     
     return (
       <Pressable 
@@ -233,15 +240,18 @@ export default function NotificationsScreen() {
           {isLivePodcast ? (
             <>
               <View style={styles.liveNotifTopRow}>
-                <View style={styles.liveNotifBadge}>
-                  <Text style={styles.liveNotifBadgeText}>LIVE</Text>
+                <View style={[styles.liveNotifBadge, isLiveSoon && styles.liveNotifBadgeSoon]}>
+                  <Text style={styles.liveNotifBadgeText}>{isLiveSoon ? 'SOON' : 'LIVE'}</Text>
                 </View>
                 <Text style={styles.notificationTime}>
                   {formatTimeAgo(item.created_at)}
                 </Text>
               </View>
               <Text style={styles.liveNotifTitle}>
-                {item.title || `${item.host_name || username} is live now`}
+                {item.title ||
+                  (isLiveSoon
+                    ? `${item.host_name || username} · starting soon`
+                    : `${item.host_name || username} is live now`)}
               </Text>
               <Text style={styles.notificationText}>
                 {getNotificationText(item)}
@@ -464,6 +474,9 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 999,
     backgroundColor: '#2563eb',
+  },
+  liveNotifBadgeSoon: {
+    backgroundColor: '#d97706',
   },
   liveNotifBadgeText: {
     color: '#fff',
