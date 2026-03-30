@@ -31,6 +31,7 @@ import Reanimated, {
   withTiming
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useLivePodcast } from '@/app/components/live/LivePodcastProvider';
 import {
   addComment,
   cancelPremium,
@@ -49,6 +50,7 @@ import {
   subscribeToPosts,
   upvotePost
 } from '../functions';
+import { SpeakingWave } from '@/app/components/live/SpeakingWave';
 import { LivePodcastRoom, subscribeLivePodcastRooms } from '@/lib/livePodcasts';
 
 type SheetComment = {
@@ -280,6 +282,8 @@ function VentTimeRemaining({ expiresAt }: { expiresAt: string }) {
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { presentRoom } = useLivePodcast();
+  const feedScrollRef = useRef<ScrollView>(null);
   const [posts, setPosts] = useState<Post[]>([]);
   const [liveRooms, setLiveRooms] = useState<LivePodcastRoom[]>([]);
   const [loading, setLoading] = useState(true);
@@ -298,6 +302,8 @@ export default function HomeScreen() {
   const [sheetCommentsLoading, setSheetCommentsLoading] = useState(false);
   const [newCommentText, setNewCommentText] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [showLivePeek, setShowLivePeek] = useState(false);
+  const [dismissedLiveRoomId, setDismissedLiveRoomId] = useState<string | null>(null);
   const menuTranslateX = useSharedValue(-320);
   
   // Animated style for side menu - must be called unconditionally
@@ -329,6 +335,10 @@ export default function HomeScreen() {
 
   const onScroll = (event: any) => {
     handleScroll(event, posts, visibleVideoId, setVisibleVideoId);
+    const offsetY = Number(event?.nativeEvent?.contentOffset?.y || 0);
+    const shouldShowLivePeek =
+      liveRooms.length > 0 && liveRooms[0]?.id !== dismissedLiveRoomId && offsetY > 84;
+    setShowLivePeek((prev) => (prev === shouldShowLivePeek ? prev : shouldShowLivePeek));
   };
 
   // Real-time feed: updates when posts are flagged or approved without refresh
@@ -388,6 +398,20 @@ export default function HomeScreen() {
     });
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    if (liveRooms.length === 0) {
+      setShowLivePeek(false);
+    }
+  }, [liveRooms.length]);
+
+  useEffect(() => {
+    if (!dismissedLiveRoomId) return;
+    const stillDismissed = liveRooms.some((room) => room.id === dismissedLiveRoomId);
+    if (!stillDismissed) {
+      setDismissedLiveRoomId(null);
+    }
+  }, [dismissedLiveRoomId, liveRooms]);
 
   const handleAddCommentSheet = async () => {
     if (!commentSheetPostId || !newCommentText.trim() || submittingComment) return;
@@ -709,30 +733,9 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {liveRooms.length > 0 ? (
-        <View style={styles.liveCapsuleWrap}>
-          <Pressable
-            style={styles.liveCapsule}
-            onPress={() => router.push(`/live/${liveRooms[0].id}` as any)}
-          >
-            <View style={styles.liveCapsuleDot} />
-            <View style={styles.liveCapsuleTextWrap}>
-              <Text style={styles.liveCapsuleTitle} numberOfLines={1}>
-                {liveRooms[0].title}
-              </Text>
-              <Text style={styles.liveCapsuleMeta} numberOfLines={1}>
-                {liveRooms[0].host_name || 'Therapist'} is live now · Tap to listen while browsing
-              </Text>
-            </View>
-            <View style={styles.liveCapsuleBadge}>
-              <Text style={styles.liveCapsuleBadgeText}>LIVE</Text>
-            </View>
-          </Pressable>
-        </View>
-      ) : null}
-
       {/* Posts Feed */}
       <ScrollView
+        ref={feedScrollRef}
         style={styles.feedContainer}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
@@ -746,6 +749,56 @@ export default function HomeScreen() {
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
       >
+        {liveRooms.length > 0 && liveRooms[0]?.id !== dismissedLiveRoomId ? (
+          <View style={styles.liveCapsuleWrap}>
+            <Pressable
+              style={styles.liveCapsule}
+              onPress={() => presentRoom(liveRooms[0].id)}
+            >
+              <View style={styles.liveCapsuleArtworkWrap}>
+                {liveRooms[0].cover_url ? (
+                  <Image source={{ uri: liveRooms[0].cover_url }} style={styles.liveCapsuleArtwork} contentFit="cover" />
+                ) : (
+                  <View style={styles.liveCapsuleArtworkFallback}>
+                    <Feather name="mic" size={16} color="#fff" />
+                  </View>
+                )}
+              </View>
+              <View style={styles.liveCapsuleTextWrap}>
+                <Text style={styles.liveCapsuleTitle} numberOfLines={1}>
+                  {liveRooms[0].title}
+                </Text>
+                <View style={styles.liveCapsuleMetaRow}>
+                  <SpeakingWave active compact level={0.45} color="rgba(255,255,255,0.95)" />
+                  <Text style={styles.liveCapsuleMeta} numberOfLines={1}>
+                    {liveRooms[0].host_name || 'Therapist'} is live now · Tap to listen while browsing
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.liveCapsuleControls}>
+                <Pressable
+                  style={styles.liveCapsuleControlBtn}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    setDismissedLiveRoomId(liveRooms[0].id);
+                    setShowLivePeek(false);
+                  }}
+                >
+                  <Feather name="x" size={15} color="#fff" />
+                </Pressable>
+                <Pressable
+                  style={styles.liveCapsuleControlBtn}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    presentRoom(liveRooms[0].id);
+                  }}
+                >
+                  <Feather name="play" size={15} color="#fff" />
+                </Pressable>
+              </View>
+            </Pressable>
+          </View>
+        ) : null}
         {posts.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyTitle}>No posts yet</Text>
@@ -946,6 +999,21 @@ export default function HomeScreen() {
           )})
         )}
       </ScrollView>
+
+      {showLivePeek && liveRooms.length > 0 && !menuVisible && liveRooms[0]?.id !== dismissedLiveRoomId ? (
+        <View pointerEvents="box-none" style={[styles.livePeekHost, { top: insets.top + 116 }]}>
+          <Pressable
+            style={styles.livePeekChip}
+            onPress={() => {
+              feedScrollRef.current?.scrollTo({ y: 0, animated: true });
+              setShowLivePeek(false);
+            }}
+          >
+            <Text style={styles.livePeekText}>Live</Text>
+            <Feather name="chevron-up" size={14} color="#fff" />
+          </Pressable>
+        </View>
+      ) : null}
 
       {/* Comments bottom sheet */}
       <Modal
@@ -1157,8 +1225,8 @@ const styles = StyleSheet.create({
   },
   liveCapsuleWrap: {
     paddingHorizontal: 16,
+    paddingTop: 8,
     paddingBottom: 10,
-    backgroundColor: '#fff',
   },
   liveCapsule: {
     flexDirection: 'row',
@@ -1169,11 +1237,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
-  liveCapsuleDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#93c5fd',
+  liveCapsuleArtworkWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  liveCapsuleArtwork: {
+    width: '100%',
+    height: '100%',
+  },
+  liveCapsuleArtworkFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.18)',
   },
   liveCapsuleTextWrap: {
     flex: 1,
@@ -1184,20 +1263,51 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   liveCapsuleMeta: {
-    marginTop: 2,
     color: 'rgba(255,255,255,0.82)',
     fontSize: 12,
     fontWeight: '700',
   },
-  liveCapsuleBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
+  liveCapsuleMetaRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  liveCapsuleControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  liveCapsuleControlBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.18)',
   },
-  liveCapsuleBadgeText: {
+  livePeekHost: {
+    position: 'absolute',
+    right: 16,
+    zIndex: 15,
+  },
+  livePeekChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  livePeekText: {
     color: '#fff',
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '900',
   },
   menuBackdrop: {

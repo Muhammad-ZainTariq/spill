@@ -2,9 +2,10 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 
+import { LivePodcastOverlay } from '@/app/components/live/LivePodcastOverlay';
 import { LivePodcastMiniPlayer } from '@/app/components/live/LivePodcastMiniPlayer';
 import { getLivePodcastWebPlayerHtml } from '@/app/components/live/livePodcastWebPlayerHtml';
-import type { LivePodcastRole, LivePodcastRoom } from '@/lib/livePodcasts';
+import { createLivePodcastTranscriptToken, publishLivePodcastTranscriptSegment, subscribeLivePodcastRoom, type LivePodcastRole, type LivePodcastRoom } from '@/lib/livePodcasts';
 
 export type ActiveLivePodcastSession = {
   room: LivePodcastRoom;
@@ -19,6 +20,7 @@ export type LivePodcastParticipant = {
   name: string;
   isLocal: boolean;
   isSpeaking: boolean;
+  audioLevel: number;
 };
 
 type LivePodcastContextValue = {
@@ -26,13 +28,19 @@ type LivePodcastContextValue = {
   participants: LivePodcastParticipant[];
   connectionState: string;
   micEnabled: boolean;
+  playbackMuted: boolean;
+  dominantSpeakerLevel: number;
   lastError: string | null;
+  presentedRoomId: string | null;
   connectToRoom: (session: Omit<ActiveLivePodcastSession, 'minimized'>) => void;
   minimizeRoom: () => void;
   expandRoom: () => void;
   leaveRoom: () => void;
   updateRoom: (room: LivePodcastRoom) => void;
   toggleMicrophone: () => void;
+  togglePlayback: () => void;
+  presentRoom: (roomId: string) => void;
+  dismissPresentedRoom: () => void;
 };
 
 const LivePodcastContext = createContext<LivePodcastContextValue | null>(null);
@@ -44,8 +52,12 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
   const [participants, setParticipants] = useState<LivePodcastParticipant[]>([]);
   const [connectionState, setConnectionState] = useState('idle');
   const [micEnabled, setMicEnabled] = useState(false);
+  const [playbackMuted, setPlaybackMuted] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [presentedRoomId, setPresentedRoomId] = useState<string | null>(null);
   const hasActiveSession = !!activeSession;
+  const someoneSpeaking = participants.some((participant) => participant.isSpeaking);
+  const dominantSpeakerLevel = participants.reduce((max, participant) => Math.max(max, Number(participant.audioLevel || 0)), 0);
   const sessionToken = activeSession?.token;
   const sessionServerUrl = activeSession?.serverUrl;
   const sessionRoomId = activeSession?.room.id;
@@ -60,23 +72,41 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     if (!webReady) return;
     if (!hasActiveSession) {
       sendCommand({ type: 'disconnect' });
       setParticipants([]);
       setConnectionState('idle');
       setMicEnabled(false);
+      setPlaybackMuted(false);
       return;
     }
-    setLastError(null);
-    sendCommand({
-      type: 'connect',
-      payload: {
-        token: sessionToken,
-        serverUrl: sessionServerUrl,
-        canPublish,
-      },
-    });
+    const connect = async () => {
+      setLastError(null);
+      let transcript: { token: string; sampleRate: number; speechModel: string; formattedFinals: boolean } | null = null;
+      if (canPublish && sessionRoomId) {
+        try {
+          transcript = await createLivePodcastTranscriptToken(sessionRoomId);
+        } catch (error) {
+          console.warn('Failed to start live captions', error);
+        }
+      }
+      if (cancelled) return;
+      sendCommand({
+        type: 'connect',
+        payload: {
+          token: sessionToken,
+          serverUrl: sessionServerUrl,
+          canPublish,
+          transcript,
+        },
+      });
+    };
+    connect();
+    return () => {
+      cancelled = true;
+    };
   }, [
     canPublish,
     hasActiveSession,
@@ -106,6 +136,20 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
     setActiveSession((prev) => (prev ? { ...prev, minimized: false } : prev));
   }, []);
 
+  const presentRoom = useCallback((roomId: string) => {
+    if (!roomId) return;
+    setPresentedRoomId(roomId);
+  }, []);
+
+  const dismissPresentedRoom = useCallback(() => {
+    setPresentedRoomId((prevRoomId) => {
+      if (activeSession?.room.id && prevRoomId === activeSession.room.id) {
+        setActiveSession((prev) => (prev ? { ...prev, minimized: true } : prev));
+      }
+      return null;
+    });
+  }, [activeSession?.room.id]);
+
   const leaveRoom = useCallback(() => {
     sendCommand({ type: 'disconnect' });
     setActiveSession(null);
@@ -113,6 +157,7 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
     setParticipants([]);
     setConnectionState('idle');
     setMicEnabled(false);
+    setPlaybackMuted(false);
   }, [sendCommand]);
 
   const updateRoom = useCallback((room: LivePodcastRoom) => {
@@ -122,6 +167,24 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
   const toggleMicrophone = useCallback(() => {
     sendCommand({ type: 'toggleMic' });
   }, [sendCommand]);
+
+  const togglePlayback = useCallback(() => {
+    sendCommand({ type: 'togglePlayback' });
+  }, [sendCommand]);
+
+  useEffect(() => {
+    if (!activeSession?.room.id) return;
+    const unsub = subscribeLivePodcastRoom(activeSession.room.id, (room) => {
+      if (!room) return;
+      if (room.status === 'ended' || !!room.ended_at) {
+        setPresentedRoomId((prev) => (prev === room.id ? null : prev));
+        leaveRoom();
+        return;
+      }
+      updateRoom(room);
+    });
+    return () => unsub();
+  }, [activeSession?.room.id, leaveRoom, updateRoom]);
 
   const onMessage = useCallback((event: { nativeEvent: { data: string } }) => {
     try {
@@ -133,10 +196,30 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
       if (msg?.type === 'state') {
         setConnectionState(String(msg.payload?.status || 'idle'));
         setMicEnabled(!!msg.payload?.micEnabled);
+        setPlaybackMuted(!!msg.payload?.playbackMuted);
         return;
       }
       if (msg?.type === 'participants') {
         setParticipants(Array.isArray(msg.payload?.participants) ? msg.payload.participants : []);
+        return;
+      }
+      if (msg?.type === 'transcriptTurn') {
+        const currentRoomId = activeSession?.room.id;
+        const turnId = String(msg.payload?.id || '').trim();
+        const text = String(msg.payload?.text || '').trim();
+        if (!currentRoomId || !turnId || !text) return;
+        publishLivePodcastTranscriptSegment(currentRoomId, {
+          id: turnId,
+          text,
+          is_final: !!msg.payload?.isFinal,
+          sequence: Number(msg.payload?.sequence || 0),
+          speaker_uid: activeSession?.room.host_uid || null,
+          speaker_name: activeSession?.room.host_name || null,
+          created_at: typeof msg.payload?.createdAt === 'string' ? msg.payload.createdAt : undefined,
+          updated_at: new Date().toISOString(),
+        }).catch((error) => {
+          console.warn('Failed to publish live transcript segment', error);
+        });
         return;
       }
       if (msg?.type === 'error') {
@@ -145,7 +228,7 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
     } catch (error) {
       console.warn('Failed to parse live podcast WebView message', error);
     }
-  }, []);
+  }, [activeSession?.room.host_name, activeSession?.room.host_uid, activeSession?.room.id]);
 
   const value = useMemo(
     () => ({
@@ -153,50 +236,88 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
       participants,
       connectionState,
       micEnabled,
+      playbackMuted,
+      dominantSpeakerLevel,
       lastError,
+      presentedRoomId,
       connectToRoom,
       minimizeRoom,
       expandRoom,
       leaveRoom,
       updateRoom,
       toggleMicrophone,
+      togglePlayback,
+      presentRoom,
+      dismissPresentedRoom,
     }),
     [
       activeSession,
       participants,
       connectionState,
       micEnabled,
+      playbackMuted,
+      dominantSpeakerLevel,
       lastError,
+      presentedRoomId,
       connectToRoom,
       minimizeRoom,
       expandRoom,
       leaveRoom,
       updateRoom,
       toggleMicrophone,
+      togglePlayback,
+      presentRoom,
+      dismissPresentedRoom,
     ]
   );
 
   return (
     <LivePodcastContext.Provider value={value}>
       {children}
+      <LivePodcastOverlay
+        roomId={presentedRoomId}
+        visible={!!presentedRoomId}
+        onClose={dismissPresentedRoom}
+        activeSession={activeSession}
+        connectToRoom={connectToRoom}
+        leaveRoom={leaveRoom}
+        participants={participants}
+        connectionState={connectionState}
+        micEnabled={micEnabled}
+        playbackMuted={playbackMuted}
+        dominantSpeakerLevel={dominantSpeakerLevel}
+        lastError={lastError}
+        toggleMicrophone={toggleMicrophone}
+        togglePlayback={togglePlayback}
+      />
       {activeSession ? (
         <View pointerEvents="none" style={styles.hiddenWebViewWrap}>
           <WebView
-            key={activeSession.room.id}
+            key={sessionConnectKey}
             ref={webRef}
-            source={{ html: getLivePodcastWebPlayerHtml() }}
+            source={{ html: getLivePodcastWebPlayerHtml(), baseUrl: 'https://spill.local/' }}
             originWhitelist={['*']}
             javaScriptEnabled
             domStorageEnabled
             mixedContentMode="always"
             mediaPlaybackRequiresUserAction={false}
             allowsInlineMediaPlayback
+            mediaCapturePermissionGrantType="grantIfSameHostElsePrompt"
             onMessage={onMessage}
             style={styles.hiddenWebView}
           />
         </View>
       ) : null}
-      <LivePodcastMiniPlayer activeSession={activeSession} expandRoom={expandRoom} leaveRoom={leaveRoom} />
+      <LivePodcastMiniPlayer
+        activeSession={activeSession}
+        presentRoom={presentRoom}
+        presentedRoomId={presentedRoomId}
+        leaveRoom={leaveRoom}
+        someoneSpeaking={someoneSpeaking}
+        playbackMuted={playbackMuted}
+        dominantSpeakerLevel={dominantSpeakerLevel}
+        togglePlayback={togglePlayback}
+      />
     </LivePodcastContext.Provider>
   );
 }
@@ -210,15 +331,14 @@ export function useLivePodcast() {
 const styles = StyleSheet.create({
   hiddenWebViewWrap: {
     position: 'absolute',
-    left: -200,
-    bottom: -200,
-    width: 2,
-    height: 2,
-    opacity: 0.01,
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    opacity: 0.02,
   },
   hiddenWebView: {
-    width: 2,
-    height: 2,
+    flex: 1,
     backgroundColor: 'transparent',
   },
 });

@@ -45,6 +45,12 @@ Set the LiveKit credentials:
 firebase functions:config:set livekit.url="wss://YOUR_PROJECT.livekit.cloud" livekit.api_key="YOUR_API_KEY" livekit.api_secret="YOUR_API_SECRET"
 ```
 
+If you want live subtitles/captions in podcast rooms, also set the AssemblyAI key:
+
+```bash
+firebase functions:config:set assemblyai.api_key="YOUR_ASSEMBLYAI_API_KEY"
+```
+
 Then deploy:
 
 ```bash
@@ -120,6 +126,7 @@ Current notification behavior:
 - speaker request queue
 - floating blue capsule mini-player
 - Expo Go-compatible persistent listening while browsing the app
+- live subtitle scaffolding powered by AssemblyAI temporary tokens
 
 ## 8. Recommended commands
 
@@ -132,6 +139,6 @@ npx expo start
 
 - host mute/kick controls
 - recording + replay publishing pipeline
-- transcripts + AI summaries
+- transcript summaries + AI summaries
 - dedicated admin audit screen
 - richer live indicators on more screens

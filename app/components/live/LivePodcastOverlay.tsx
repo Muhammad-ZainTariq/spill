@@ -1,0 +1,809 @@
+import { Feather } from '@expo/vector-icons';
+import { Image } from 'expo-image';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { SpeakingWave } from '@/app/components/live/SpeakingWave';
+import { tokens } from '@/app/ui/tokens';
+import { auth } from '@/lib/firebase';
+import {
+  endLivePodcastRoom,
+  getLivePodcastRoom,
+  joinLivePodcastRoom,
+  leaveLivePodcastRoom,
+  LivePodcastTranscriptSegment,
+  requestLivePodcastSpeaker,
+  resolveLivePodcastSpeakerRequest,
+  SpeakerRequest,
+  startLivePodcastRoom,
+  subscribeLivePodcastTranscriptSegments,
+  subscribeLivePodcastRoom,
+  subscribeSpeakerRequests,
+  type LivePodcastRole,
+  type LivePodcastRoom,
+} from '@/lib/livePodcasts';
+
+function prettyStatus(room: LivePodcastRoom | null) {
+  if (!room) return 'Loading';
+  if (room.status === 'live') return 'Live now';
+  if (room.status === 'scheduled') return room.scheduled_for ? `Scheduled · ${new Date(room.scheduled_for).toLocaleString()}` : 'Scheduled';
+  if (room.status === 'ended') return 'Ended';
+  return room.status;
+}
+
+export function LivePodcastOverlay({
+  roomId,
+  visible,
+  onClose,
+  activeSession,
+  connectToRoom,
+  leaveRoom,
+  participants,
+  connectionState,
+  micEnabled,
+  playbackMuted,
+  dominantSpeakerLevel,
+  lastError,
+  toggleMicrophone,
+  togglePlayback,
+}: {
+  roomId: string | null;
+  visible: boolean;
+  onClose: () => void;
+  activeSession: { room: LivePodcastRoom; role: LivePodcastRole } | null;
+  connectToRoom: (session: { room: LivePodcastRoom; role: LivePodcastRole; token: string; serverUrl: string }) => void;
+  leaveRoom: () => void;
+  participants: { identity: string; name: string; isLocal: boolean; isSpeaking: boolean; audioLevel: number }[];
+  connectionState: string;
+  micEnabled: boolean;
+  playbackMuted: boolean;
+  dominantSpeakerLevel: number;
+  lastError: string | null;
+  toggleMicrophone: () => void;
+  togglePlayback: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const [room, setRoom] = useState<LivePodcastRoom | null>(null);
+  const [speakerRequests, setSpeakerRequests] = useState<SpeakerRequest[]>([]);
+  const [transcriptSegments, setTranscriptSegments] = useState<LivePodcastTranscriptSegment[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const sessionForThisRoom = !!activeSession && !!roomId && activeSession.room.id === roomId;
+  const activeRole = sessionForThisRoom ? activeSession?.role : null;
+  const isRoomHost = !!room?.host_uid && room.host_uid === auth.currentUser?.uid;
+  const canModerate = isRoomHost || activeRole === 'host' || activeRole === 'co_host';
+  const pendingRequests = useMemo(
+    () => speakerRequests.filter((item) => item.status === 'waiting'),
+    [speakerRequests]
+  );
+  const visibleParticipants = useMemo(
+    () => participants.slice().sort((a, b) => Number(b.isSpeaking) - Number(a.isSpeaking)),
+    [participants]
+  );
+  const someoneSpeaking = visibleParticipants.some((p) => p.isSpeaking);
+  const currentUserRequest = useMemo(
+    () => speakerRequests.find((item) => item.user_uid === auth.currentUser?.uid),
+    [speakerRequests]
+  );
+
+  useEffect(() => {
+    if (!roomId || !visible) return;
+    getLivePodcastRoom(roomId).then(setRoom).catch(() => setRoom(null));
+    const unsubRoom = subscribeLivePodcastRoom(roomId, setRoom);
+    const unsubRequests = subscribeSpeakerRequests(roomId, setSpeakerRequests);
+    const unsubTranscripts = subscribeLivePodcastTranscriptSegments(roomId, setTranscriptSegments);
+    return () => {
+      unsubRoom();
+      unsubRequests();
+      unsubTranscripts();
+    };
+  }, [roomId, visible]);
+
+  const captionLines = useMemo(
+    () => transcriptSegments.filter((item) => String(item.text || '').trim()).slice(-3),
+    [transcriptSegments]
+  );
+
+  const closeOverlay = () => {
+    onClose();
+  };
+
+  const handleJoin = async () => {
+    if (!roomId) return;
+    setBusy(true);
+    try {
+      const session = await joinLivePodcastRoom(roomId);
+      connectToRoom({
+        room: session.room,
+        role: session.role,
+        token: session.token,
+        serverUrl: session.serverUrl,
+      });
+    } catch (error: any) {
+      Alert.alert('Could not join room', error?.message || 'Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleStart = async () => {
+    if (!roomId) return;
+    setBusy(true);
+    try {
+      await startLivePodcastRoom(roomId);
+      const session = await joinLivePodcastRoom(roomId);
+      connectToRoom({
+        room: session.room,
+        role: session.role,
+        token: session.token,
+        serverUrl: session.serverUrl,
+      });
+    } catch (error: any) {
+      Alert.alert('Could not start room', error?.message || 'Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLeave = async () => {
+    if (roomId) {
+      try {
+        await leaveLivePodcastRoom(roomId);
+      } catch {}
+    }
+    leaveRoom();
+    onClose();
+  };
+
+  const handleEnd = async () => {
+    if (!roomId) return;
+    setBusy(true);
+    try {
+      await endLivePodcastRoom(roomId);
+      leaveRoom();
+      onClose();
+    } catch (error: any) {
+      Alert.alert('Could not end room', error?.message || 'Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRequestMic = async () => {
+    if (!roomId) return;
+    setBusy(true);
+    try {
+      await requestLivePodcastSpeaker(roomId, 'Requested from live room sheet');
+      Alert.alert('Request sent', 'The broadcaster can now approve or decline your request while live.');
+    } catch (error: any) {
+      Alert.alert('Could not send request', error?.message || 'Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!visible || !roomId) return null;
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={closeOverlay}>
+      <View style={styles.backdrop}>
+        <Pressable style={styles.scrim} onPress={closeOverlay} />
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 18) }]}>
+          <View style={styles.handle} />
+          <View style={styles.topBar}>
+            {sessionForThisRoom ? (
+              <Pressable style={styles.topActionPill} onPress={handleLeave}>
+                <Feather name="log-out" size={16} color="#dc2626" />
+                <Text style={styles.topActionPillTextDanger}>Leave</Text>
+              </Pressable>
+            ) : (
+              <Pressable style={styles.topIconBtn} onPress={closeOverlay}>
+                <Feather name="x" size={24} color={tokens.colors.text} />
+              </Pressable>
+            )}
+            <View style={styles.topActions}>
+              {sessionForThisRoom ? (
+                <Pressable style={styles.topIconBtn} onPress={togglePlayback}>
+                  <Feather name={playbackMuted ? 'play' : 'pause'} size={18} color={tokens.colors.text} />
+                </Pressable>
+              ) : null}
+              <Pressable style={styles.topIconBtn} onPress={closeOverlay}>
+                <Feather name="chevron-down" size={20} color={tokens.colors.text} />
+              </Pressable>
+            </View>
+          </View>
+
+          <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+            <View style={styles.heroCard}>
+              <View style={styles.heroHeaderRow}>
+                <View style={styles.heroArtworkWrap}>
+                  {room?.cover_url ? (
+                    <Image source={{ uri: room.cover_url }} style={styles.heroArtwork} contentFit="cover" />
+                  ) : (
+                    <View style={styles.heroArtworkFallback}>
+                      <Feather name="mic" size={28} color={tokens.colors.pink} />
+                    </View>
+                  )}
+                </View>
+                <View style={styles.heroTextWrap}>
+                  {room?.status === 'live' ? (
+                    <View style={styles.recPill}>
+                      <View style={styles.recDot} />
+                      <Text style={styles.recText}>LIVE</Text>
+                    </View>
+                  ) : null}
+                  <Text style={styles.heroTitle}>{room?.title || 'Podcast space'}</Text>
+                  <Text style={styles.heroMeta}>{room?.host_name || 'Therapist'} · {prettyStatus(room)}</Text>
+                </View>
+              </View>
+              {!!room?.description ? <Text style={styles.heroDescription}>{room.description}</Text> : null}
+            </View>
+
+            <View style={styles.captionCard}>
+              <View style={styles.captionHeader}>
+                <Feather name="message-square" size={15} color={tokens.colors.pink} />
+                <Text style={styles.captionTitle}>Live subtitles</Text>
+              </View>
+              {captionLines.length > 0 ? (
+                captionLines.map((item) => (
+                  <Text key={item.id} style={[styles.captionLine, !item.is_final && styles.captionLineMuted]}>
+                    {item.text}
+                  </Text>
+                ))
+              ) : (
+                <Text style={styles.captionEmpty}>Subtitles will appear here when the speaker starts talking.</Text>
+              )}
+            </View>
+
+            {sessionForThisRoom && visibleParticipants.length > 0 ? (
+              <View style={styles.grid}>
+                {visibleParticipants.map((participant) => (
+                  <View key={participant.identity} style={styles.personCard}>
+                    <View style={styles.personAvatar}>
+                      {room?.cover_url ? (
+                        <Image source={{ uri: room.cover_url }} style={styles.personAvatarImg} contentFit="cover" />
+                      ) : (
+                        <Text style={styles.personAvatarFallback}>{participant.name.charAt(0).toUpperCase()}</Text>
+                      )}
+                    </View>
+                    <Text style={styles.personName} numberOfLines={1}>{participant.name}</Text>
+                    <View style={styles.personMetaRow}>
+                      <SpeakingWave
+                        active={participant.isSpeaking && !playbackMuted}
+                        level={participant.audioLevel}
+                        compact
+                        color={tokens.colors.pink}
+                      />
+                      <Text style={styles.personRole}>
+                        {participant.isLocal ? 'You' : participant.identity === room?.host_uid ? 'Host' : 'Listener'}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.previewCard}>
+                <View style={styles.previewCoverWrap}>
+                  {room?.cover_url ? (
+                    <Image source={{ uri: room.cover_url }} style={styles.previewCover} contentFit="cover" />
+                  ) : (
+                    <View style={styles.previewFallback}>
+                      <Feather name="mic" size={30} color={tokens.colors.pink} />
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.previewTitle}>{room?.title || 'Podcast space'}</Text>
+                <Text style={styles.previewText}>{room?.description || 'Join this live conversation and keep listening while browsing the app.'}</Text>
+              </View>
+            )}
+
+            {sessionForThisRoom ? (
+              <View style={styles.actionPanel}>
+                <Text style={styles.panelTitle}>Connected</Text>
+                <Text style={styles.panelText}>Audio: {connectionState}</Text>
+                {lastError ? <Text style={styles.errorText}>{lastError}</Text> : null}
+                <View style={styles.controlsRow}>
+                  <Pressable style={styles.secondaryBtn} onPress={togglePlayback}>
+                    <Text style={styles.secondaryBtnText}>{playbackMuted ? 'Resume audio' : 'Pause audio'}</Text>
+                  </Pressable>
+                  {activeRole !== 'listener' ? (
+                    <Pressable style={styles.secondaryBtn} onPress={toggleMicrophone}>
+                      <Text style={styles.secondaryBtnText}>{micEnabled ? 'Mute mic' : 'Unmute mic'}</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                <View style={styles.levelRow}>
+                  <SpeakingWave active={someoneSpeaking && !playbackMuted} level={dominantSpeakerLevel} color={tokens.colors.pink} />
+                  <Text style={styles.panelText}>
+                    {activeRole === 'host' || activeRole === 'co_host'
+                      ? micEnabled
+                        ? 'Your microphone is live'
+                        : 'Your microphone is muted'
+                      : someoneSpeaking
+                        ? 'Someone is speaking right now'
+                        : 'Waiting for someone to speak'}
+                  </Text>
+                </View>
+                {activeRole === 'listener' && room?.allow_raise_hand !== false ? (
+                  <>
+                    <Pressable
+                      style={[styles.requestBtn, busy && styles.btnDisabled]}
+                      onPress={handleRequestMic}
+                      disabled={busy || currentUserRequest?.status === 'waiting'}
+                    >
+                      <Feather name="user-plus" size={16} color={tokens.colors.pink} />
+                      <Text style={styles.requestBtnText}>
+                        {currentUserRequest?.status === 'waiting'
+                          ? 'Request sent'
+                          : currentUserRequest?.status === 'approved'
+                            ? 'Approved to speak'
+                            : 'Request speaker access'}
+                      </Text>
+                    </Pressable>
+                    {currentUserRequest ? (
+                      <Text style={styles.helperText}>
+                        {currentUserRequest.status === 'waiting'
+                          ? 'Your request is pending for the broadcaster.'
+                          : currentUserRequest.status === 'approved'
+                            ? 'You have been approved. Rejoin if your mic access does not update immediately.'
+                            : 'Your last speaker request was declined.'}
+                      </Text>
+                    ) : null}
+                  </>
+                ) : null}
+              </View>
+            ) : (
+              <View style={styles.actionPanel}>
+                <Text style={styles.panelTitle}>Join live</Text>
+                <Text style={styles.panelText}>Start listening right away, or request speaker access for the broadcaster to approve.</Text>
+                <Pressable style={[styles.primaryBtn, busy && styles.btnDisabled]} onPress={handleJoin} disabled={busy}>
+                  <Text style={styles.primaryBtnText}>{busy ? 'Joining…' : 'Start listening'}</Text>
+                </Pressable>
+                {room?.allow_raise_hand !== false ? (
+                  <Pressable style={[styles.requestBtn, busy && styles.btnDisabled]} onPress={handleRequestMic} disabled={busy || currentUserRequest?.status === 'waiting'}>
+                    <Feather name="user-plus" size={16} color={tokens.colors.pink} />
+                    <Text style={styles.requestBtnText}>
+                      {currentUserRequest?.status === 'waiting'
+                        ? 'Request sent'
+                        : currentUserRequest?.status === 'approved'
+                          ? 'Approved to speak'
+                          : 'Request speaker access'}
+                    </Text>
+                  </Pressable>
+                ) : null}
+                {currentUserRequest ? (
+                  <Text style={styles.helperText}>
+                    {currentUserRequest.status === 'waiting'
+                      ? 'Your request is pending for the broadcaster.'
+                      : currentUserRequest.status === 'approved'
+                        ? 'You have been approved. Join the room to speak.'
+                        : 'Your last speaker request was declined.'}
+                  </Text>
+                ) : null}
+              </View>
+            )}
+
+            {isRoomHost ? (
+              <View style={styles.actionPanel}>
+                <Text style={styles.panelTitle}>Host controls</Text>
+                <View style={styles.controlsRow}>
+                  {room?.status === 'scheduled' ? (
+                    <Pressable style={[styles.secondaryBtn, busy && styles.btnDisabled]} onPress={handleStart} disabled={busy}>
+                      <Text style={styles.secondaryBtnText}>{busy ? 'Starting…' : 'Start room'}</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                {room?.status === 'live' ? (
+                  <Pressable style={[styles.dangerBtn, busy && styles.btnDisabled]} onPress={handleEnd} disabled={busy}>
+                    <Text style={styles.dangerBtnText}>{busy ? 'Ending…' : 'End broadcast'}</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
+
+            {canModerate && pendingRequests.length > 0 ? (
+              <View style={styles.actionPanel}>
+                <Text style={styles.panelTitle}>Join requests</Text>
+                <Text style={styles.panelText}>Approve people who want mic access while you are broadcasting.</Text>
+                {pendingRequests.map((item) => (
+                  <View key={item.id} style={styles.queueRow}>
+                    <Text style={styles.queueText} numberOfLines={1}>{item.user_uid}</Text>
+                    <View style={styles.queueActions}>
+                      <Pressable style={styles.queueApprove} onPress={() => resolveLivePodcastSpeakerRequest(item.id, true)}>
+                        <Text style={styles.queueApproveText}>Approve</Text>
+                      </Pressable>
+                      <Pressable style={styles.queueDecline} onPress={() => resolveLivePodcastSpeakerRequest(item.id, false)}>
+                        <Text style={styles.queueDeclineText}>Decline</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(15,23,42,0.28)',
+  },
+  scrim: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  sheet: {
+    minHeight: '76%',
+    maxHeight: '92%',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    backgroundColor: '#fff',
+    paddingTop: 8,
+  },
+  handle: {
+    alignSelf: 'center',
+    width: 46,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: '#e5e7eb',
+    marginBottom: 8,
+  },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingBottom: 6,
+  },
+  topActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  topActionPill: {
+    minHeight: 38,
+    paddingHorizontal: 14,
+    borderRadius: 19,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(239,68,68,0.10)',
+  },
+  topActionPillTextDanger: {
+    color: '#dc2626',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  topIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  content: {
+    paddingHorizontal: 18,
+    paddingBottom: 18,
+    gap: 16,
+  },
+  heroCard: {
+    gap: 12,
+    borderRadius: 24,
+    backgroundColor: '#f8fafc',
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  heroHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  heroArtworkWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 24,
+    overflow: 'hidden',
+    backgroundColor: '#fff',
+  },
+  heroArtwork: {
+    width: '100%',
+    height: '100%',
+  },
+  heroArtworkFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  heroTextWrap: {
+    flex: 1,
+    gap: 4,
+  },
+  recPill: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  recDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#f43f5e',
+  },
+  recText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  heroTitle: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  heroMeta: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  heroDescription: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  captionCard: {
+    borderRadius: 20,
+    backgroundColor: '#0f172a',
+    padding: 16,
+    gap: 8,
+  },
+  captionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  captionTitle: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  captionLine: {
+    color: '#fff',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  captionLineMuted: {
+    color: 'rgba(255,255,255,0.78)',
+  },
+  captionEmpty: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 18,
+  },
+  personCard: {
+    width: '23%',
+    alignItems: 'center',
+    gap: 6,
+  },
+  personAvatar: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    overflow: 'hidden',
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  personAvatarImg: {
+    width: '100%',
+    height: '100%',
+  },
+  personAvatarFallback: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  personName: {
+    maxWidth: '100%',
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  personMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  personRole: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  previewCard: {
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+  },
+  previewCoverWrap: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    overflow: 'hidden',
+    backgroundColor: '#f8fafc',
+  },
+  previewCover: {
+    width: '100%',
+    height: '100%',
+  },
+  previewFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  previewText: {
+    textAlign: 'center',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  actionPanel: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    padding: 16,
+    gap: 12,
+  },
+  panelTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  panelText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  errorText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#dc2626',
+  },
+  primaryBtn: {
+    minHeight: 50,
+    borderRadius: 16,
+    backgroundColor: '#7c3aed',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  requestBtn: {
+    minHeight: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(236,72,153,0.22)',
+    backgroundColor: 'rgba(236,72,153,0.06)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  requestBtnText: {
+    color: '#be185d',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  secondaryBtn: {
+    minHeight: 44,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  secondaryBtnText: {
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  dangerBtn: {
+    minHeight: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(239,68,68,0.10)',
+  },
+  dangerBtnText: {
+    color: '#dc2626',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  levelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  queueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  queueText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  queueActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  queueApprove: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(16,185,129,0.10)',
+  },
+  queueApproveText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#059669',
+  },
+  queueDecline: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(239,68,68,0.10)',
+  },
+  queueDeclineText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#dc2626',
+  },
+  btnDisabled: {
+    opacity: 0.6,
+  },
+  helperText: {
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+});

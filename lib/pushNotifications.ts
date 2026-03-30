@@ -1,23 +1,49 @@
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
-import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { auth, db } from './firebase';
 import { doc, setDoc } from 'firebase/firestore';
 
 const projectId = (Constants.expoConfig as any)?.extra?.eas?.projectId;
+const isAndroidExpoGo = Platform.OS === 'android' && Constants.executionEnvironment === 'storeClient';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-  }),
-});
+let notificationsModulePromise: Promise<typeof import('expo-notifications') | null> | null = null;
+let notificationHandlerInitialized = false;
+
+export function notificationsRuntimeSupported(): boolean {
+  return !isAndroidExpoGo;
+}
+
+async function getNotificationsModule(): Promise<typeof import('expo-notifications') | null> {
+  if (!notificationsRuntimeSupported()) return null;
+  if (!notificationsModulePromise) {
+    notificationsModulePromise = import('expo-notifications')
+      .then((module) => {
+        if (!notificationHandlerInitialized) {
+          module.setNotificationHandler({
+            handleNotification: async () => ({
+              shouldShowAlert: true,
+              shouldPlaySound: true,
+              shouldSetBadge: true,
+              shouldShowBanner: true,
+            }),
+          });
+          notificationHandlerInitialized = true;
+        }
+        return module;
+      })
+      .catch((error) => {
+        console.warn('expo-notifications unavailable in current runtime', error);
+        return null;
+      });
+  }
+  return notificationsModulePromise;
+}
 
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
   if (!Device.isDevice) return null;
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) return null;
   const { status: existingStatus } = await Notifications.getPermissionsAsync();
   let finalStatus = existingStatus;
   if (existingStatus !== 'granted') {
@@ -57,8 +83,10 @@ export async function showLocalNotification(
   title: string,
   body: string,
   data?: Record<string, string>
-): Promise<void> {
+): Promise<boolean> {
   try {
+    const Notifications = await getNotificationsModule();
+    if (!Notifications) return false;
     await Notifications.scheduleNotificationAsync({
       content: {
         title,
@@ -68,7 +96,25 @@ export async function showLocalNotification(
       },
       trigger: null,
     });
+    return true;
   } catch (e) {
     console.warn('Failed to show local notification', e);
+    return false;
   }
+}
+
+export async function addNotificationResponseListener(
+  listener: (response: import('expo-notifications').NotificationResponse) => void
+): Promise<{ remove: () => void } | null> {
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) return null;
+  return Notifications.addNotificationResponseReceivedListener(listener);
+}
+
+export async function setNotificationBadgeCount(count: number): Promise<void> {
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) return;
+  try {
+    await Notifications.setBadgeCountAsync(count);
+  } catch {}
 }

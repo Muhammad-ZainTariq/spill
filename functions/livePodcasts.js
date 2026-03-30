@@ -53,15 +53,30 @@ function getLiveKitConfig() {
   return { apiKey, apiSecret, serverUrl };
 }
 
+function getAssemblyAiConfig() {
+  const assemblyAiCfg = functions.config().assemblyai || {};
+  const apiKey = process.env.ASSEMBLYAI_API_KEY || assemblyAiCfg.api_key || '';
+  if (!apiKey) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'AssemblyAI is not configured. Set ASSEMBLYAI_API_KEY or functions config assemblyai.api_key.'
+    );
+  }
+  return { apiKey };
+}
+
 async function sendPushToUser(recipientId, title, body, payload) {
   const userSnap = await db.collection('users').doc(String(recipientId || '').trim()).get();
   if (!userSnap.exists) return { ok: false, error: 'user-not-found' };
   const expoPushToken = userSnap.data()?.expo_push_token;
-  if (!expoPushToken || typeof expoPushToken !== 'string' || !expoPushToken.startsWith('ExponentPushToken[')) {
+  const isExpoToken =
+    typeof expoPushToken === 'string' &&
+    (expoPushToken.startsWith('ExponentPushToken[') || expoPushToken.startsWith('ExpoPushToken['));
+  if (!isExpoToken) {
     return { ok: false, error: 'missing-push-token' };
   }
   try {
-    await fetch('https://exp.host/--/api/v2/push/send', {
+    const res = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -73,6 +88,11 @@ async function sendPushToUser(recipientId, title, body, payload) {
         channelId: 'default',
       }),
     });
+    if (!res.ok) {
+      const text = await res.text();
+      console.error('live podcast push failed', { recipientId, status: res.status, text });
+      return { ok: false, error: text || 'push-http-failed' };
+    }
     return { ok: true };
   } catch (error) {
     console.error('live podcast push failed', { recipientId, error });
@@ -98,12 +118,15 @@ async function notifyPodcastStarted(roomId, room) {
           body,
           type: 'live_podcast_started',
           room_id: roomId,
+          cover_url: room.cover_url || null,
+          host_name: room.host_name || 'Therapist',
           read: false,
           created_at: nowIso(),
         });
         await sendPushToUser(recipientId, title, body, {
           type: 'live_podcast_started',
           room_id: roomId,
+          cover_url: room.cover_url || '',
         });
       } catch (error) {
         console.error('Failed to notify podcast reminder subscriber', { recipientId, roomId, error });
@@ -259,6 +282,57 @@ exports.startLivePodcastRoom = functions.region('us-central1').https.onCall(asyn
   await notifyPodcastStarted(roomId, nextRoom);
   await logAudit(roomId, uid, 'room_started');
   return { ok: true };
+});
+
+exports.createLivePodcastTranscriptToken = functions.region('us-central1').https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+  const uid = context.auth.uid;
+  const roomId = String(data?.roomId || '').trim();
+  if (!roomId) throw new functions.https.HttpsError('invalid-argument', 'roomId is required.');
+
+  const roomSnap = await db.collection(COLLECTIONS.rooms).doc(roomId).get();
+  if (!roomSnap.exists) throw new functions.https.HttpsError('not-found', 'Room not found.');
+  const room = sanitizeRoom(roomSnap.data() || {}, roomId);
+  if (room.status !== 'live') {
+    throw new functions.https.HttpsError('failed-precondition', 'Room must be live before transcription starts.');
+  }
+  const canTranscribe = uid === room.host_uid || (Array.isArray(room.co_host_ids) && room.co_host_ids.includes(uid));
+  if (!canTranscribe) {
+    throw new functions.https.HttpsError('permission-denied', 'Only the host or a co-host can start live captions.');
+  }
+
+  const { apiKey } = getAssemblyAiConfig();
+  const tokenUrl = new URL('https://streaming.assemblyai.com/v3/token');
+  tokenUrl.searchParams.set('expires_in_seconds', '600');
+  tokenUrl.searchParams.set('max_session_duration_seconds', '10800');
+
+  let token;
+  try {
+    const res = await fetch(tokenUrl.toString(), {
+      method: 'GET',
+      headers: { Authorization: apiKey },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `AssemblyAI token request failed with ${res.status}`);
+    }
+    const dataJson = await res.json();
+    token = String(dataJson?.token || '').trim();
+  } catch (error) {
+    console.error('Failed to create AssemblyAI transcript token', { roomId, uid, error });
+    throw new functions.https.HttpsError('internal', 'Could not start live captions.');
+  }
+
+  if (!token) {
+    throw new functions.https.HttpsError('internal', 'AssemblyAI did not return a valid transcript token.');
+  }
+
+  return {
+    token,
+    sampleRate: 16000,
+    speechModel: 'u3-rt-pro',
+    formattedFinals: true,
+  };
 });
 
 exports.endLivePodcastRoom = functions.region('us-central1').https.onCall(async (data, context) => {

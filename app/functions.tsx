@@ -3914,6 +3914,41 @@ export const subscribeToGameInvites = (
   return unsub;
 };
 
+export const subscribeToLivePodcastNotifications = (
+  onNotifications: (items: { id: string; room_id: string; host_name: string; body: string; read: boolean; created_at: string }[]) => void
+): (() => void) => {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return () => {};
+
+  const notifRef = collection(db, 'notifications');
+  const q = query(
+    notifRef,
+    where('recipient_id', '==', uid),
+    where('type', '==', 'live_podcast_started'),
+    limit(30)
+  );
+  const unsub = onSnapshot(
+    q,
+    (snap) => {
+      const items = snap.docs.map((d) => {
+        const data = d.data() as any;
+        return {
+          id: d.id,
+          room_id: data.room_id || '',
+          host_name: data.host_name || 'Therapist',
+          body: data.body || '',
+          read: !!data.read,
+          created_at: data.created_at || '',
+        };
+      });
+      items.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+      onNotifications(items);
+    },
+    (err) => console.error('subscribeToLivePodcastNotifications', err)
+  );
+  return unsub;
+};
+
 // Subscribe to unread notification count (for tab + app icon badge)
 export const subscribeToUnreadNotificationCount = (onCount: (count: number) => void): (() => void) => {
   const uid = auth.currentUser?.uid;

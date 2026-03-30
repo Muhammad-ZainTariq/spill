@@ -1,10 +1,12 @@
 import { Feather } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { tokens } from '@/app/ui/tokens';
+import { auth } from '@/lib/firebase';
 import {
   currentUserCanHostLivePodcasts,
   LivePodcastRoom,
@@ -23,6 +25,7 @@ export default function LivePodcastHubScreen() {
   const router = useRouter();
   const [rooms, setRooms] = useState<LivePodcastRoom[]>([]);
   const [canHost, setCanHost] = useState(false);
+  const therapistHomePath = auth.currentUser?.uid ? `/therapist/${auth.currentUser.uid}` : null;
 
   useEffect(() => {
     const unsub = subscribeLivePodcastRooms(setRooms);
@@ -37,7 +40,23 @@ export default function LivePodcastHubScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
+        <Pressable
+          onPress={() => {
+            if (router.canGoBack()) {
+              router.back();
+              return;
+            }
+            if (therapistHomePath) {
+              router.replace(therapistHomePath as any);
+            }
+          }}
+          style={styles.backBtn}
+        >
+          <Feather name="chevron-left" size={20} color={tokens.colors.text} />
+          <Text style={styles.backBtnText}>Back</Text>
+        </Pressable>
         <Text style={styles.brand}>spill</Text>
+        <View style={styles.backBtnSpacer} />
       </View>
       <View style={styles.headerSub}>
         <Text style={styles.eyebrow}>Live audio</Text>
@@ -68,13 +87,22 @@ export default function LivePodcastHubScreen() {
           ) : (
             liveRooms.map((room) => (
               <Pressable key={room.id} style={styles.roomCard} onPress={() => router.push(`/live/${room.id}` as any)}>
-                <View style={styles.roomBadgeLive}>
-                  <Text style={styles.roomBadgeLiveText}>LIVE</Text>
+                <View style={styles.roomCardTop}>
+                  <View style={styles.roomCoverWrap}>
+                    {room.cover_url ? (
+                      <Image source={{ uri: room.cover_url }} style={styles.roomCover} contentFit="cover" />
+                    ) : (
+                      <View style={styles.roomCoverFallback}>
+                        <Feather name="mic" size={18} color={tokens.colors.pink} />
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.roomBadgeLive}>
+                    <Text style={styles.roomBadgeLiveText}>LIVE</Text>
+                  </View>
                 </View>
                 <Text style={styles.roomTitle}>{room.title}</Text>
-                <Text style={styles.roomMeta}>
-                  {room.host_name || 'Therapist'} · {room.listener_count_current || 0} listening
-                </Text>
+                <Text style={styles.roomMeta}>{room.host_name || 'Therapist'} · Live now</Text>
                 {!!room.topic ? <Text style={styles.roomDesc}>{room.topic}</Text> : null}
               </Pressable>
             ))
@@ -87,6 +115,17 @@ export default function LivePodcastHubScreen() {
           ) : (
             scheduledRooms.map((room) => (
               <View key={room.id} style={styles.roomCard}>
+                <View style={styles.roomCardTop}>
+                  <View style={styles.roomCoverWrap}>
+                    {room.cover_url ? (
+                      <Image source={{ uri: room.cover_url }} style={styles.roomCover} contentFit="cover" />
+                    ) : (
+                      <View style={styles.roomCoverFallback}>
+                        <Feather name="clock" size={18} color={tokens.colors.textSecondary} />
+                      </View>
+                    )}
+                  </View>
+                </View>
                 <Text style={styles.roomTitle}>{room.title}</Text>
                 <Text style={styles.roomMeta}>{room.host_name || 'Therapist'} · {fmtStart(room.scheduled_for)}</Text>
                 {!!room.topic ? <Text style={styles.roomDesc}>{room.topic}</Text> : null}
@@ -114,6 +153,17 @@ export default function LivePodcastHubScreen() {
           ) : (
             replayRooms.map((room) => (
               <Pressable key={room.id} style={styles.roomCard} onPress={() => router.push(`/live/${room.id}` as any)}>
+                <View style={styles.roomCardTop}>
+                  <View style={styles.roomCoverWrap}>
+                    {room.cover_url ? (
+                      <Image source={{ uri: room.cover_url }} style={styles.roomCover} contentFit="cover" />
+                    ) : (
+                      <View style={styles.roomCoverFallback}>
+                        <Feather name="play" size={18} color={tokens.colors.textSecondary} />
+                      </View>
+                    )}
+                  </View>
+                </View>
                 <Text style={styles.roomTitle}>{room.title}</Text>
                 <Text style={styles.roomMeta}>{room.host_name || 'Therapist'} · Replay available</Text>
                 {!!room.topic ? <Text style={styles.roomDesc}>{room.topic}</Text> : null}
@@ -149,13 +199,32 @@ function Empty({ text }: { text: string }) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: tokens.colors.bg },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: tokens.spacing.screenHorizontal,
     paddingTop: 10,
     paddingBottom: 12,
     backgroundColor: tokens.colors.surface,
   },
+  backBtn: {
+    minWidth: 72,
+    height: 36,
+    borderRadius: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  backBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: tokens.colors.text,
+  },
+  backBtnSpacer: {
+    minWidth: 72,
+    height: 36,
+  },
   brand: {
-    textAlign: 'center',
     fontSize: 24,
     fontWeight: '900',
     color: tokens.colors.pink,
@@ -211,6 +280,29 @@ const styles = StyleSheet.create({
     borderColor: tokens.colors.border,
     padding: 16,
     gap: 6,
+  },
+  roomCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
+  roomCoverWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    overflow: 'hidden',
+    backgroundColor: tokens.colors.surfaceOverlay,
+  },
+  roomCover: {
+    width: '100%',
+    height: '100%',
+  },
+  roomCoverFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: tokens.colors.surfaceOverlay,
   },
   roomBadgeLive: {
     alignSelf: 'flex-start',

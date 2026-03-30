@@ -1,4 +1,4 @@
-import { functions, db, auth } from '@/lib/firebase';
+import * as FileSystem from 'expo-file-system/legacy';
 import { httpsCallable } from 'firebase/functions';
 import {
   collection,
@@ -8,9 +8,11 @@ import {
   onSnapshot,
   orderBy,
   query,
+  setDoc,
   Unsubscribe,
   where,
 } from 'firebase/firestore';
+import { auth, db, functions, getDownloadURL, ref, storage, uploadString } from '@/lib/firebase';
 
 export type LivePodcastRoomStatus = 'scheduled' | 'live' | 'ended' | 'cancelled';
 export type LivePodcastRecordMode = 'none' | 'draft' | 'publish';
@@ -61,6 +63,33 @@ export type LivePodcastSession = {
   premiumUnlocked?: boolean;
 };
 
+export type LivePodcastTranscriptSegment = {
+  id: string;
+  room_id: string;
+  text: string;
+  is_final: boolean;
+  speaker_uid?: string | null;
+  speaker_name?: string | null;
+  sequence?: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+function normalizeLivePodcastRoom(raw: LivePodcastRoom): LivePodcastRoom {
+  const endedAt = typeof raw.ended_at === 'string' ? raw.ended_at.trim() : '';
+  const startedAt = typeof raw.started_at === 'string' ? raw.started_at.trim() : '';
+  if (endedAt) {
+    return { ...raw, status: 'ended', ended_at: endedAt };
+  }
+  if (startedAt && raw.status !== 'cancelled') {
+    return { ...raw, status: 'live', started_at: startedAt };
+  }
+  if (raw.status === 'scheduled' || raw.status === 'cancelled') {
+    return raw;
+  }
+  return { ...raw, status: 'scheduled' };
+}
+
 export async function currentUserCanHostLivePodcasts(): Promise<boolean> {
   const uid = auth.currentUser?.uid;
   if (!uid) return false;
@@ -74,19 +103,19 @@ export async function currentUserCanHostLivePodcasts(): Promise<boolean> {
 export function subscribeLivePodcastRooms(cb: (rooms: LivePodcastRoom[]) => void): Unsubscribe {
   const q = query(collection(db, 'live_podcast_rooms'), orderBy('created_at', 'desc'), limit(60));
   return onSnapshot(q, (snap) => {
-    const rooms = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as LivePodcastRoom[];
+    const rooms = snap.docs.map((d) => normalizeLivePodcastRoom({ id: d.id, ...(d.data() as any) } as LivePodcastRoom));
     cb(rooms);
   });
 }
 
 export async function getLivePodcastRoom(roomId: string): Promise<LivePodcastRoom | null> {
   const snap = await getDoc(doc(db, 'live_podcast_rooms', roomId));
-  return snap.exists() ? ({ id: snap.id, ...(snap.data() as any) } as LivePodcastRoom) : null;
+  return snap.exists() ? normalizeLivePodcastRoom({ id: snap.id, ...(snap.data() as any) } as LivePodcastRoom) : null;
 }
 
 export function subscribeLivePodcastRoom(roomId: string, cb: (room: LivePodcastRoom | null) => void): Unsubscribe {
   return onSnapshot(doc(db, 'live_podcast_rooms', roomId), (snap) => {
-    cb(snap.exists() ? ({ id: snap.id, ...(snap.data() as any) } as LivePodcastRoom) : null);
+    cb(snap.exists() ? normalizeLivePodcastRoom({ id: snap.id, ...(snap.data() as any) } as LivePodcastRoom) : null);
   });
 }
 
@@ -102,6 +131,45 @@ export function subscribeSpeakerRequests(roomId: string, cb: (items: SpeakerRequ
       .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
     cb(items);
   });
+}
+
+export function subscribeLivePodcastTranscriptSegments(
+  roomId: string,
+  cb: (items: LivePodcastTranscriptSegment[]) => void,
+  max: number = 6
+): Unsubscribe {
+  const q = query(
+    collection(db, 'live_podcast_rooms', roomId, 'transcripts'),
+    orderBy('created_at', 'desc'),
+    limit(max)
+  );
+  return onSnapshot(q, (snap) => {
+    const items = snap.docs
+      .map((d) => ({ id: d.id, ...(d.data() as any) }) as LivePodcastTranscriptSegment)
+      .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0) || (a.created_at || '').localeCompare(b.created_at || ''));
+    cb(items);
+  });
+}
+
+export async function publishLivePodcastTranscriptSegment(
+  roomId: string,
+  segment: Omit<LivePodcastTranscriptSegment, 'room_id'> & { id: string; text: string }
+) {
+  const ref = doc(db, 'live_podcast_rooms', roomId, 'transcripts', segment.id);
+  await setDoc(
+    ref,
+    {
+      room_id: roomId,
+      text: segment.text,
+      is_final: !!segment.is_final,
+      speaker_uid: segment.speaker_uid || auth.currentUser?.uid || null,
+      speaker_name: segment.speaker_name || auth.currentUser?.displayName || null,
+      sequence: Number(segment.sequence || 0),
+      created_at: segment.created_at || new Date().toISOString(),
+      updated_at: segment.updated_at || new Date().toISOString(),
+    },
+    { merge: true }
+  );
 }
 
 export async function createLivePodcastRoom(input: {
@@ -120,9 +188,40 @@ export async function createLivePodcastRoom(input: {
   return data as { room: LivePodcastRoom };
 }
 
+export async function uploadLivePodcastCoverFromUri(uri: string, contentType?: string | null) {
+  const uid = auth.currentUser?.uid;
+  if (!uid) {
+    throw new Error('You must be logged in to upload a podcast cover.');
+  }
+  const base64Data = await FileSystem.readAsStringAsync(uri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+  if (!base64Data?.length) {
+    throw new Error('Could not read the selected image.');
+  }
+
+  const mime = contentType?.trim() || 'image/jpeg';
+  const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+  const path = `live_podcast_covers/${uid}/${Date.now()}.${ext}`;
+  const storageRef = ref(storage, path);
+  await uploadString(storageRef, base64Data, 'base64', { contentType: mime });
+  return getDownloadURL(storageRef);
+}
+
 export async function startLivePodcastRoom(roomId: string) {
   const fn = httpsCallable(functions, 'startLivePodcastRoom');
   await fn({ roomId });
+}
+
+export async function createLivePodcastTranscriptToken(roomId: string) {
+  const fn = httpsCallable(functions, 'createLivePodcastTranscriptToken');
+  const { data } = await fn({ roomId });
+  return data as {
+    token: string;
+    sampleRate: number;
+    speechModel: string;
+    formattedFinals: boolean;
+  };
 }
 
 export async function endLivePodcastRoom(roomId: string) {

@@ -1,11 +1,14 @@
 import { Feather } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useLivePodcast } from '@/app/components/live/LivePodcastProvider';
+import { SpeakingWave } from '@/app/components/live/SpeakingWave';
 import { tokens } from '@/app/ui/tokens';
+import { auth } from '@/lib/firebase';
 import {
   createLivePodcastInviteCode,
   endLivePodcastRoom,
@@ -13,10 +16,12 @@ import {
   joinLivePodcastRoom,
   leaveLivePodcastRoom,
   LivePodcastRoom,
+  LivePodcastTranscriptSegment,
   requestLivePodcastSpeaker,
   resolveLivePodcastSpeakerRequest,
   SpeakerRequest,
   startLivePodcastRoom,
+  subscribeLivePodcastTranscriptSegments,
   subscribeLivePodcastRoom,
   subscribeSpeakerRequests,
 } from '@/lib/livePodcasts';
@@ -47,13 +52,16 @@ export default function LivePodcastRoomScreen() {
   } = useLivePodcast();
   const [room, setRoom] = useState<LivePodcastRoom | null>(null);
   const [speakerRequests, setSpeakerRequests] = useState<SpeakerRequest[]>([]);
-  const [inviteCode, setInviteCode] = useState('');
+  const [transcriptSegments, setTranscriptSegments] = useState<LivePodcastTranscriptSegment[]>([]);
   const [busy, setBusy] = useState(false);
   const [micBusy, setMicBusy] = useState(false);
+  const therapistHomePath = auth.currentUser?.uid ? `/therapist/${auth.currentUser.uid}` : '/live';
 
   const sessionForThisRoom = !!activeSession && activeSession.room.id === roomId;
   const activeRole = sessionForThisRoom ? activeSession?.role : null;
-  const canModerate = activeRole === 'host' || activeRole === 'co_host';
+  const isRoomHost = !!room?.host_uid && room.host_uid === auth.currentUser?.uid;
+  const canModerate = isRoomHost || activeRole === 'host' || activeRole === 'co_host';
+  const activeRoleLabel = activeRole ? activeRole.replace('_', ' ') : isRoomHost ? 'host' : 'listener';
 
   useEffect(() => {
     if (!roomId) return;
@@ -63,9 +71,11 @@ export default function LivePodcastRoomScreen() {
       if (next && sessionForThisRoom) updateRoom(next);
     });
     const unsubRequests = subscribeSpeakerRequests(roomId, setSpeakerRequests);
+    const unsubTranscripts = subscribeLivePodcastTranscriptSegments(roomId, setTranscriptSegments);
     return () => {
       unsubRoom();
       unsubRequests();
+      unsubTranscripts();
     };
   }, [roomId, sessionForThisRoom, updateRoom]);
 
@@ -81,7 +91,7 @@ export default function LivePodcastRoomScreen() {
     }
     setBusy(true);
     try {
-      const session = await joinLivePodcastRoom(roomId, inviteCode.trim() || undefined);
+      const session = await joinLivePodcastRoom(roomId);
       connectToRoom({
         room: session.room,
         role: session.role,
@@ -129,7 +139,7 @@ export default function LivePodcastRoomScreen() {
       if (roomId) await leaveLivePodcastRoom(roomId);
     } catch {}
     leaveRoom();
-    router.replace('/live' as any);
+    router.replace((isRoomHost ? therapistHomePath : '/live') as any);
   };
 
   const handleInvite = async () => {
@@ -148,7 +158,7 @@ export default function LivePodcastRoomScreen() {
     try {
       await endLivePodcastRoom(roomId);
       leaveRoom();
-      router.replace('/live' as any);
+      router.replace(therapistHomePath as any);
     } catch (error: any) {
       Alert.alert('Could not end room', error?.message || 'Try again.');
     } finally {
@@ -170,48 +180,107 @@ export default function LivePodcastRoomScreen() {
     () => participants.slice().sort((a, b) => Number(b.isSpeaking) - Number(a.isSpeaking)),
     [participants]
   );
+  const someoneSpeaking = useMemo(
+    () => visibleParticipants.some((participant) => participant.isSpeaking),
+    [visibleParticipants]
+  );
+  const captionLines = useMemo(
+    () => transcriptSegments.filter((item) => String(item.text || '').trim()).slice(-4),
+    [transcriptSegments]
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.iconBtn}>
+        <Pressable
+          onPress={() => (router.canGoBack() ? router.back() : router.replace((isRoomHost ? therapistHomePath : '/live') as any))}
+          style={styles.backBtn}
+        >
           <Feather name="chevron-left" size={22} color={tokens.colors.text} />
+          <Text style={styles.backBtnText}>Back</Text>
         </Pressable>
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          {room?.title || 'Podcast room'}
-        </Text>
-        <Pressable onPress={() => (sessionForThisRoom ? minimizeRoom() : router.push('/live' as any))} style={styles.iconBtn}>
-          <Feather name={sessionForThisRoom ? 'minus' : 'radio'} size={18} color={tokens.colors.text} />
-        </Pressable>
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {room?.title || 'Podcast room'}
+          </Text>
+          <Text style={styles.headerSubtitle} numberOfLines={1}>
+            {isRoomHost ? 'Host room controls' : 'Join and listen live'}
+          </Text>
+        </View>
+        {sessionForThisRoom ? (
+          <Pressable onPress={minimizeRoom} style={styles.iconBtn}>
+            <Feather name="minus" size={18} color={tokens.colors.text} />
+          </Pressable>
+        ) : (
+          <View style={styles.iconBtnPlaceholder} />
+        )}
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.hero}>
-          <View style={styles.livePill}>
-            <Text style={styles.livePillText}>{prettyStatus(room)}</Text>
+          <View style={styles.heroTop}>
+            <View style={styles.heroCoverWrap}>
+              {room?.cover_url ? (
+                <Image source={{ uri: room.cover_url }} style={styles.heroCover} contentFit="cover" />
+              ) : (
+                <View style={styles.heroCoverFallback}>
+                  <Feather name="mic" size={28} color={tokens.colors.pink} />
+                </View>
+              )}
+            </View>
+            {room?.status === 'live' ? (
+              <View style={styles.livePill}>
+                <Text style={styles.livePillText}>{prettyStatus(room)}</Text>
+              </View>
+            ) : null}
           </View>
+          {room?.status !== 'live' ? (
+            <View style={styles.livePill}>
+              <Text style={styles.livePillText}>{prettyStatus(room)}</Text>
+            </View>
+          ) : null}
           <Text style={styles.roomTitle}>{room?.title || 'Loading room...'}</Text>
-          <Text style={styles.roomMeta}>
-            {(room?.host_name || 'Therapist') + (room?.listener_count_current ? ` · ${room.listener_count_current} listening` : '')}
-          </Text>
+          <Text style={styles.roomMeta}>{room?.host_name || 'Therapist'} · {room?.status === 'live' ? 'Live now' : 'Podcast space'}</Text>
           {!!room?.description ? <Text style={styles.roomDesc}>{room.description}</Text> : null}
           {!!room?.topic ? <Text style={styles.topicPill}>{room.topic}</Text> : null}
+          {sessionForThisRoom ? (
+            <View style={styles.waveInfoRow}>
+              <SpeakingWave active={someoneSpeaking} color={tokens.colors.pink} />
+              <Text style={styles.waveInfoText}>
+                {activeRole === 'host' || activeRole === 'co_host'
+                  ? micEnabled
+                    ? 'Your microphone is live'
+                    : 'Your microphone is muted'
+                  : someoneSpeaking
+                    ? 'The room is active right now'
+                    : 'Waiting for someone to speak'}
+              </Text>
+            </View>
+          ) : null}
         </View>
 
-        {!sessionForThisRoom ? (
+        <View style={styles.captionCard}>
+          <View style={styles.captionHeader}>
+            <Feather name="message-square" size={15} color={tokens.colors.pink} />
+            <Text style={styles.captionTitle}>Live subtitles</Text>
+          </View>
+          {captionLines.length > 0 ? (
+            captionLines.map((item) => (
+              <Text key={item.id} style={[styles.captionLine, !item.is_final && styles.captionLineMuted]}>
+                {item.text}
+              </Text>
+            ))
+          ) : (
+            <Text style={styles.captionEmpty}>Subtitles will appear here when someone speaks in the room.</Text>
+          )}
+        </View>
+
+        {!sessionForThisRoom && !isRoomHost ? (
           <View style={styles.panel}>
             <Text style={styles.panelTitle}>Join this room</Text>
             <Text style={styles.panelText}>
-              Use a co-host code if you were invited, otherwise join as a listener.
+              Join as a listener and keep the room playing while you browse the app.
             </Text>
-            <TextInput
-              value={inviteCode}
-              onChangeText={setInviteCode}
-              placeholder="Optional invite code"
-              placeholderTextColor={tokens.colors.textMuted}
-              autoCapitalize="characters"
-              style={styles.input}
-            />
             <View style={styles.actionsRow}>
               <Pressable style={[styles.primaryBtn, busy && { opacity: 0.6 }]} onPress={handleJoin} disabled={busy}>
                 <Text style={styles.primaryBtnText}>{busy ? 'Joining…' : 'Join room'}</Text>
@@ -219,10 +288,10 @@ export default function LivePodcastRoomScreen() {
             </View>
             <Text style={styles.helperText}>Once joined, you can minimize the room and keep listening while browsing the app.</Text>
           </View>
-        ) : (
+        ) : sessionForThisRoom ? (
           <View style={styles.panel}>
             <Text style={styles.panelTitle}>Connected</Text>
-            <Text style={styles.panelText}>Role: {activeRole!.replace('_', ' ')} · Audio: {connectionState}</Text>
+            <Text style={styles.panelText}>Role: {activeRoleLabel} · Audio: {connectionState}</Text>
             {lastError ? <Text style={styles.errorText}>{lastError}</Text> : null}
             <View style={styles.actionsRow}>
               {activeRole !== 'listener' ? (
@@ -243,24 +312,46 @@ export default function LivePodcastRoomScreen() {
               <Text style={styles.infoText}>Minimize to a floating capsule and keep listening while using other app screens.</Text>
             </View>
           </View>
+        ) : (
+          <View style={styles.panel}>
+            <Text style={styles.panelTitle}>Host audio is not connected</Text>
+            <Text style={styles.panelText}>Start the room, then tap connect audio so listeners can hear you live.</Text>
+            <View style={styles.actionsRow}>
+              {room?.status === 'live' ? (
+                <Pressable style={[styles.primaryBtn, busy && { opacity: 0.6 }]} onPress={handleJoin} disabled={busy}>
+                  <Text style={styles.primaryBtnText}>{busy ? 'Connecting…' : 'Connect audio'}</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
         )}
 
-        {activeRole === 'host' ? (
+        {isRoomHost ? (
           <View style={styles.panel}>
             <Text style={styles.panelTitle}>Host controls</Text>
             <View style={styles.actionsRow}>
               {room?.status === 'scheduled' ? (
-                <Pressable style={styles.secondaryBtn} onPress={handleStart}>
-                  <Text style={styles.secondaryBtnText}>Start room</Text>
+                <Pressable style={[styles.secondaryBtn, busy && styles.btnDisabled]} onPress={handleStart} disabled={busy}>
+                  <Text style={styles.secondaryBtnText}>{busy ? 'Starting…' : 'Start room'}</Text>
+                </Pressable>
+              ) : null}
+              {room?.status === 'live' && !sessionForThisRoom ? (
+                <Pressable style={[styles.secondaryBtn, busy && styles.btnDisabled]} onPress={handleJoin} disabled={busy}>
+                  <Text style={styles.secondaryBtnText}>{busy ? 'Connecting…' : 'Connect audio'}</Text>
                 </Pressable>
               ) : null}
               <Pressable style={styles.secondaryBtn} onPress={handleInvite}>
                 <Text style={styles.secondaryBtnText}>Create co-host code</Text>
               </Pressable>
-              <Pressable style={styles.dangerBtn} onPress={handleEnd}>
-                <Text style={styles.dangerBtnText}>End room</Text>
-              </Pressable>
             </View>
+            {room?.status === 'live' ? (
+              <Pressable style={[styles.dangerBtnWide, busy && styles.btnDisabled]} onPress={handleEnd} disabled={busy}>
+                <Text style={styles.dangerBtnText}>{busy ? 'Ending…' : 'End live broadcast'}</Text>
+              </Pressable>
+            ) : null}
+            {room?.status === 'ended' ? (
+              <Text style={styles.helperText}>This broadcast has ended. Replay status is managed from the room data.</Text>
+            ) : null}
           </View>
         ) : null}
 
@@ -273,7 +364,11 @@ export default function LivePodcastRoomScreen() {
               <View style={styles.peopleWrap}>
                 {visibleParticipants.map((item) => (
                   <View key={item.identity} style={styles.personChip}>
-                    <View style={[styles.personDot, item.isSpeaking && styles.personDotLive]} />
+                    {item.isSpeaking ? (
+                      <SpeakingWave active compact color={tokens.colors.pink} />
+                    ) : (
+                      <View style={styles.personDot} />
+                    )}
                     <Text style={styles.personText} numberOfLines={1}>
                       {item.name}
                     </Text>
@@ -309,7 +404,7 @@ export default function LivePodcastRoomScreen() {
           </View>
         ) : null}
 
-        {!canModerate && room?.allow_raise_hand !== false ? (
+        {!canModerate && !isRoomHost && room?.allow_raise_hand !== false ? (
           <View style={styles.panel}>
             <Text style={styles.panelTitle}>Want to speak?</Text>
             <Text style={styles.panelText}>Raise your hand and the host can invite you on stage.</Text>
@@ -336,6 +431,35 @@ const styles = StyleSheet.create({
     borderBottomColor: tokens.colors.border,
     gap: 10,
   },
+  backBtn: {
+    minWidth: 76,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: tokens.colors.surfaceOverlay,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  backBtnText: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: tokens.colors.text,
+  },
+  headerCenter: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
+  headerTitle: { textAlign: 'center', fontSize: 16, fontWeight: '900', color: tokens.colors.text },
+  headerSubtitle: {
+    marginTop: 2,
+    textAlign: 'center',
+    fontSize: 11,
+    fontWeight: '800',
+    color: tokens.colors.textMuted,
+  },
   iconBtn: {
     width: 40,
     height: 40,
@@ -344,7 +468,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '900', color: tokens.colors.text },
+  iconBtnPlaceholder: {
+    width: 40,
+    height: 40,
+  },
   content: { padding: tokens.spacing.screenHorizontal, paddingBottom: 50, gap: 16 },
   hero: {
     backgroundColor: '#fff4f8',
@@ -353,6 +480,29 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(244,114,182,0.24)',
     padding: 18,
     gap: 8,
+  },
+  heroTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  heroCoverWrap: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    overflow: 'hidden',
+    backgroundColor: '#fff',
+  },
+  heroCover: {
+    width: '100%',
+    height: '100%',
+  },
+  heroCoverFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
   },
   livePill: {
     alignSelf: 'flex-start',
@@ -417,6 +567,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   secondaryBtnText: { color: tokens.colors.text, fontSize: 13, fontWeight: '900' },
+  btnDisabled: {
+    opacity: 0.6,
+  },
   dangerBtn: {
     minHeight: 44,
     paddingHorizontal: 16,
@@ -426,6 +579,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   dangerBtnText: { color: '#dc2626', fontSize: 13, fontWeight: '900' },
+  dangerBtnWide: {
+    minHeight: 48,
+    borderRadius: 14,
+    backgroundColor: 'rgba(239,68,68,0.10)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
   queueRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -464,6 +625,48 @@ const styles = StyleSheet.create({
   personDotLive: { backgroundColor: tokens.colors.pink },
   personText: { maxWidth: 140, fontSize: 12, fontWeight: '800', color: tokens.colors.text },
   meTag: { fontSize: 11, fontWeight: '900', color: tokens.colors.pink },
+  waveInfoRow: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  waveInfoText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: tokens.colors.textSecondary,
+  },
+  captionCard: {
+    borderRadius: 22,
+    backgroundColor: '#0f172a',
+    padding: 16,
+    gap: 8,
+  },
+  captionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  captionTitle: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  captionLine: {
+    color: '#fff',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  captionLineMuted: {
+    color: 'rgba(255,255,255,0.78)',
+  },
+  captionEmpty: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
   infoBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',

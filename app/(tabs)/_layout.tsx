@@ -6,10 +6,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { auth } from '@/lib/firebase';
-import { savePushTokenToFirestore, showLocalNotification } from '@/lib/pushNotifications';
-import * as Notifications from 'expo-notifications';
+import { addNotificationResponseListener, notificationsRuntimeSupported, savePushTokenToFirestore, setNotificationBadgeCount, showLocalNotification } from '@/lib/pushNotifications';
 import { onAuthStateChanged } from 'firebase/auth';
-import { getConversations, getUnreadNotificationCount, markNotificationRead, setGameInviteDeclined, subscribeToGameInvites, subscribeToUnreadNotificationCount } from '@/app/functions';
+import { getConversations, getUnreadNotificationCount, markNotificationRead, setGameInviteDeclined, subscribeToGameInvites, subscribeToLivePodcastNotifications, subscribeToUnreadNotificationCount } from '@/app/functions';
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
@@ -17,6 +16,7 @@ export default function TabLayout() {
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const gameInvitesShownRef = useRef<Set<string>>(new Set());
+  const livePodcastsShownRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     loadUnreadCounts();
@@ -32,20 +32,31 @@ export default function TabLayout() {
   }, [router]);
 
   useEffect(() => {
-    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const d = response.notification.request.content.data as { type?: string; match_id?: string; game_type?: string; group_id?: string; room_id?: string };
-      if (d?.type === 'game_invite' && d?.match_id) {
-        const gameType = (d?.game_type || 'tictactoe').toLowerCase();
-        router.push({ pathname: '/game-webview', params: { room: d.match_id, gameType } } as any);
-      } else if (d?.type === 'group_streak' && d?.group_id) {
-        router.push(`/group?groupId=${d.group_id}` as any);
-      } else if (d?.type === 'match_accepted') {
-        router.replace('/(tabs)/matches' as any);
-      } else if (d?.type === 'live_podcast_started' && d?.room_id) {
-        router.push(`/live/${d.room_id}` as any);
+    let sub: { remove: () => void } | null = null;
+    let cancelled = false;
+    (async () => {
+      sub = await addNotificationResponseListener((response) => {
+        const d = response.notification.request.content.data as { type?: string; match_id?: string; game_type?: string; group_id?: string; room_id?: string };
+        if (d?.type === 'game_invite' && d?.match_id) {
+          const gameType = (d?.game_type || 'tictactoe').toLowerCase();
+          router.push({ pathname: '/game-webview', params: { room: d.match_id, gameType } } as any);
+        } else if (d?.type === 'group_streak' && d?.group_id) {
+          router.push(`/group?groupId=${d.group_id}` as any);
+        } else if (d?.type === 'match_accepted') {
+          router.replace('/(tabs)/matches' as any);
+        } else if (d?.type === 'live_podcast_started' && d?.room_id) {
+          router.push(`/live/${d.room_id}` as any);
+        }
+      });
+      if (cancelled) {
+        sub?.remove();
+        sub = null;
       }
-    });
-    return () => sub.remove();
+    })();
+    return () => {
+      cancelled = true;
+      sub?.remove();
+    };
   }, [router]);
 
   // Keep app icon badge in sync with unread notification count
@@ -53,7 +64,7 @@ export default function TabLayout() {
     if (!auth.currentUser) return;
     const unsub = subscribeToUnreadNotificationCount((count) => {
       setUnreadNotificationCount(count);
-      Notifications.setBadgeCountAsync(count).catch(() => {});
+      setNotificationBadgeCount(count);
     });
     return () => unsub();
   }, [router]);
@@ -61,9 +72,12 @@ export default function TabLayout() {
   // Listen for game invites app-wide (any tab) — only subscribe once auth is ready
   useEffect(() => {
     let inviteUnsub: (() => void) | undefined;
+    let liveUnsub: (() => void) | undefined;
     const authUnsub = onAuthStateChanged(auth, (user) => {
       inviteUnsub?.();
+      liveUnsub?.();
       inviteUnsub = undefined;
+      liveUnsub = undefined;
       if (!user) return;
       inviteUnsub = subscribeToGameInvites((invites) => {
         const unread = invites.filter((i) => !i.read);
@@ -94,9 +108,34 @@ export default function TabLayout() {
           ]
         );
       });
+      liveUnsub = subscribeToLivePodcastNotifications((items) => {
+        const unread = items.filter((item) => !item.read);
+        const latest = unread[0];
+        if (!latest || livePodcastsShownRef.current.has(latest.id)) return;
+        livePodcastsShownRef.current.add(latest.id);
+        showLocalNotification(
+          `${latest.host_name || 'Therapist'} is live now`,
+          latest.body || 'A live podcast has started. Tap to join.',
+          {
+            type: 'live_podcast_started',
+            room_id: latest.room_id,
+          }
+        ).then((shown) => {
+          if (shown || notificationsRuntimeSupported()) return;
+          Alert.alert(
+            `${latest.host_name || 'Therapist'} is live now`,
+            latest.body || 'A live podcast has started. Tap to join.',
+            [
+              { text: 'Later' },
+              { text: 'Open room', onPress: () => router.push(`/live/${latest.room_id}` as any) },
+            ]
+          );
+        });
+      });
     });
     return () => {
       inviteUnsub?.();
+      liveUnsub?.();
       authUnsub();
     };
   }, [router]);

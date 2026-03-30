@@ -1,4 +1,5 @@
 import * as Haptics from 'expo-haptics';
+import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
@@ -29,7 +30,8 @@ interface Notification {
     | 'match_accepted'
     | 'game_invite'
     | 'post_flagged'
-    | 'post_approved_safe';
+    | 'post_approved_safe'
+    | 'live_podcast_started';
   created_at: string;
   read: boolean;
   profiles: {
@@ -70,6 +72,9 @@ interface Notification {
   title?: string;
   body?: string;
   data?: Record<string, string>;
+  room_id?: string;
+  cover_url?: string | null;
+  host_name?: string;
 }
 
 export default function NotificationsScreen() {
@@ -155,6 +160,8 @@ export default function NotificationsScreen() {
         return 'A post was auto-flagged for review. Tap to open Flagged stuff.';
       case 'post_approved_safe':
         return 'Your flagged post was approved as safe. It’s visible on the feed again.';
+      case 'live_podcast_started':
+        return notification.body || `${notification.host_name || username} started a live podcast.`;
       default:
         return 'New notification';
     }
@@ -188,19 +195,27 @@ export default function NotificationsScreen() {
       router.push('/admin/flagged' as any);
     } else if (notification.type === 'post_approved_safe' && notification.post_id) {
       router.push(`/comments?postId=${notification.post_id}` as any);
+    } else if (notification.type === 'live_podcast_started' && notification.room_id) {
+      router.push(`/live/${notification.room_id}` as any);
     }
   };
 
   const renderNotification = ({ item }: { item: Notification }) => {
     const username = item.profiles?.display_name || item.profiles?.anonymous_username || 'Someone';
+    const isLivePodcast = item.type === 'live_podcast_started';
     
     return (
       <Pressable 
-        style={[styles.notificationItem, !item.read && styles.unreadNotification]}
+        style={[styles.notificationItem, !item.read && styles.unreadNotification, isLivePodcast && styles.liveNotificationItem]}
         onPress={() => handleNotificationPress(item)}
       >
         <View style={styles.notificationAvatar}>
-          {item.profiles.avatar_url ? (
+          {isLivePodcast && item.cover_url ? (
+            <Image 
+              source={{ uri: item.cover_url }} 
+              style={styles.avatarImage} 
+            />
+          ) : item.profiles.avatar_url ? (
             <Image 
               source={{ uri: item.profiles.avatar_url }} 
               style={styles.avatarImage} 
@@ -215,43 +230,68 @@ export default function NotificationsScreen() {
         </View>
         
         <View style={styles.notificationContent}>
-          <Text style={styles.notificationText}>
-            {getNotificationText(item)}
-          </Text>
+          {isLivePodcast ? (
+            <>
+              <View style={styles.liveNotifTopRow}>
+                <View style={styles.liveNotifBadge}>
+                  <Text style={styles.liveNotifBadgeText}>LIVE</Text>
+                </View>
+                <Text style={styles.notificationTime}>
+                  {formatTimeAgo(item.created_at)}
+                </Text>
+              </View>
+              <Text style={styles.liveNotifTitle}>
+                {item.title || `${item.host_name || username} is live now`}
+              </Text>
+              <Text style={styles.notificationText}>
+                {getNotificationText(item)}
+              </Text>
+              <View style={styles.liveNotifCta}>
+                <Text style={styles.liveNotifCtaText}>Open room</Text>
+                <Feather name="chevron-right" size={14} color="#2563eb" />
+              </View>
+            </>
+          ) : (
+            <Text style={styles.notificationText}>
+              {getNotificationText(item)}
+            </Text>
+          )}
           
           {item.type === 'comment' && item.comments && (
             <Text style={styles.commentPreview} numberOfLines={2}>
-              "{item.comments.content}"
+              {`"${item.comments.content}"`}
             </Text>
           )}
           
           {item.type === 'like' && item.posts && (
             <Text style={styles.postPreview} numberOfLines={1}>
-              "{item.posts.content}"
+              {`"${item.posts.content}"`}
             </Text>
           )}
           
           {item.type === 'new_post' && item.posts && (
             <Text style={styles.postPreview} numberOfLines={2}>
-              "{item.posts.content}"
+              {`"${item.posts.content}"`}
             </Text>
           )}
           
           {item.type === 'message' && item.messages && (
             <Text style={styles.commentPreview} numberOfLines={2}>
-              "{item.messages.content}"
+              {`"${item.messages.content}"`}
             </Text>
           )}
           
           {item.type === 'group_message' && item.group_messages && (
             <Text style={styles.commentPreview} numberOfLines={2}>
-              "{item.group_messages.content}"
+              {`"${item.group_messages.content}"`}
             </Text>
           )}
           
-          <Text style={styles.notificationTime}>
-            {formatTimeAgo(item.created_at)}
-          </Text>
+          {!isLivePodcast ? (
+            <Text style={styles.notificationTime}>
+              {formatTimeAgo(item.created_at)}
+            </Text>
+          ) : null}
         </View>
         
         {!item.read && <View style={styles.unreadDot} />}
@@ -278,7 +318,7 @@ export default function NotificationsScreen() {
         <View style={styles.emptyState}>
           <Text style={styles.emptyTitle}>No notifications yet</Text>
           <Text style={styles.emptySubtitle}>
-            You'll see notifications when someone accepts your match request, follows you, or likes your posts
+            You&apos;ll see notifications when someone accepts your match request, follows you, or likes your posts
           </Text>
         </View>
       ) : (
@@ -357,6 +397,9 @@ const styles = StyleSheet.create({
   unreadNotification: {
     backgroundColor: '#f8f9ff',
   },
+  liveNotificationItem: {
+    backgroundColor: '#eef4ff',
+  },
   notificationAvatar: {
     marginRight: 12,
   },
@@ -409,5 +452,44 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: '#ec4899',
+  },
+  liveNotifTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  liveNotifBadge: {
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#2563eb',
+  },
+  liveNotifBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  liveNotifTitle: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  liveNotifCta: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(37,99,235,0.10)',
+  },
+  liveNotifCtaText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#2563eb',
   },
 });

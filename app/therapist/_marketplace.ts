@@ -457,6 +457,10 @@ export function youtubeThumbnailUrl(videoId: string, highRes = true): string {
     : `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
 }
 
+export default function TherapistMarketplaceUtilsRoute() {
+  return null;
+}
+
 export type TherapistResourcePdfUploadResult = {
   fileUrl: string;
 };
