@@ -7,6 +7,18 @@ admin.initializeApp();
 
 const db = admin.firestore();
 
+/** Admins or anyone with a therapist_profiles doc can upload learning-resource PDFs/covers. */
+async function canUploadTherapistLearningFiles(uid) {
+  if (!uid) return false;
+  const userDoc = await db.collection('users').doc(uid).get();
+  if (userDoc.exists) {
+    const d = userDoc.data() || {};
+    if (d.is_admin === true || d.is_admin === 'true') return true;
+  }
+  const tp = await db.collection('therapist_profiles').doc(uid).get();
+  return tp.exists;
+}
+
 const UK_DEFAULT_THERAPIST_REQUIREMENTS = [
   {
     id: 'identity_photo_id',
@@ -220,7 +232,7 @@ exports.checkPostToxicity = functions
     }
   });
 
-// Admin-only: upload therapist resource PDF (books/articles). Body: { base64, contentType, fileName, resourceType?: 'book'|'article' }. Storage path: therapist_resources/books|articles/.... Returns { path }.
+// Upload therapist resource PDF (books/articles). Admins + therapist_profiles users. Body: { base64, contentType, fileName, resourceType?: 'book'|'article' }. Storage path: therapist_resources/books|articles/.... Returns { path }.
 exports.uploadTherapistResourceFile = functions
   .region('us-central1')
   .runWith({ timeoutSeconds: 60 })
@@ -228,10 +240,12 @@ exports.uploadTherapistResourceFile = functions
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
     }
-    const adminUid = context.auth.uid;
-    const adminDoc = await db.collection('users').doc(adminUid).get();
-    if (!adminDoc.exists || !adminDoc.data().is_admin) {
-      throw new functions.https.HttpsError('permission-denied', 'Only admins can upload therapist resources.');
+    const uid = context.auth.uid;
+    if (!(await canUploadTherapistLearningFiles(uid))) {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Only admins and therapists can upload learning resources.'
+      );
     }
     const { base64, contentType, fileName, resourceType } = data || {};
     if (!base64 || typeof base64 !== 'string' || !fileName || typeof fileName !== 'string' || !fileName.trim()) {
@@ -256,7 +270,7 @@ exports.uploadTherapistResourceFile = functions
     }
   });
 
-// Admin-only: PNG cover (first page rendered on client). Body: { base64, resourceType: 'book'|'article' }. Returns { path }.
+// PNG cover (first page rendered on client). Admins + therapist_profiles users. Body: { base64, resourceType: 'book'|'article' }. Returns { path }.
 exports.uploadTherapistResourceCover = functions
   .region('us-central1')
   .runWith({ timeoutSeconds: 60 })
@@ -264,10 +278,12 @@ exports.uploadTherapistResourceCover = functions
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
     }
-    const adminUid = context.auth.uid;
-    const adminDoc = await db.collection('users').doc(adminUid).get();
-    if (!adminDoc.exists || !adminDoc.data().is_admin) {
-      throw new functions.https.HttpsError('permission-denied', 'Only admins can upload resource covers.');
+    const uid = context.auth.uid;
+    if (!(await canUploadTherapistLearningFiles(uid))) {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Only admins and therapists can upload resource covers.'
+      );
     }
     const { base64, resourceType } = data || {};
     if (!base64 || typeof base64 !== 'string') {

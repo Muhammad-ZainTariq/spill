@@ -437,9 +437,42 @@ export type TherapistResource = {
   author?: string | null;
   /** @deprecated No longer set in app; list order is by date */
   order?: number | null;
+  /** Who created the doc; set for admin/therapist-created rows */
+  created_by_uid?: string | null;
+  created_by_role?: 'admin' | 'therapist' | null;
+  /** Show on member app /resources (default true if unset) */
+  visible_to_app_users?: boolean | null;
+  /** Show on therapist learning library (default true if unset) */
+  visible_in_therapist_library?: boolean | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
+
+/** Legacy docs without flags: treat as visible everywhere. */
+export function isResourceVisibleToAppUsers(r: TherapistResource): boolean {
+  return r.visible_to_app_users !== false;
+}
+
+export function isResourceVisibleInTherapistLibrary(r: TherapistResource): boolean {
+  return r.visible_in_therapist_library !== false;
+}
+
+export async function listResourcesForUserApp(max: number = 200): Promise<TherapistResource[]> {
+  const list = await listTherapistResources(max);
+  return list.filter(isResourceVisibleToAppUsers);
+}
+
+/** Therapist library: global items flagged for therapists plus everything this therapist created. */
+export async function listResourcesForTherapistLibrary(
+  therapistUid: string,
+  max: number = 200
+): Promise<TherapistResource[]> {
+  const uid = String(therapistUid || '').trim();
+  const list = await listTherapistResources(max);
+  return list.filter(
+    (r) => isResourceVisibleInTherapistLibrary(r) || (!!uid && r.created_by_uid === uid)
+  );
+}
 
 /** Extract YouTube video ID from URL */
 export function extractYoutubeId(url: string | null | undefined): string | null {
@@ -485,7 +518,7 @@ export const uploadTherapistResourcePdf = async (
   return { fileUrl };
 };
 
-/** Upload PNG (raw base64, no data: prefix) from client-rendered PDF first page. Admin-only callable. */
+/** Upload PNG (raw base64, no data: prefix) from client-rendered PDF first page. Callable for admins and therapists. */
 export const uploadTherapistResourceCoverPng = async (
   pngBase64: string,
   resourceType: 'book' | 'article'

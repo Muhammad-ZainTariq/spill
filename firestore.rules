@@ -11,6 +11,20 @@ service cloud.firestore {
         );
     }
 
+    function isTherapist() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/therapist_profiles/$(request.auth.uid));
+    }
+
+    // Missing bool fields behave like visible (legacy docs).
+    function therapistResourceVisibleToAppUsers() {
+      return resource.data.visible_to_app_users != false;
+    }
+
+    function therapistResourceVisibleInTherapistLibrary() {
+      return resource.data.visible_in_therapist_library != false;
+    }
+
     // Users: anyone authenticated can read (for matching list, profiles); only own doc writable
     match /users/{userId} {
       allow read: if request.auth != null;
@@ -307,10 +321,37 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Therapist resources (videos, books, articles) – admin adds, all authenticated users can read
+    // Learning resources: admin + therapists (own docs). Visibility flags gate member vs therapist library.
     match /therapist_resources/{resourceId} {
-      allow read: if request.auth != null;
-      allow create, update, delete: if isAdmin();
+      allow read: if request.auth != null && (
+        isAdmin()
+        || resource.data.created_by_uid == request.auth.uid
+        || therapistResourceVisibleToAppUsers()
+        || (isTherapist() && therapistResourceVisibleInTherapistLibrary())
+      );
+
+      allow create: if request.auth != null && (
+        isAdmin()
+        || (
+          isTherapist()
+          && request.resource.data.created_by_uid == request.auth.uid
+          && request.resource.data.created_by_role == 'therapist'
+        )
+      );
+
+      allow update: if request.auth != null && (
+        isAdmin()
+        || (
+          resource.data.created_by_uid == request.auth.uid
+          && request.resource.data.created_by_uid == resource.data.created_by_uid
+          && request.resource.data.created_by_role == resource.data.created_by_role
+        )
+      );
+
+      allow delete: if request.auth != null && (
+        isAdmin()
+        || resource.data.created_by_uid == request.auth.uid
+      );
     }
   }
 }

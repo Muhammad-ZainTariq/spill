@@ -4,6 +4,8 @@ import {
   extractYoutubeId,
   listTherapistResources,
   getResourceCategoryLabel,
+  isResourceVisibleInTherapistLibrary,
+  isResourceVisibleToAppUsers,
   RESOURCE_CATEGORIES,
   RESOURCE_CATEGORY_LABELS,
   RESOURCE_TYPES,
@@ -36,11 +38,13 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { auth } from '@/lib/firebase';
 import { tokens } from '@/app/ui/tokens';
 import { BookCoverImage } from '@/app/components/LearningResourceWidgets';
 import { MAX_PDF_BASE64_CHARS_FOR_COVER, PdfCoverWebView } from '@/app/components/PdfCoverWebView';
@@ -92,6 +96,9 @@ export default function AdminResourcesScreen() {
   const [author, setAuthor] = useState('');
   const [aiField, setAiField] = useState<null | 'description' | 'author' | 'category'>(null);
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
+  /** Who can see this resource (member app vs therapist library). */
+  const [visibleToAppUsers, setVisibleToAppUsers] = useState(true);
+  const [visibleInTherapistLibrary, setVisibleInTherapistLibrary] = useState(true);
   const [pendingCoverPdf, setPendingCoverPdf] = useState<string | null>(null);
   const [coverJobKey, setCoverJobKey] = useState(0);
   const coverResolveRef = useRef<((png: string | null) => void) | null>(null);
@@ -146,6 +153,8 @@ export default function AdminResourcesScreen() {
     setType('video');
     setCategory(RESOURCE_CATEGORIES[0] || 'psychotherapy');
     setAuthor('');
+    setVisibleToAppUsers(true);
+    setVisibleInTherapistLibrary(true);
     setEditing(null);
     setShowAdd(false);
   };
@@ -161,6 +170,8 @@ export default function AdminResourcesScreen() {
     setType(r.type);
     setCategory(resolvePickerCategoryId(r.category));
     setAuthor(r.author || '');
+    setVisibleToAppUsers(isResourceVisibleToAppUsers(r));
+    setVisibleInTherapistLibrary(isResourceVisibleInTherapistLibrary(r));
     setShowAdd(true);
   };
 
@@ -337,6 +348,13 @@ export default function AdminResourcesScreen() {
       if (editing) {
         payload.order = null;
       }
+      payload.visible_to_app_users = visibleToAppUsers;
+      payload.visible_in_therapist_library = visibleInTherapistLibrary;
+      if (!editing) {
+        const u = auth.currentUser;
+        payload.created_by_uid = u?.uid ?? null;
+        payload.created_by_role = 'admin';
+      }
       if (type === 'video') {
         payload.url = url.trim();
         payload.youtube_id = extractYoutubeId(url) || null;
@@ -355,7 +373,7 @@ export default function AdminResourcesScreen() {
       } else {
         await createTherapistResource(payload);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        Alert.alert('Added', 'Resource added. Therapists can now see it.');
+        Alert.alert('Added', 'Resource added. Adjust member / therapist visibility anytime in this form.');
       }
       resetForm();
       load();
@@ -432,6 +450,17 @@ export default function AdminResourcesScreen() {
                     <View style={[styles.badge, styles.badgeCat]}>
                       <Text style={styles.badgeText}>{getResourceCategoryLabel(item.category)}</Text>
                     </View>
+                  </View>
+                  <View style={styles.visRow}>
+                    <Text style={[styles.visHint, !isResourceVisibleToAppUsers(item) && styles.visHintOff]}>
+                      Members
+                    </Text>
+                    <Text style={styles.visDot}>·</Text>
+                    <Text
+                      style={[styles.visHint, !isResourceVisibleInTherapistLibrary(item) && styles.visHintOff]}
+                    >
+                      Therapists
+                    </Text>
                   </View>
                 </View>
                 {item.description ? (
@@ -669,6 +698,26 @@ export default function AdminResourcesScreen() {
                 placeholder="e.g. Bessel van der Kolk"
                 placeholderTextColor={tokens.colors.textMuted}
               />
+              <Text style={styles.label}>Visibility</Text>
+              <Text style={styles.hintMuted}>Control where this resource appears for members and therapists.</Text>
+              <View style={styles.switchRow}>
+                <Text style={styles.switchLabel}>Member app (Learning resources)</Text>
+                <Switch
+                  value={visibleToAppUsers}
+                  onValueChange={setVisibleToAppUsers}
+                  trackColor={{ false: '#cbd5e1', true: 'rgba(244,114,182,0.5)' }}
+                  thumbColor={visibleToAppUsers ? tokens.colors.pink : '#f4f4f5'}
+                />
+              </View>
+              <View style={styles.switchRow}>
+                <Text style={styles.switchLabel}>Therapist library</Text>
+                <Switch
+                  value={visibleInTherapistLibrary}
+                  onValueChange={setVisibleInTherapistLibrary}
+                  trackColor={{ false: '#cbd5e1', true: 'rgba(244,114,182,0.5)' }}
+                  thumbColor={visibleInTherapistLibrary ? tokens.colors.pink : '#f4f4f5'}
+                />
+              </View>
               <Pressable
                 style={[styles.saveBtn, saving && { opacity: 0.6 }]}
                 onPress={handleSave}
@@ -824,6 +873,27 @@ const styles = StyleSheet.create({
   },
   badgeCat: { backgroundColor: 'rgba(16,185,129,0.12)' },
   badgeText: { fontSize: 11, fontWeight: '700', color: tokens.colors.textSecondary },
+  visRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    flexWrap: 'wrap',
+  },
+  visHint: { fontSize: 11, fontWeight: '700', color: tokens.colors.textSecondary },
+  visHintOff: { opacity: 0.35 },
+  visDot: { fontSize: 11, color: tokens.colors.textMuted },
+  hintMuted: { fontSize: 12, color: tokens.colors.textMuted, marginBottom: 8, marginTop: -4 },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: tokens.colors.border,
+  },
+  switchLabel: { flex: 1, fontSize: 14, color: tokens.colors.text, fontWeight: '600' },
   cardDesc: { fontSize: 13, color: tokens.colors.textSecondary, lineHeight: 18, marginTop: 4 },
   linkRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
   linkText: { flex: 1, fontSize: 12, color: tokens.colors.pink, fontWeight: '600' },
