@@ -40,6 +40,8 @@ export type LivePodcastRoom = {
   allow_listener_speaking?: boolean;
   livekit_room_name?: string;
   co_host_ids?: string[];
+  /** UIDs approved via raise-hand (granted speaker role on next join). */
+  approved_speaker_uids?: string[];
   /** ISO time when server should send “starting soon” reminder pushes (subscribers + host). */
   reminder_fire_at?: string | null;
   scheduled_reminder_sent?: boolean;
@@ -54,6 +56,8 @@ export type SpeakerRequest = {
   id: string;
   room_id: string;
   user_uid: string;
+  user_display_name?: string;
+  user_avatar_url?: string | null;
   note?: string;
   status: 'waiting' | 'approved' | 'declined' | 'cancelled';
   created_at?: string;
@@ -325,6 +329,15 @@ export async function requestLivePodcastSpeaker(roomId: string, note?: string) {
 export async function resolveLivePodcastSpeakerRequest(requestId: string, approve: boolean) {
   const fn = httpsCallable(functions, 'resolveLivePodcastSpeakerRequest');
   await fn({ requestId, approve });
+}
+
+export async function moderateLivePodcastParticipant(
+  roomId: string,
+  targetUid: string,
+  action: 'kick' | 'mute' | 'unmute'
+) {
+  const fn = httpsCallable(functions, 'moderateLivePodcastParticipant', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
+  await fn({ roomId, targetUid, action });
 }
 
 export async function setLivePodcastReminder(roomId: string) {

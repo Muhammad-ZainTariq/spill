@@ -1,7 +1,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { randomBytes } = require('crypto');
-const { AccessToken } = require('livekit-server-sdk');
+const { AccessToken, RoomServiceClient } = require('livekit-server-sdk');
 
 const db = admin.firestore();
 
@@ -54,6 +54,18 @@ function getLiveKitConfig() {
     );
   }
   return { apiKey, apiSecret, serverUrl };
+}
+
+function livekitHttpBaseUrl(serverUrl) {
+  const s = String(serverUrl || '').trim();
+  if (s.startsWith('wss://')) return `https://${s.slice(6)}`;
+  if (s.startsWith('ws://')) return `http://${s.slice(5)}`;
+  return s;
+}
+
+function getRoomServiceClient() {
+  const { apiKey, apiSecret, serverUrl } = getLiveKitConfig();
+  return new RoomServiceClient(livekitHttpBaseUrl(serverUrl), apiKey, apiSecret);
 }
 
 function getAssemblyAiConfig() {
@@ -212,6 +224,7 @@ function sanitizeRoom(data, id) {
     allow_listener_speaking: data.allow_listener_speaking === true,
     livekit_room_name: String(data.livekit_room_name || `podcast-${id}`),
     co_host_ids: Array.isArray(data.co_host_ids) ? data.co_host_ids : [],
+    approved_speaker_uids: Array.isArray(data.approved_speaker_uids) ? data.approved_speaker_uids : [],
     listener_count_current: Number(data.listener_count_current || 0),
     listener_count_peak: Number(data.listener_count_peak || 0),
     total_join_count: Number(data.total_join_count || 0),
@@ -223,6 +236,7 @@ function sanitizeRoom(data, id) {
 function resolveRole({ room, uid, inviteDoc }) {
   if (uid === room.host_uid) return 'host';
   if (Array.isArray(room.co_host_ids) && room.co_host_ids.includes(uid)) return 'co_host';
+  if (Array.isArray(room.approved_speaker_uids) && room.approved_speaker_uids.includes(uid)) return 'speaker';
   if (!inviteDoc) return 'listener';
   const role = String(inviteDoc.role || '').trim();
   if (role === 'co_host') return 'co_host';
@@ -474,6 +488,7 @@ exports.createLivePodcastRoom = functions.region('us-central1').https.onCall(asy
     allow_listener_speaking: data?.allow_listener_speaking === true,
     livekit_room_name: `podcast-${ref.id}`,
     co_host_ids: [],
+    approved_speaker_uids: [],
     listener_count_current: 0,
     listener_count_peak: 0,
     total_join_count: 0,
@@ -744,18 +759,29 @@ exports.requestLivePodcastSpeaker = functions.region('us-central1').https.onCall
     throw new functions.https.HttpsError('failed-precondition', 'Raise hand is disabled for this room.');
   }
 
-  const existing = await db
+  const prior = await db
     .collection(COLLECTIONS.speakerRequests)
     .where('room_id', '==', roomId)
     .where('user_uid', '==', uid)
-    .where('status', '==', 'waiting')
-    .limit(1)
+    .limit(20)
     .get();
-  if (!existing.empty) return { ok: true, alreadyWaiting: true };
+  const statuses = prior.docs.map((d) => String(d.data()?.status || ''));
+  if (statuses.includes('waiting')) {
+    return { ok: true, alreadyWaiting: true };
+  }
+  if (statuses.includes('approved')) {
+    return { ok: true, alreadyApproved: true };
+  }
+
+  const user = await getUserDoc(uid);
+  const user_display_name = String(user.display_name || user.anonymous_username || 'Member').trim() || 'Member';
+  const user_avatar_url = typeof user.avatar_url === 'string' && user.avatar_url.trim() ? user.avatar_url.trim() : null;
 
   await db.collection(COLLECTIONS.speakerRequests).add({
     room_id: roomId,
     user_uid: uid,
+    user_display_name,
+    user_avatar_url,
     note: String(data?.note || '').trim(),
     status: 'waiting',
     created_at: nowIso(),
@@ -787,8 +813,91 @@ exports.resolveLivePodcastSpeakerRequest = functions.region('us-central1').https
     decided_at: nowIso(),
     decided_by_uid: uid,
   });
+
+  const roomIdStr = String(request.room_id || '');
+  const targetUid = String(request.user_uid || '').trim();
+  if (approve && roomIdStr && targetUid) {
+    await db.collection(COLLECTIONS.rooms).doc(roomIdStr).update({
+      approved_speaker_uids: admin.firestore.FieldValue.arrayUnion(targetUid),
+      updated_at: nowIso(),
+    });
+  }
+
   await logAudit(String(request.room_id || ''), uid, approve ? 'speaker_request_approved' : 'speaker_request_declined', String(request.user_uid || ''), { requestId });
   return { ok: true };
+});
+
+exports.moderateLivePodcastParticipant = functions.region('us-central1').https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+  const uid = context.auth.uid;
+  const roomId = String(data?.roomId || '').trim();
+  const targetUid = String(data?.targetUid || '').trim();
+  const action = String(data?.action || '').trim().toLowerCase();
+  if (!roomId || !targetUid || !['kick', 'mute', 'unmute'].includes(action)) {
+    throw new functions.https.HttpsError('invalid-argument', 'roomId, targetUid, and action (kick|mute|unmute) are required.');
+  }
+  if (targetUid === uid) {
+    throw new functions.https.HttpsError('invalid-argument', 'Cannot moderate yourself.');
+  }
+
+  const roomRef = db.collection(COLLECTIONS.rooms).doc(roomId);
+  const roomSnap = await roomRef.get();
+  if (!roomSnap.exists) throw new functions.https.HttpsError('not-found', 'Room not found.');
+  const room = roomSnap.data() || {};
+  if (room.host_uid !== uid && !(Array.isArray(room.co_host_ids) && room.co_host_ids.includes(uid))) {
+    throw new functions.https.HttpsError('permission-denied', 'Only host or co-host can moderate.');
+  }
+  if (targetUid === room.host_uid) {
+    throw new functions.https.HttpsError('failed-precondition', 'Cannot moderate the host.');
+  }
+
+  const roomName = String(room.livekit_room_name || '').trim();
+  if (!roomName) throw new functions.https.HttpsError('failed-precondition', 'Room is missing LiveKit name.');
+
+  let svc;
+  try {
+    svc = getRoomServiceClient();
+  } catch (e) {
+    throw new functions.https.HttpsError('failed-precondition', 'LiveKit is not configured for moderation.');
+  }
+
+  try {
+    if (action === 'kick') {
+      await svc.removeParticipant(roomName, targetUid);
+      await roomRef.update({
+        approved_speaker_uids: admin.firestore.FieldValue.arrayRemove(targetUid),
+        updated_at: nowIso(),
+      });
+      await logAudit(roomId, uid, 'participant_kicked', targetUid, {});
+      return { ok: true };
+    }
+
+    let target;
+    try {
+      target = await svc.getParticipant(roomName, targetUid);
+    } catch (e) {
+      throw new functions.https.HttpsError('not-found', 'That participant is not connected right now.');
+    }
+
+    const audioTrack = (target.tracks || []).find((t) => {
+      const ty = t?.type;
+      return ty === 0 || ty === 'AUDIO' || Number(ty) === 0;
+    });
+    if (!audioTrack?.sid) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'No published microphone track for this participant yet.'
+      );
+    }
+    await svc.mutePublishedTrack(roomName, targetUid, audioTrack.sid, action === 'mute');
+
+    await logAudit(roomId, uid, action === 'mute' ? 'participant_muted' : 'participant_unmuted', targetUid, {});
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof functions.https.HttpsError) throw err;
+    console.error('moderateLivePodcastParticipant failed', { roomId, targetUid, action, message: err?.message });
+    throw new functions.https.HttpsError('internal', err?.message || 'Moderation failed.');
+  }
 });
 
 exports.setLivePodcastReminder = functions.region('us-central1').https.onCall(async (data, context) => {

@@ -13,6 +13,7 @@ import {
   joinLivePodcastRoom,
   leaveLivePodcastRoom,
   LivePodcastTranscriptSegment,
+  moderateLivePodcastParticipant,
   requestLivePodcastSpeaker,
   resolveLivePodcastSpeakerRequest,
   SpeakerRequest,
@@ -68,6 +69,7 @@ export function LivePodcastOverlay({
   const [speakerRequests, setSpeakerRequests] = useState<SpeakerRequest[]>([]);
   const [transcriptSegments, setTranscriptSegments] = useState<LivePodcastTranscriptSegment[]>([]);
   const [busy, setBusy] = useState(false);
+  const [modBusy, setModBusy] = useState<string | null>(null);
 
   const sessionForThisRoom = !!activeSession && !!roomId && activeSession.room.id === roomId;
   const activeRole = sessionForThisRoom ? activeSession?.role : null;
@@ -82,10 +84,16 @@ export function LivePodcastOverlay({
     [participants]
   );
   const someoneSpeaking = visibleParticipants.some((p) => p.isSpeaking);
-  const currentUserRequest = useMemo(
-    () => speakerRequests.find((item) => item.user_uid === auth.currentUser?.uid),
-    [speakerRequests]
-  );
+  const currentUserRequest = useMemo(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return undefined;
+    const mine = speakerRequests.filter((item) => item.user_uid === uid);
+    if (!mine.length) return undefined;
+    return mine.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
+  }, [speakerRequests]);
+
+  const requestBlocked =
+    busy || currentUserRequest?.status === 'waiting' || currentUserRequest?.status === 'approved';
 
   useEffect(() => {
     if (!roomId || !visible) return;
@@ -171,7 +179,7 @@ export function LivePodcastOverlay({
   };
 
   const handleRequestMic = async () => {
-    if (!roomId) return;
+    if (!roomId || requestBlocked) return;
     setBusy(true);
     try {
       await requestLivePodcastSpeaker(roomId, 'Requested from live room sheet');
@@ -180,6 +188,18 @@ export function LivePodcastOverlay({
       Alert.alert('Could not send request', error?.message || 'Try again.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleModerate = async (targetUid: string, action: 'kick' | 'mute' | 'unmute') => {
+    if (!roomId) return;
+    setModBusy(`${targetUid}:${action}`);
+    try {
+      await moderateLivePodcastParticipant(roomId, targetUid, action);
+    } catch (error: any) {
+      Alert.alert('Could not update participant', error?.message || 'Try again.');
+    } finally {
+      setModBusy(null);
     }
   };
 
@@ -276,7 +296,13 @@ export function LivePodcastOverlay({
                         color={tokens.colors.pink}
                       />
                       <Text style={styles.personRole}>
-                        {participant.isLocal ? 'You' : participant.identity === room?.host_uid ? 'Host' : 'Listener'}
+                        {participant.isLocal
+                          ? 'You'
+                          : participant.identity === room?.host_uid
+                            ? 'Host'
+                            : room?.approved_speaker_uids?.includes(participant.identity)
+                              ? 'Speaker'
+                              : 'Listener'}
                       </Text>
                     </View>
                   </View>
@@ -328,9 +354,9 @@ export function LivePodcastOverlay({
                 {activeRole === 'listener' && room?.allow_raise_hand !== false ? (
                   <>
                     <Pressable
-                      style={[styles.requestBtn, busy && styles.btnDisabled]}
+                      style={[styles.requestBtn, requestBlocked && styles.btnDisabled]}
                       onPress={handleRequestMic}
-                      disabled={busy || currentUserRequest?.status === 'waiting'}
+                      disabled={requestBlocked}
                     >
                       <Feather name="user-plus" size={16} color={tokens.colors.pink} />
                       <Text style={styles.requestBtnText}>
@@ -361,7 +387,7 @@ export function LivePodcastOverlay({
                   <Text style={styles.primaryBtnText}>{busy ? 'Joining…' : 'Start listening'}</Text>
                 </Pressable>
                 {room?.allow_raise_hand !== false ? (
-                  <Pressable style={[styles.requestBtn, busy && styles.btnDisabled]} onPress={handleRequestMic} disabled={busy || currentUserRequest?.status === 'waiting'}>
+                  <Pressable style={[styles.requestBtn, requestBlocked && styles.btnDisabled]} onPress={handleRequestMic} disabled={requestBlocked}>
                     <Feather name="user-plus" size={16} color={tokens.colors.pink} />
                     <Text style={styles.requestBtnText}>
                       {currentUserRequest?.status === 'waiting'
@@ -408,7 +434,23 @@ export function LivePodcastOverlay({
                 <Text style={styles.panelText}>Approve people who want mic access while you are broadcasting.</Text>
                 {pendingRequests.map((item) => (
                   <View key={item.id} style={styles.queueRow}>
-                    <Text style={styles.queueText} numberOfLines={1}>{item.user_uid}</Text>
+                    <View style={styles.queueIdentity}>
+                      <View style={styles.queueAvatar}>
+                        {item.user_avatar_url ? (
+                          <Image source={{ uri: item.user_avatar_url }} style={styles.queueAvatarImg} contentFit="cover" />
+                        ) : (
+                          <Text style={styles.queueAvatarFallback}>
+                            {(item.user_display_name || item.user_uid || '?').charAt(0).toUpperCase()}
+                          </Text>
+                        )}
+                      </View>
+                      <View style={styles.queueIdentityText}>
+                        <Text style={styles.queueText} numberOfLines={1}>
+                          {item.user_display_name?.trim() || `Member ${String(item.user_uid || '').slice(0, 8)}`}
+                        </Text>
+                        {!!item.note ? <Text style={styles.queueNote}>{item.note}</Text> : null}
+                      </View>
+                    </View>
                     <View style={styles.queueActions}>
                       <Pressable style={styles.queueApprove} onPress={() => resolveLivePodcastSpeakerRequest(item.id, true)}>
                         <Text style={styles.queueApproveText}>Approve</Text>
@@ -419,6 +461,67 @@ export function LivePodcastOverlay({
                     </View>
                   </View>
                 ))}
+              </View>
+            ) : null}
+
+            {canModerate && (room?.approved_speaker_uids?.length ?? 0) > 0 ? (
+              <View style={styles.actionPanel}>
+                <Text style={styles.panelTitle}>On stage</Text>
+                <Text style={styles.panelText}>Kick removes them from the room; mute/unmute needs them to be connected with a mic.</Text>
+                {(room?.approved_speaker_uids || [])
+                  .filter((stageUid) => stageUid && stageUid !== room.host_uid)
+                  .map((stageUid) => {
+                    const reqMeta = speakerRequests
+                      .filter((r) => r.user_uid === stageUid)
+                      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
+                    const label =
+                      reqMeta?.user_display_name?.trim() ||
+                      visibleParticipants.find((p) => p.identity === stageUid)?.name ||
+                      `Member ${stageUid.slice(0, 8)}`;
+                    const avatarUrl = reqMeta?.user_avatar_url;
+                    const busyKey = (action: string) => modBusy === `${stageUid}:${action}`;
+                    return (
+                      <View key={stageUid} style={styles.queueRow}>
+                        <View style={styles.queueIdentity}>
+                          <View style={styles.queueAvatar}>
+                            {avatarUrl ? (
+                              <Image source={{ uri: avatarUrl }} style={styles.queueAvatarImg} contentFit="cover" />
+                            ) : (
+                              <Text style={styles.queueAvatarFallback}>{label.charAt(0).toUpperCase()}</Text>
+                            )}
+                          </View>
+                          <View style={styles.queueIdentityText}>
+                            <Text style={styles.queueText} numberOfLines={1}>
+                              {label}
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={styles.modActions}>
+                          <Pressable
+                            style={[styles.modBtn, busyKey('mute') && styles.btnDisabled]}
+                            disabled={!!modBusy}
+                            onPress={() => handleModerate(stageUid, 'mute')}
+                          >
+                            <Text style={styles.modBtnText}>Mute</Text>
+                          </Pressable>
+                          <Pressable
+                            style={[styles.modBtn, busyKey('unmute') && styles.btnDisabled]}
+                            disabled={!!modBusy}
+                            onPress={() => handleModerate(stageUid, 'unmute')}
+                          >
+                            <Text style={styles.modBtnText}>Unmute</Text>
+                          </Pressable>
+                          <Pressable
+                            style={[styles.modBtnDanger, busyKey('kick') && styles.btnDisabled]}
+                            disabled={!!modBusy}
+                            onPress={() => handleModerate(stageUid, 'kick')}
+                          >
+                            <Text style={styles.modBtnDangerText}>Kick</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    );
+                  })}
               </View>
             ) : null}
           </ScrollView>
@@ -764,9 +867,44 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
+    flexWrap: 'wrap',
+  },
+  queueIdentity: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 0,
+  },
+  queueAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: 'hidden',
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  queueAvatarImg: {
+    width: '100%',
+    height: '100%',
+  },
+  queueAvatarFallback: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  queueIdentityText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  queueNote: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
   },
   queueText: {
-    flex: 1,
     fontSize: 13,
     fontWeight: '800',
     color: '#0f172a',
@@ -774,6 +912,34 @@ const styles = StyleSheet.create({
   queueActions: {
     flexDirection: 'row',
     gap: 8,
+  },
+  modActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'flex-end',
+  },
+  modBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: '#f1f5f9',
+  },
+  modBtnText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  modBtnDanger: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(239,68,68,0.10)',
+  },
+  modBtnDangerText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#dc2626',
   },
   queueApprove: {
     paddingHorizontal: 10,

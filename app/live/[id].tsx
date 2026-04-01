@@ -17,6 +17,7 @@ import {
   leaveLivePodcastRoom,
   LivePodcastRoom,
   LivePodcastTranscriptSegment,
+  moderateLivePodcastParticipant,
   requestLivePodcastSpeaker,
   resolveLivePodcastSpeakerRequest,
   SpeakerRequest,
@@ -55,6 +56,7 @@ export default function LivePodcastRoomScreen() {
   const [transcriptSegments, setTranscriptSegments] = useState<LivePodcastTranscriptSegment[]>([]);
   const [busy, setBusy] = useState(false);
   const [micBusy, setMicBusy] = useState(false);
+  const [modBusy, setModBusy] = useState<string | null>(null);
   const therapistHomePath = auth.currentUser?.uid ? `/therapist/${auth.currentUser.uid}` : '/live';
 
   const sessionForThisRoom = !!activeSession && activeSession.room.id === roomId;
@@ -83,6 +85,42 @@ export default function LivePodcastRoomScreen() {
     () => speakerRequests.filter((item) => item.status === 'waiting'),
     [speakerRequests]
   );
+
+  const currentUserRequest = useMemo(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return undefined;
+    const mine = speakerRequests.filter((item) => item.user_uid === uid);
+    if (!mine.length) return undefined;
+    return mine.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
+  }, [speakerRequests]);
+
+  const requestRaiseBlocked =
+    busy || currentUserRequest?.status === 'waiting' || currentUserRequest?.status === 'approved';
+
+  const handleRaiseHand = async () => {
+    if (!roomId || requestRaiseBlocked) return;
+    setBusy(true);
+    try {
+      await requestLivePodcastSpeaker(roomId);
+      Alert.alert('Request sent', 'The host can approve you to speak.');
+    } catch (error: any) {
+      Alert.alert('Could not send request', error?.message || 'Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleModerate = async (targetUid: string, action: 'kick' | 'mute' | 'unmute') => {
+    if (!roomId) return;
+    setModBusy(`${targetUid}:${action}`);
+    try {
+      await moderateLivePodcastParticipant(roomId, targetUid, action);
+    } catch (error: any) {
+      Alert.alert('Could not update participant', error?.message || 'Try again.');
+    } finally {
+      setModBusy(null);
+    }
+  };
 
   const handleJoin = async () => {
     if (!roomId) return;
@@ -388,19 +426,95 @@ export default function LivePodcastRoomScreen() {
             ) : (
               pendingRequests.map((item) => (
                 <View key={item.id} style={styles.queueRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.queueTitle}>{item.user_uid}</Text>
-                    {!!item.note ? <Text style={styles.queueNote}>{item.note}</Text> : null}
+                  <View style={styles.queueIdentity}>
+                    <View style={styles.queueAvatar}>
+                      {item.user_avatar_url ? (
+                        <Image source={{ uri: item.user_avatar_url }} style={styles.queueAvatarImg} contentFit="cover" />
+                      ) : (
+                        <Text style={styles.queueAvatarFallback}>
+                          {(item.user_display_name || item.user_uid || '?').charAt(0).toUpperCase()}
+                        </Text>
+                      )}
+                    </View>
+                    <View style={styles.queueIdentityText}>
+                      <Text style={styles.queueTitle} numberOfLines={1}>
+                        {item.user_display_name?.trim() || `Member ${String(item.user_uid || '').slice(0, 8)}`}
+                      </Text>
+                      {!!item.note ? <Text style={styles.queueNote}>{item.note}</Text> : null}
+                    </View>
                   </View>
-                  <Pressable style={styles.queueApprove} onPress={() => resolveLivePodcastSpeakerRequest(item.id, true)}>
-                    <Text style={styles.queueApproveText}>Approve</Text>
-                  </Pressable>
-                  <Pressable style={styles.queueDecline} onPress={() => resolveLivePodcastSpeakerRequest(item.id, false)}>
-                    <Text style={styles.queueDeclineText}>Decline</Text>
-                  </Pressable>
+                  <View style={styles.queueActions}>
+                    <Pressable style={styles.queueApprove} onPress={() => resolveLivePodcastSpeakerRequest(item.id, true)}>
+                      <Text style={styles.queueApproveText}>Approve</Text>
+                    </Pressable>
+                    <Pressable style={styles.queueDecline} onPress={() => resolveLivePodcastSpeakerRequest(item.id, false)}>
+                      <Text style={styles.queueDeclineText}>Decline</Text>
+                    </Pressable>
+                  </View>
                 </View>
               ))
             )}
+          </View>
+        ) : null}
+
+        {canModerate && (room?.approved_speaker_uids?.length ?? 0) > 0 ? (
+          <View style={styles.panel}>
+            <Text style={styles.panelTitle}>On stage</Text>
+            <Text style={styles.panelText}>Kick removes them from the room. Mute/unmute applies to their live microphone.</Text>
+            {(room?.approved_speaker_uids || [])
+              .filter((stageUid) => stageUid && stageUid !== room.host_uid)
+              .map((stageUid) => {
+                const reqMeta = speakerRequests
+                  .filter((r) => r.user_uid === stageUid)
+                  .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
+                const label =
+                  reqMeta?.user_display_name?.trim() ||
+                  visibleParticipants.find((p) => p.identity === stageUid)?.name ||
+                  `Member ${stageUid.slice(0, 8)}`;
+                const avatarUrl = reqMeta?.user_avatar_url;
+                const busyKey = (action: string) => modBusy === `${stageUid}:${action}`;
+                return (
+                  <View key={stageUid} style={styles.queueRow}>
+                    <View style={styles.queueIdentity}>
+                      <View style={styles.queueAvatar}>
+                        {avatarUrl ? (
+                          <Image source={{ uri: avatarUrl }} style={styles.queueAvatarImg} contentFit="cover" />
+                        ) : (
+                          <Text style={styles.queueAvatarFallback}>{label.charAt(0).toUpperCase()}</Text>
+                        )}
+                      </View>
+                      <View style={styles.queueIdentityText}>
+                        <Text style={styles.queueTitle} numberOfLines={1}>
+                          {label}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.modActions}>
+                      <Pressable
+                        style={[styles.modBtn, busyKey('mute') && styles.btnDisabled]}
+                        disabled={!!modBusy}
+                        onPress={() => handleModerate(stageUid, 'mute')}
+                      >
+                        <Text style={styles.modBtnText}>Mute</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.modBtn, busyKey('unmute') && styles.btnDisabled]}
+                        disabled={!!modBusy}
+                        onPress={() => handleModerate(stageUid, 'unmute')}
+                      >
+                        <Text style={styles.modBtnText}>Unmute</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.modBtnDanger, busyKey('kick') && styles.btnDisabled]}
+                        disabled={!!modBusy}
+                        onPress={() => handleModerate(stageUid, 'kick')}
+                      >
+                        <Text style={styles.modBtnDangerText}>Kick</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
           </View>
         ) : null}
 
@@ -408,8 +522,14 @@ export default function LivePodcastRoomScreen() {
           <View style={styles.panel}>
             <Text style={styles.panelTitle}>Want to speak?</Text>
             <Text style={styles.panelText}>Raise your hand and the host can invite you on stage.</Text>
-            <Pressable style={styles.secondaryBtn} onPress={() => requestLivePodcastSpeaker(roomId)}>
-              <Text style={styles.secondaryBtnText}>Raise hand</Text>
+            <Pressable style={[styles.secondaryBtn, requestRaiseBlocked && styles.btnDisabled]} onPress={handleRaiseHand} disabled={requestRaiseBlocked}>
+              <Text style={styles.secondaryBtnText}>
+                {currentUserRequest?.status === 'waiting'
+                  ? 'Request sent'
+                  : currentUserRequest?.status === 'approved'
+                    ? 'Approved to speak'
+                    : 'Raise hand'}
+              </Text>
             </Pressable>
           </View>
         ) : null}
@@ -594,7 +714,43 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderTopWidth: 1,
     borderTopColor: tokens.colors.border,
+    flexWrap: 'wrap',
   },
+  queueIdentity: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 0,
+  },
+  queueAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    overflow: 'hidden',
+    backgroundColor: tokens.colors.surfaceOverlay,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  queueAvatarImg: { width: '100%', height: '100%' },
+  queueAvatarFallback: { fontSize: 16, fontWeight: '900', color: tokens.colors.text },
+  queueIdentityText: { flex: 1, minWidth: 0 },
+  queueActions: { flexDirection: 'row', gap: 8 },
+  modActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' },
+  modBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: tokens.colors.surfaceOverlay,
+  },
+  modBtnText: { fontSize: 12, fontWeight: '900', color: tokens.colors.text },
+  modBtnDanger: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(239,68,68,0.10)',
+  },
+  modBtnDangerText: { fontSize: 12, fontWeight: '900', color: '#dc2626' },
   queueTitle: { fontSize: 13, fontWeight: '800', color: tokens.colors.text },
   queueNote: { marginTop: 2, fontSize: 12, fontWeight: '600', color: tokens.colors.textSecondary },
   queueApprove: {
