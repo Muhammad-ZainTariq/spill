@@ -48,6 +48,7 @@ export function LivePodcastOverlay({
   lastError,
   toggleMicrophone,
   togglePlayback,
+  sessionDurationLabel,
 }: {
   roomId: string | null;
   visible: boolean;
@@ -63,6 +64,7 @@ export function LivePodcastOverlay({
   lastError: string | null;
   toggleMicrophone: () => void;
   togglePlayback: () => void;
+  sessionDurationLabel: string;
 }) {
   const insets = useSafeAreaInsets();
   const [room, setRoom] = useState<LivePodcastRoom | null>(null);
@@ -327,7 +329,9 @@ export function LivePodcastOverlay({
             {sessionForThisRoom ? (
               <View style={styles.actionPanel}>
                 <Text style={styles.panelTitle}>Connected</Text>
-                <Text style={styles.panelText}>Audio: {connectionState}</Text>
+                <Text style={styles.panelText}>
+                  In session · {sessionDurationLabel} · Audio: {connectionState}
+                </Text>
                 {lastError ? <Text style={styles.errorText}>{lastError}</Text> : null}
                 <View style={styles.controlsRow}>
                   <Pressable style={styles.secondaryBtn} onPress={togglePlayback}>
@@ -372,7 +376,7 @@ export function LivePodcastOverlay({
                         {currentUserRequest.status === 'waiting'
                           ? 'Your request is pending for the broadcaster.'
                           : currentUserRequest.status === 'approved'
-                            ? 'You have been approved. Rejoin if your mic access does not update immediately.'
+                            ? 'You have been approved. Your mic will connect automatically in a few seconds.'
                             : 'Your last speaker request was declined.'}
                       </Text>
                     ) : null}
@@ -403,7 +407,7 @@ export function LivePodcastOverlay({
                     {currentUserRequest.status === 'waiting'
                       ? 'Your request is pending for the broadcaster.'
                       : currentUserRequest.status === 'approved'
-                        ? 'You have been approved. Join the room to speak.'
+                        ? 'You have been approved. Stay connected — your mic will turn on automatically.'
                         : 'Your last speaker request was declined.'}
                   </Text>
                 ) : null}

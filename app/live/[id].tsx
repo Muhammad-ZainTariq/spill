@@ -50,6 +50,7 @@ export default function LivePodcastRoomScreen() {
     micEnabled,
     lastError,
     toggleMicrophone,
+    sessionDurationLabel,
   } = useLivePodcast();
   const [room, setRoom] = useState<LivePodcastRoom | null>(null);
   const [speakerRequests, setSpeakerRequests] = useState<SpeakerRequest[]>([]);
@@ -329,7 +330,9 @@ export default function LivePodcastRoomScreen() {
         ) : sessionForThisRoom ? (
           <View style={styles.panel}>
             <Text style={styles.panelTitle}>Connected</Text>
-            <Text style={styles.panelText}>Role: {activeRoleLabel} · Audio: {connectionState}</Text>
+            <Text style={styles.panelText}>
+              Role: {activeRoleLabel} · In session {sessionDurationLabel} · Audio: {connectionState}
+            </Text>
             {lastError ? <Text style={styles.errorText}>{lastError}</Text> : null}
             <View style={styles.actionsRow}>
               {activeRole !== 'listener' ? (

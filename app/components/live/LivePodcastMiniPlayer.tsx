@@ -17,6 +17,7 @@ export function LivePodcastMiniPlayer({
   playbackMuted,
   dominantSpeakerLevel,
   togglePlayback,
+  sessionDurationLabel,
 }: {
   activeSession: ActiveLivePodcastSession | null;
   presentRoom: (roomId: string) => void;
@@ -27,6 +28,7 @@ export function LivePodcastMiniPlayer({
   playbackMuted: boolean;
   dominantSpeakerLevel: number;
   togglePlayback: () => void;
+  sessionDurationLabel: string;
 }) {
   const entrance = useRef(new Animated.Value(0)).current;
   const isVisible = !!activeSession && activeSession.minimized && presentedRoomId !== activeSession.room.id;
@@ -97,6 +99,7 @@ export function LivePodcastMiniPlayer({
               color="rgba(255,255,255,0.95)"
             />
             <Text style={styles.meta} numberOfLines={1}>
+              {sessionDurationLabel ? `${sessionDurationLabel} · ` : ''}
               {isHostLike
                 ? `You are live${micEnabled ? ' · speaking ready' : ' · muted'}`
                 : `${activeSession.room.host_name || 'Therapist'} · LIVE`}

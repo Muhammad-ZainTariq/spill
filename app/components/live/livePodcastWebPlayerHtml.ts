@@ -347,7 +347,11 @@ export function getLivePodcastWebPlayerHtml() {
             .on(LK.RoomEvent.ConnectionStateChanged, function (state) {
               send('state', { status: String(state || '').toLowerCase(), micEnabled: micEnabled, playbackMuted: playbackMuted });
             })
-            .on(LK.RoomEvent.Disconnected, function () {
+            .on(LK.RoomEvent.Disconnected, function (reason) {
+              var code = typeof reason === 'number' ? reason : -1;
+              micEnabled = false;
+              room = null;
+              send('livekitDisconnected', { reason: code });
               send('state', { status: 'disconnected', micEnabled: false, playbackMuted: playbackMuted });
               syncParticipants();
             });

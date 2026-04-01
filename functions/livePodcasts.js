@@ -68,6 +68,21 @@ function getRoomServiceClient() {
   return new RoomServiceClient(livekitHttpBaseUrl(serverUrl), apiKey, apiSecret);
 }
 
+/** Pick published mic/audio track for RoomService mute (handles protobuf JSON shapes). */
+function pickAudioTrackForModeration(tracks) {
+  if (!Array.isArray(tracks) || tracks.length === 0) return null;
+  const bySource = tracks.find((t) => {
+    const s = t?.source;
+    return s === 2 || s === 'MICROPHONE' || (typeof s === 'string' && s.toUpperCase().includes('MICROPHONE'));
+  });
+  if (bySource?.sid) return bySource;
+  const byType = tracks.find((t) => {
+    const ty = t?.type;
+    return ty === 0 || ty === 'AUDIO' || Number(ty) === 0;
+  });
+  return byType?.sid ? byType : null;
+}
+
 function getAssemblyAiConfig() {
   const assemblyAiCfg = functions.config().assemblyai || {};
   const apiKey = process.env.ASSEMBLYAI_API_KEY || assemblyAiCfg.api_key || '';
@@ -703,6 +718,53 @@ exports.joinLivePodcastRoom = functions.region('us-central1').https.onCall(async
   return createJoinSession({ uid, roomId, room, roomRef, inviteDoc });
 });
 
+/**
+ * New LiveKit token + role when the user is already in the room but their role changed
+ * (e.g. approved to speak). Does not increment listener/join counters or consume free access.
+ */
+exports.refreshLivePodcastJoin = functions.region('us-central1').https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+  const uid = context.auth.uid;
+  const roomId = String(data?.roomId || '').trim();
+  const inviteCode = String(data?.inviteCode || '').trim().toUpperCase();
+  if (!roomId) throw new functions.https.HttpsError('invalid-argument', 'roomId is required.');
+
+  const roomRef = db.collection(COLLECTIONS.rooms).doc(roomId);
+  const roomSnap = await roomRef.get();
+  if (!roomSnap.exists) throw new functions.https.HttpsError('not-found', 'Room not found.');
+  const room = sanitizeRoom(roomSnap.data() || {}, roomId);
+
+  let inviteDoc = null;
+  if (inviteCode) {
+    inviteDoc = await getInviteDocByRoomAndCode(roomId, inviteCode);
+  }
+
+  const role = resolveRole({ room, uid, inviteDoc });
+  if (role === 'listener') {
+    throw new functions.https.HttpsError('failed-precondition', 'listener-role-refresh');
+  }
+
+  const userRef = db.collection('users').doc(uid);
+  const userSnap = await userRef.get();
+  const user = userSnap.exists ? userSnap.data() || {} : {};
+
+  const token = await createAccessToken({
+    uid,
+    displayName: String(user.display_name || user.anonymous_username || 'Listener'),
+    roomName: room.livekit_room_name,
+    role,
+  });
+
+  await logAudit(roomId, uid, 'room_join_refreshed', null, { role });
+  const { serverUrl } = getLiveKitConfig();
+  return {
+    room,
+    role,
+    token,
+    serverUrl,
+  };
+});
+
 exports.joinLivePodcastByInviteCode = functions.region('us-central1').https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
   const uid = context.auth.uid;
@@ -876,13 +938,14 @@ exports.moderateLivePodcastParticipant = functions.region('us-central1').https.o
     try {
       target = await svc.getParticipant(roomName, targetUid);
     } catch (e) {
+      const listed = await svc.listParticipants(roomName);
+      target = listed.find((p) => p.identity === targetUid);
+    }
+    if (!target) {
       throw new functions.https.HttpsError('not-found', 'That participant is not connected right now.');
     }
 
-    const audioTrack = (target.tracks || []).find((t) => {
-      const ty = t?.type;
-      return ty === 0 || ty === 'AUDIO' || Number(ty) === 0;
-    });
+    const audioTrack = pickAudioTrackForModeration(target.tracks || []);
     if (!audioTrack?.sid) {
       throw new functions.https.HttpsError(
         'failed-precondition',
