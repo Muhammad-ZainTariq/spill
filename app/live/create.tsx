@@ -61,7 +61,7 @@ export default function CreateLivePodcastScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: Platform.OS === 'ios',
         aspect: Platform.OS === 'ios' ? [1, 1] : undefined,
         quality: 0.9,

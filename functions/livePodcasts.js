@@ -2,6 +2,7 @@ const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { randomBytes } = require('crypto');
 const { AccessToken, RoomServiceClient } = require('livekit-server-sdk');
+const { TrackSource } = require('@livekit/protocol');
 
 const db = admin.firestore();
 
@@ -333,14 +334,21 @@ async function createAccessToken({ uid, displayName, roomName, role }) {
     name: displayName || 'Listener',
     ttl: '4h',
   });
-  at.addGrant({
+  const grant = {
     roomJoin: true,
     room: roomName,
-    canPublish: role !== 'listener',
     canPublishData: true,
     canSubscribe: true,
     roomAdmin: role === 'host' || role === 'co_host',
-  });
+  };
+  if (role === 'listener') {
+    grant.canPublish = false;
+  } else {
+    grant.canPublish = true;
+    /** Explicit mic-only publish (some LiveKit configs treat this more reliably than canPublish alone). */
+    grant.canPublishSources = [TrackSource.MICROPHONE];
+  }
+  at.addGrant(grant);
   return at.toJwt();
 }
 
@@ -895,8 +903,11 @@ exports.moderateLivePodcastParticipant = functions.region('us-central1').https.o
   const roomId = String(data?.roomId || '').trim();
   const targetUid = String(data?.targetUid || '').trim();
   const action = String(data?.action || '').trim().toLowerCase();
-  if (!roomId || !targetUid || !['kick', 'mute', 'unmute'].includes(action)) {
-    throw new functions.https.HttpsError('invalid-argument', 'roomId, targetUid, and action (kick|mute|unmute) are required.');
+  if (!roomId || !targetUid || !['kick', 'remove_from_stage', 'mute', 'unmute'].includes(action)) {
+    throw new functions.https.HttpsError(
+      'invalid-argument',
+      'roomId, targetUid, and action (kick|remove_from_stage|mute|unmute) are required.'
+    );
   }
   if (targetUid === uid) {
     throw new functions.https.HttpsError('invalid-argument', 'Cannot moderate yourself.');
@@ -924,13 +935,42 @@ exports.moderateLivePodcastParticipant = functions.region('us-central1').https.o
   }
 
   try {
+    if (action === 'remove_from_stage') {
+      await roomRef.update({
+        approved_speaker_uids: admin.firestore.FieldValue.arrayRemove(targetUid),
+        updated_at: nowIso(),
+      });
+      try {
+        await svc.updateParticipant(roomName, targetUid, {
+          permission: {
+            canPublish: false,
+            canSubscribe: true,
+            canPublishData: true,
+          },
+        });
+      } catch (permErr) {
+        console.warn('moderateLivePodcastParticipant updateParticipant', permErr?.message || permErr);
+      }
+      try {
+        const p = await svc.getParticipant(roomName, targetUid);
+        const t = pickAudioTrackForModeration(p.tracks || []);
+        if (t?.sid) {
+          await svc.mutePublishedTrack(roomName, targetUid, t.sid, true);
+        }
+      } catch (muteErr) {
+        /* participant may reconnect as listener; best-effort */
+      }
+      await logAudit(roomId, uid, 'participant_removed_from_stage', targetUid, {});
+      return { ok: true };
+    }
+
     if (action === 'kick') {
       await svc.removeParticipant(roomName, targetUid);
       await roomRef.update({
         approved_speaker_uids: admin.firestore.FieldValue.arrayRemove(targetUid),
         updated_at: nowIso(),
       });
-      await logAudit(roomId, uid, 'participant_kicked', targetUid, {});
+      await logAudit(roomId, uid, 'participant_kicked_broadcast', targetUid, {});
       return { ok: true };
     }
 

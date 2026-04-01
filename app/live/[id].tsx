@@ -2,7 +2,7 @@ import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useLivePodcast } from '@/app/components/live/LivePodcastProvider';
@@ -58,6 +58,7 @@ export default function LivePodcastRoomScreen() {
   const [busy, setBusy] = useState(false);
   const [micBusy, setMicBusy] = useState(false);
   const [modBusy, setModBusy] = useState<string | null>(null);
+  const [participantMenuTarget, setParticipantMenuTarget] = useState<{ identity: string; name: string } | null>(null);
   const therapistHomePath = auth.currentUser?.uid ? `/therapist/${auth.currentUser.uid}` : '/live';
 
   const sessionForThisRoom = !!activeSession && activeSession.room.id === roomId;
@@ -111,7 +112,10 @@ export default function LivePodcastRoomScreen() {
     }
   };
 
-  const handleModerate = async (targetUid: string, action: 'kick' | 'mute' | 'unmute') => {
+  const handleModerate = async (
+    targetUid: string,
+    action: 'kick' | 'remove_from_stage' | 'mute' | 'unmute'
+  ) => {
     if (!roomId) return;
     setModBusy(`${targetUid}:${action}`);
     try {
@@ -333,6 +337,11 @@ export default function LivePodcastRoomScreen() {
             <Text style={styles.panelText}>
               Role: {activeRoleLabel} · In session {sessionDurationLabel} · Audio: {connectionState}
             </Text>
+            {activeRole === 'speaker' && connectionState === 'connected' && !micEnabled ? (
+              <Text style={styles.helperText}>
+                Tap &quot;Unmute mic&quot; below so others can hear you. Check the mic permission in Settings if needed.
+              </Text>
+            ) : null}
             {lastError ? <Text style={styles.errorText}>{lastError}</Text> : null}
             <View style={styles.actionsRow}>
               {activeRole !== 'listener' ? (
@@ -399,23 +408,39 @@ export default function LivePodcastRoomScreen() {
         {sessionForThisRoom ? (
           <View style={styles.panel}>
             <Text style={styles.panelTitle}>People in room</Text>
+            {canModerate ? (
+              <Text style={styles.panelHint}>Tap someone to mute, remove from mic, or remove from the broadcast.</Text>
+            ) : null}
             {visibleParticipants.length === 0 ? (
               <Text style={styles.panelText}>Waiting for participants...</Text>
             ) : (
               <View style={styles.peopleWrap}>
-                {visibleParticipants.map((item) => (
-                  <View key={item.identity} style={styles.personChip}>
-                    {item.isSpeaking ? (
-                      <SpeakingWave active compact color={tokens.colors.pink} />
-                    ) : (
-                      <View style={styles.personDot} />
-                    )}
-                    <Text style={styles.personText} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                    {item.isLocal ? <Text style={styles.meTag}>You</Text> : null}
-                  </View>
-                ))}
+                {visibleParticipants.map((item) => {
+                  const canOpenMenu =
+                    canModerate && !item.isLocal && item.identity !== room?.host_uid;
+                  const Chip = canOpenMenu ? Pressable : View;
+                  return (
+                    <Chip
+                      key={item.identity}
+                      style={styles.personChip}
+                      onPress={
+                        canOpenMenu
+                          ? () => setParticipantMenuTarget({ identity: item.identity, name: item.name || 'Participant' })
+                          : undefined
+                      }
+                    >
+                      {item.isSpeaking ? (
+                        <SpeakingWave active compact color={tokens.colors.pink} />
+                      ) : (
+                        <View style={styles.personDot} />
+                      )}
+                      <Text style={styles.personText} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                      {item.isLocal ? <Text style={styles.meTag}>You</Text> : null}
+                    </Chip>
+                  );
+                })}
               </View>
             )}
           </View>
@@ -463,7 +488,9 @@ export default function LivePodcastRoomScreen() {
         {canModerate && (room?.approved_speaker_uids?.length ?? 0) > 0 ? (
           <View style={styles.panel}>
             <Text style={styles.panelTitle}>On stage</Text>
-            <Text style={styles.panelText}>Kick removes them from the room. Mute/unmute applies to their live microphone.</Text>
+            <Text style={styles.panelText}>
+              Remove from mic keeps them in the podcast listening. Remove from broadcast disconnects them fully.
+            </Text>
             {(room?.approved_speaker_uids || [])
               .filter((stageUid) => stageUid && stageUid !== room.host_uid)
               .map((stageUid) => {
@@ -494,6 +521,13 @@ export default function LivePodcastRoomScreen() {
                     </View>
                     <View style={styles.modActions}>
                       <Pressable
+                        style={[styles.modBtn, busyKey('remove_from_stage') && styles.btnDisabled]}
+                        disabled={!!modBusy}
+                        onPress={() => handleModerate(stageUid, 'remove_from_stage')}
+                      >
+                        <Text style={styles.modBtnText}>Remove from mic</Text>
+                      </Pressable>
+                      <Pressable
                         style={[styles.modBtn, busyKey('mute') && styles.btnDisabled]}
                         disabled={!!modBusy}
                         onPress={() => handleModerate(stageUid, 'mute')}
@@ -512,7 +546,7 @@ export default function LivePodcastRoomScreen() {
                         disabled={!!modBusy}
                         onPress={() => handleModerate(stageUid, 'kick')}
                       >
-                        <Text style={styles.modBtnDangerText}>Kick</Text>
+                        <Text style={styles.modBtnDangerText}>Remove from broadcast</Text>
                       </Pressable>
                     </View>
                   </View>
@@ -537,6 +571,67 @@ export default function LivePodcastRoomScreen() {
           </View>
         ) : null}
       </ScrollView>
+
+      <Modal
+        visible={!!participantMenuTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setParticipantMenuTarget(null)}
+      >
+        <Pressable style={styles.participantMenuBackdrop} onPress={() => setParticipantMenuTarget(null)}>
+          <Pressable style={styles.participantMenuSheet} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.participantMenuTitle} numberOfLines={1}>
+              {participantMenuTarget?.name}
+            </Text>
+            <Text style={styles.participantMenuHint}>Moderation</Text>
+            <Pressable
+              style={styles.participantMenuBtn}
+              onPress={() => {
+                const id = participantMenuTarget?.identity;
+                if (id) handleModerate(id, 'remove_from_stage');
+                setParticipantMenuTarget(null);
+              }}
+            >
+              <Text style={styles.participantMenuBtnText}>Remove from mic only</Text>
+              <Text style={styles.participantMenuSub}>They stay in the podcast, listening</Text>
+            </Pressable>
+            <Pressable
+              style={styles.participantMenuBtn}
+              onPress={() => {
+                const id = participantMenuTarget?.identity;
+                if (id) handleModerate(id, 'mute');
+                setParticipantMenuTarget(null);
+              }}
+            >
+              <Text style={styles.participantMenuBtnText}>Mute</Text>
+            </Pressable>
+            <Pressable
+              style={styles.participantMenuBtn}
+              onPress={() => {
+                const id = participantMenuTarget?.identity;
+                if (id) handleModerate(id, 'unmute');
+                setParticipantMenuTarget(null);
+              }}
+            >
+              <Text style={styles.participantMenuBtnText}>Unmute</Text>
+            </Pressable>
+            <Pressable
+              style={styles.participantMenuBtnDanger}
+              onPress={() => {
+                const id = participantMenuTarget?.identity;
+                if (id) handleModerate(id, 'kick');
+                setParticipantMenuTarget(null);
+              }}
+            >
+              <Text style={styles.participantMenuBtnDangerText}>Remove from broadcast</Text>
+              <Text style={styles.participantMenuSub}>Disconnects them from the live room</Text>
+            </Pressable>
+            <Pressable style={styles.participantMenuCancel} onPress={() => setParticipantMenuTarget(null)}>
+              <Text style={styles.participantMenuCancelText}>Cancel</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -658,6 +753,7 @@ const styles = StyleSheet.create({
   },
   panelTitle: { fontSize: 17, fontWeight: '900', color: tokens.colors.text },
   panelText: { fontSize: 13, lineHeight: 18, fontWeight: '600', color: tokens.colors.textSecondary },
+  panelHint: { fontSize: 11, lineHeight: 16, fontWeight: '700', color: tokens.colors.textMuted },
   helperText: { fontSize: 12, lineHeight: 17, fontWeight: '700', color: tokens.colors.textMuted },
   errorText: { fontSize: 12, lineHeight: 17, fontWeight: '700', color: '#dc2626' },
   input: {
@@ -835,4 +931,66 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   infoText: { flex: 1, fontSize: 12, lineHeight: 17, fontWeight: '700', color: tokens.colors.textSecondary },
+  participantMenuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.45)',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  participantMenuSheet: {
+    borderRadius: 20,
+    backgroundColor: tokens.colors.surface,
+    padding: 16,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+  },
+  participantMenuTitle: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: tokens.colors.text,
+  },
+  participantMenuHint: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: tokens.colors.textMuted,
+    marginBottom: 4,
+  },
+  participantMenuBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: tokens.colors.surfaceOverlay,
+  },
+  participantMenuBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: tokens.colors.text,
+  },
+  participantMenuSub: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '600',
+    color: tokens.colors.textMuted,
+  },
+  participantMenuBtnDanger: {
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(239,68,68,0.08)',
+  },
+  participantMenuBtnDangerText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#dc2626',
+  },
+  participantMenuCancel: {
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  participantMenuCancelText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: tokens.colors.textMuted,
+  },
 });

@@ -241,19 +241,32 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
     async (roomId: string) => {
       if (speakerUpgradeInFlightRef.current) return;
       speakerUpgradeInFlightRef.current = true;
+      const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
       try {
-        const data = await refreshLivePodcastJoin(roomId);
-        connectToRoom({
-          room: data.room,
-          role: data.role,
-          token: data.token,
-          serverUrl: data.serverUrl,
-        });
-      } catch (error: any) {
-        const code = String(error?.code || '');
-        const msg = String(error?.message || '');
-        if (!code.includes('failed-precondition') && !msg.includes('listener-role-refresh')) {
-          console.warn('[LivePodcast] refreshLivePodcastJoin failed', error);
+        for (let attempt = 0; attempt < 10; attempt++) {
+          try {
+            const data = await refreshLivePodcastJoin(roomId);
+            connectToRoom({
+              room: data.room,
+              role: data.role,
+              token: data.token,
+              serverUrl: data.serverUrl,
+            });
+            return;
+          } catch (error: any) {
+            const code = String(error?.code || '');
+            const msg = String(error?.message || '');
+            const notReady =
+              code.includes('failed-precondition') || msg.includes('listener-role-refresh');
+            if (notReady && attempt < 9) {
+              await wait(400 + attempt * 350);
+              continue;
+            }
+            if (!notReady) {
+              console.warn('[LivePodcast] refreshLivePodcastJoin failed', error);
+            }
+            return;
+          }
         }
       } finally {
         speakerUpgradeInFlightRef.current = false;

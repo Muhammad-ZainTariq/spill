@@ -353,7 +353,7 @@ export async function resolveLivePodcastSpeakerRequest(requestId: string, approv
 export async function moderateLivePodcastParticipant(
   roomId: string,
   targetUid: string,
-  action: 'kick' | 'mute' | 'unmute'
+  action: 'kick' | 'remove_from_stage' | 'mute' | 'unmute'
 ) {
   const fn = httpsCallable(functions, 'moderateLivePodcastParticipant', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
   await fn({ roomId, targetUid, action });

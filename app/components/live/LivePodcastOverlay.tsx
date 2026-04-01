@@ -72,6 +72,7 @@ export function LivePodcastOverlay({
   const [transcriptSegments, setTranscriptSegments] = useState<LivePodcastTranscriptSegment[]>([]);
   const [busy, setBusy] = useState(false);
   const [modBusy, setModBusy] = useState<string | null>(null);
+  const [participantMenuTarget, setParticipantMenuTarget] = useState<{ identity: string; name: string } | null>(null);
 
   const sessionForThisRoom = !!activeSession && !!roomId && activeSession.room.id === roomId;
   const activeRole = sessionForThisRoom ? activeSession?.role : null;
@@ -193,7 +194,10 @@ export function LivePodcastOverlay({
     }
   };
 
-  const handleModerate = async (targetUid: string, action: 'kick' | 'mute' | 'unmute') => {
+  const handleModerate = async (
+    targetUid: string,
+    action: 'kick' | 'remove_from_stage' | 'mute' | 'unmute'
+  ) => {
     if (!roomId) return;
     setModBusy(`${targetUid}:${action}`);
     try {
@@ -208,6 +212,7 @@ export function LivePodcastOverlay({
   if (!visible || !roomId) return null;
 
   return (
+    <>
     <Modal visible={visible} animationType="slide" transparent onRequestClose={closeOverlay}>
       <View style={styles.backdrop}>
         <Pressable style={styles.scrim} onPress={closeOverlay} />
@@ -280,8 +285,26 @@ export function LivePodcastOverlay({
 
             {sessionForThisRoom && visibleParticipants.length > 0 ? (
               <View style={styles.grid}>
-                {visibleParticipants.map((participant) => (
-                  <View key={participant.identity} style={styles.personCard}>
+                {visibleParticipants.map((participant) => {
+                  const canOpenMenu =
+                    canModerate &&
+                    !participant.isLocal &&
+                    participant.identity !== room?.host_uid;
+                  const CardWrap = canOpenMenu ? Pressable : View;
+                  return (
+                    <CardWrap
+                      key={participant.identity}
+                      style={styles.personCard}
+                      onPress={
+                        canOpenMenu
+                          ? () =>
+                              setParticipantMenuTarget({
+                                identity: participant.identity,
+                                name: participant.name || 'Participant',
+                              })
+                          : undefined
+                      }
+                    >
                     <View style={styles.personAvatar}>
                       {room?.cover_url ? (
                         <Image source={{ uri: room.cover_url }} style={styles.personAvatarImg} contentFit="cover" />
@@ -307,8 +330,9 @@ export function LivePodcastOverlay({
                               : 'Listener'}
                       </Text>
                     </View>
-                  </View>
-                ))}
+                    </CardWrap>
+                  );
+                })}
               </View>
             ) : (
               <View style={styles.previewCard}>
@@ -343,6 +367,11 @@ export function LivePodcastOverlay({
                     </Pressable>
                   ) : null}
                 </View>
+                {activeRole === 'speaker' && connectionState === 'connected' && !micEnabled ? (
+                  <Text style={styles.helperText}>
+                    Tap &quot;Unmute mic&quot; so others can hear you. If nothing happens, check microphone permission in Settings.
+                  </Text>
+                ) : null}
                 <View style={styles.levelRow}>
                   <SpeakingWave active={someoneSpeaking && !playbackMuted} level={dominantSpeakerLevel} color={tokens.colors.pink} />
                   <Text style={styles.panelText}>
@@ -471,7 +500,9 @@ export function LivePodcastOverlay({
             {canModerate && (room?.approved_speaker_uids?.length ?? 0) > 0 ? (
               <View style={styles.actionPanel}>
                 <Text style={styles.panelTitle}>On stage</Text>
-                <Text style={styles.panelText}>Kick removes them from the room; mute/unmute needs them to be connected with a mic.</Text>
+                <Text style={styles.panelText}>
+                  Remove from mic keeps them in the podcast as a listener. Remove from broadcast disconnects them completely. Tap someone in People above for the same options.
+                </Text>
                 {(room?.approved_speaker_uids || [])
                   .filter((stageUid) => stageUid && stageUid !== room.host_uid)
                   .map((stageUid) => {
@@ -502,6 +533,13 @@ export function LivePodcastOverlay({
                         </View>
                         <View style={styles.modActions}>
                           <Pressable
+                            style={[styles.modBtn, busyKey('remove_from_stage') && styles.btnDisabled]}
+                            disabled={!!modBusy}
+                            onPress={() => handleModerate(stageUid, 'remove_from_stage')}
+                          >
+                            <Text style={styles.modBtnText}>Remove from mic</Text>
+                          </Pressable>
+                          <Pressable
                             style={[styles.modBtn, busyKey('mute') && styles.btnDisabled]}
                             disabled={!!modBusy}
                             onPress={() => handleModerate(stageUid, 'mute')}
@@ -520,7 +558,7 @@ export function LivePodcastOverlay({
                             disabled={!!modBusy}
                             onPress={() => handleModerate(stageUid, 'kick')}
                           >
-                            <Text style={styles.modBtnDangerText}>Kick</Text>
+                            <Text style={styles.modBtnDangerText}>Remove from broadcast</Text>
                           </Pressable>
                         </View>
                       </View>
@@ -532,6 +570,68 @@ export function LivePodcastOverlay({
         </View>
       </View>
     </Modal>
+
+    <Modal
+      visible={!!participantMenuTarget}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setParticipantMenuTarget(null)}
+    >
+      <Pressable style={styles.participantMenuBackdrop} onPress={() => setParticipantMenuTarget(null)}>
+        <Pressable style={styles.participantMenuSheet} onPress={(e) => e.stopPropagation()}>
+          <Text style={styles.participantMenuTitle} numberOfLines={1}>
+            {participantMenuTarget?.name}
+          </Text>
+          <Text style={styles.participantMenuHint}>Moderation</Text>
+          <Pressable
+            style={styles.participantMenuBtn}
+            onPress={() => {
+              const id = participantMenuTarget?.identity;
+              if (id) handleModerate(id, 'remove_from_stage');
+              setParticipantMenuTarget(null);
+            }}
+          >
+            <Text style={styles.participantMenuBtnText}>Remove from mic only</Text>
+            <Text style={styles.participantMenuSub}>They stay in the podcast, listening</Text>
+          </Pressable>
+          <Pressable
+            style={styles.participantMenuBtn}
+            onPress={() => {
+              const id = participantMenuTarget?.identity;
+              if (id) handleModerate(id, 'mute');
+              setParticipantMenuTarget(null);
+            }}
+          >
+            <Text style={styles.participantMenuBtnText}>Mute</Text>
+          </Pressable>
+          <Pressable
+            style={styles.participantMenuBtn}
+            onPress={() => {
+              const id = participantMenuTarget?.identity;
+              if (id) handleModerate(id, 'unmute');
+              setParticipantMenuTarget(null);
+            }}
+          >
+            <Text style={styles.participantMenuBtnText}>Unmute</Text>
+          </Pressable>
+          <Pressable
+            style={styles.participantMenuBtnDanger}
+            onPress={() => {
+              const id = participantMenuTarget?.identity;
+              if (id) handleModerate(id, 'kick');
+              setParticipantMenuTarget(null);
+            }}
+          >
+            <Text style={styles.participantMenuBtnDangerText}>Remove from broadcast</Text>
+            <Text style={styles.participantMenuSub}>Disconnects them from the live room</Text>
+          </Pressable>
+          <Pressable style={styles.participantMenuCancel} onPress={() => setParticipantMenuTarget(null)}>
+            <Text style={styles.participantMenuCancelText}>Cancel</Text>
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+    </>
   );
 }
 
@@ -974,6 +1074,66 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     fontWeight: '700',
+    color: '#64748b',
+  },
+  participantMenuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.45)',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  participantMenuSheet: {
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    padding: 16,
+    gap: 8,
+  },
+  participantMenuTitle: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  participantMenuHint: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+    marginBottom: 4,
+  },
+  participantMenuBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: '#f8fafc',
+  },
+  participantMenuBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  participantMenuSub: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  participantMenuBtnDanger: {
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(239,68,68,0.08)',
+  },
+  participantMenuBtnDangerText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#dc2626',
+  },
+  participantMenuCancel: {
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  participantMenuCancelText: {
+    fontSize: 15,
+    fontWeight: '800',
     color: '#64748b',
   },
 });
