@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useLivePodcast } from '@/app/components/live/LivePodcastProvider';
+import { useLivePodcast } from '@/components/live/LivePodcastProvider';
 import { tokens } from '@/app/ui/tokens';
 import {
   createLivePodcastRoom,

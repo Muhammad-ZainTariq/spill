@@ -2,9 +2,9 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 
-import { LivePodcastOverlay } from '@/app/components/live/LivePodcastOverlay';
-import { LivePodcastMiniPlayer } from '@/app/components/live/LivePodcastMiniPlayer';
-import { getLivePodcastWebPlayerHtml } from '@/app/components/live/livePodcastWebPlayerHtml';
+import { LivePodcastOverlay } from '@/components/live/LivePodcastOverlay';
+import { LivePodcastMiniPlayer } from '@/components/live/LivePodcastMiniPlayer';
+import { getLivePodcastWebPlayerHtml } from '@/components/live/livePodcastWebPlayerHtml';
 import { auth } from '@/lib/firebase';
 import {
   createLivePodcastTranscriptToken,

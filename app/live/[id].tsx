@@ -5,8 +5,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useLivePodcast } from '@/app/components/live/LivePodcastProvider';
-import { SpeakingWave } from '@/app/components/live/SpeakingWave';
+import { useLivePodcast } from '@/components/live/LivePodcastProvider';
+import { SpeakingWave } from '@/components/live/SpeakingWave';
 import { tokens } from '@/app/ui/tokens';
 import { auth } from '@/lib/firebase';
 import {

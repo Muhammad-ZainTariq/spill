@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { PdfJsReaderWebView } from '@/app/components/PdfJsReaderWebView';
+import { PdfJsReaderWebView } from '@/components/PdfJsReaderWebView';
 import { tokens } from '@/app/ui/tokens';
 import { auth, getDownloadURL, ref, storage } from '@/lib/firebase';
 import { storageObjectPathFromDownloadUrl } from '@/lib/storageDownloadUrl';

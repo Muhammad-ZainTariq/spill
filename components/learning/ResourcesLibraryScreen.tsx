@@ -7,7 +7,7 @@ import {
   TherapistResource,
   youtubeThumbnailUrl,
 } from '@/app/therapist/_marketplace';
-import { BookCoverImage } from '@/app/components/LearningResourceWidgets';
+import { BookCoverImage } from '@/components/LearningResourceWidgets';
 import { tokens } from '@/app/ui/tokens';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';

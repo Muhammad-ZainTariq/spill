@@ -46,8 +46,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth } from '@/lib/firebase';
 import { tokens } from '@/app/ui/tokens';
-import { BookCoverImage } from '@/app/components/LearningResourceWidgets';
-import { MAX_PDF_BASE64_CHARS_FOR_COVER, PdfCoverWebView } from '@/app/components/PdfCoverWebView';
+import { BookCoverImage } from '@/components/LearningResourceWidgets';
+import { MAX_PDF_BASE64_CHARS_FOR_COVER, PdfCoverWebView } from '@/components/PdfCoverWebView';
 
 const TYPE_LABELS: Record<string, string> = {
   video: 'YouTube video',
@@ -699,7 +699,10 @@ export default function AdminResourcesScreen() {
                 placeholderTextColor={tokens.colors.textMuted}
               />
               <Text style={styles.label}>Visibility</Text>
-              <Text style={styles.hintMuted}>Control where this resource appears for members and therapists.</Text>
+              <Text style={styles.hintMuted}>
+                Member app = main app Learning resources. Therapist library = therapist area. Turn on Member app for
+                books that were therapist-only so members can see them too.
+              </Text>
               <View style={styles.switchRow}>
                 <Text style={styles.switchLabel}>Member app (Learning resources)</Text>
                 <Switch

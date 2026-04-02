@@ -1,5 +1,5 @@
 import { listResourcesForUserApp } from '@/app/therapist/_marketplace';
-import { ResourcesLibraryScreen } from '@/app/components/learning/ResourcesLibraryScreen';
+import { ResourcesLibraryScreen } from '@/components/learning/ResourcesLibraryScreen';
 
 export default function ResourcesScreen() {
   return (

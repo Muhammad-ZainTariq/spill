@@ -1,5 +1,5 @@
-import { MAX_PDF_BASE64_CHARS_FOR_COVER, PdfCoverWebView } from '@/app/components/PdfCoverWebView';
-import { BookCoverImage } from '@/app/components/LearningResourceWidgets';
+import { MAX_PDF_BASE64_CHARS_FOR_COVER, PdfCoverWebView } from '@/components/PdfCoverWebView';
+import { BookCoverImage } from '@/components/LearningResourceWidgets';
 import {
   createTherapistResource,
   deleteTherapistResource,
@@ -403,9 +403,12 @@ export default function TherapistResourceEditScreen() {
           placeholderTextColor={tokens.colors.textMuted}
         />
         <Text style={styles.label}>Visibility</Text>
-        <Text style={styles.hintMuted}>Choose whether members and/or therapists can see this in their libraries.</Text>
+        <Text style={styles.hintMuted}>
+          Turn on Member app so people in the main app see it in Learning resources. Turn on Therapist library so other
+          therapists see it too. You can use one or both.
+        </Text>
         <View style={styles.switchRow}>
-          <Text style={styles.switchLabel}>Member app</Text>
+          <Text style={styles.switchLabel}>Member app (Learning resources)</Text>
           <Switch
             value={visibleToAppUsers}
             onValueChange={setVisibleToAppUsers}

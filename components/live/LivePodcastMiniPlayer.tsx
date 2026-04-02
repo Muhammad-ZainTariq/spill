@@ -3,8 +3,8 @@ import { Image } from 'expo-image';
 import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useEffect, useRef } from 'react';
 
-import type { ActiveLivePodcastSession } from '@/app/components/live/LivePodcastProvider';
-import { SpeakingWave } from '@/app/components/live/SpeakingWave';
+import type { ActiveLivePodcastSession } from '@/components/live/LivePodcastProvider';
+import { SpeakingWave } from '@/components/live/SpeakingWave';
 import { leaveLivePodcastRoom } from '@/lib/livePodcasts';
 
 export function LivePodcastMiniPlayer({

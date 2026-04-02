@@ -5,7 +5,7 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useLivePodcast } from '@/app/components/live/LivePodcastProvider';
+import { useLivePodcast } from '@/components/live/LivePodcastProvider';
 import { tokens } from '@/app/ui/tokens';
 import { auth } from '@/lib/firebase';
 import {

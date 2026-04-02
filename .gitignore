@@ -48,3 +48,4 @@ app-example
 # docs (excluded from repo)
 FIREBASE_SETUP.md
 README.md
+firebase-debug.log

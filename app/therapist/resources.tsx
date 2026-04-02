@@ -1,4 +1,4 @@
-import { ResourcesLibraryScreen } from '@/app/components/learning/ResourcesLibraryScreen';
+import { ResourcesLibraryScreen } from '@/components/learning/ResourcesLibraryScreen';
 import {
   listResourcesForTherapistLibrary,
   TherapistResource,

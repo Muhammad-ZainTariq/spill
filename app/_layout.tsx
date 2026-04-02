@@ -10,7 +10,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import 'react-native-reanimated';
 
-import { LivePodcastProvider } from '@/app/components/live/LivePodcastProvider';
+import { LivePodcastProvider } from '@/components/live/LivePodcastProvider';
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();

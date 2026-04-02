@@ -31,7 +31,7 @@ import Reanimated, {
   withTiming
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLivePodcast } from '@/app/components/live/LivePodcastProvider';
+import { useLivePodcast } from '@/components/live/LivePodcastProvider';
 import {
   addComment,
   cancelPremium,
@@ -50,7 +50,7 @@ import {
   subscribeToPosts,
   upvotePost
 } from '../functions';
-import { SpeakingWave } from '@/app/components/live/SpeakingWave';
+import { SpeakingWave } from '@/components/live/SpeakingWave';
 import { LivePodcastRoom, subscribeLivePodcastRooms } from '@/lib/livePodcasts';
 
 type SheetComment = {
