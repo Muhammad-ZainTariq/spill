@@ -22,6 +22,34 @@ service cloud.firestore {
       allow create: if request.auth != null && request.auth.uid == userId;
       allow update: if request.auth != null && (request.auth.uid == userId || isAdmin());
       allow delete: if request.auth != null && request.auth.uid == userId;
+
+      // Mood tab: daily stories — path owns the data (users/{uid}/story_checkins)
+      match /story_checkins/{entryId} {
+        allow read, delete: if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null
+          && request.auth.uid == userId
+          && request.resource.data.mood_value is number
+          && request.resource.data.mood_value >= 1
+          && request.resource.data.mood_value <= 5
+          && request.resource.data.created_at is string;
+        allow update: if request.auth != null
+          && request.auth.uid == userId
+          && request.resource.data.mood_value is number
+          && request.resource.data.mood_value >= 1
+          && request.resource.data.mood_value <= 5;
+      }
+    }
+
+    // Legacy top-level mood docs (optional migration from older clients)
+    match /story_checkins/{entryId} {
+      allow read: if request.auth != null && resource.data.user_uid == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.user_uid == request.auth.uid
+        && request.resource.data.mood_value is number
+        && request.resource.data.mood_value >= 1
+        && request.resource.data.mood_value <= 5
+        && request.resource.data.created_at is string;
+      allow update, delete: if request.auth != null && resource.data.user_uid == request.auth.uid;
     }
 
     // Match requests: only sender or receiver can read/write
@@ -78,10 +106,6 @@ service cloud.firestore {
     match /followers/{followerId} {
       allow read, write: if request.auth != null;
     }
-    match /login_logs/{logId} {
-      allow read, write: if request.auth != null;
-    }
-
     // Groups
     match /groups/{groupId} {
       allow read: if request.auth != null;

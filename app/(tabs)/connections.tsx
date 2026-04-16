@@ -30,7 +30,6 @@ import {
   formatTimeAgo,
   getConversations,
   getCurrentUserRole,
-  getGameLeaderboard,
   getGroups,
   getOfficialChallenges,
   getOrCreateConversation,
@@ -53,7 +52,7 @@ interface Message {
   } | null;
 }
 
-type TabKey = 'messages' | 'therapists' | 'groups' | 'requests' | 'leaderboard';
+type TabKey = 'messages' | 'therapists' | 'groups' | 'requests';
 
 export default function ConnectionsScreen() {
   const router = useRouter();
@@ -72,8 +71,6 @@ export default function ConnectionsScreen() {
   const [challengeCategoryFilter, setChallengeCategoryFilter] = useState<string>('All');
   const [requests, setRequests] = useState<any[]>([]);
   const [loadingRequests, setLoadingRequests] = useState(true);
-  const [leaderboard, setLeaderboard] = useState<{ userId: string; displayName: string; totalWins: number; tictactoeWins: number; chessWins: number }[]>([]);
-  const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
   const [therapists, setTherapists] = useState<(TherapistProfile & { nextSlotAt?: string | null; openSlots?: number })[]>([]);
   const [loadingTherapists, setLoadingTherapists] = useState(false);
   const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -131,18 +128,6 @@ export default function ConnectionsScreen() {
       setOfficialChallenges([]);
     } finally {
       setLoadingOfficial(false);
-    }
-  };
-
-  const loadLeaderboard = async () => {
-    try {
-      setLoadingLeaderboard(true);
-      const list = await getGameLeaderboard(30);
-      setLeaderboard(list);
-    } catch (e) {
-      setLeaderboard([]);
-    } finally {
-      setLoadingLeaderboard(false);
     }
   };
 
@@ -292,10 +277,6 @@ export default function ConnectionsScreen() {
     const interval = setInterval(loadMessages, 5000);
     return () => clearInterval(interval);
   }, [selectedConversation]);
-
-  useEffect(() => {
-    if (activeTab === 'leaderboard') loadLeaderboard();
-  }, [activeTab]);
 
   useEffect(() => {
     if (activeTab === 'therapists') loadTherapists();
@@ -598,7 +579,7 @@ export default function ConnectionsScreen() {
               activeTab === 'messages' ? 'Search people...' :
               activeTab === 'therapists' ? 'Search therapists...' :
               activeTab === 'groups' ? 'Search groups...' :
-              activeTab === 'requests' ? 'Search requests...' : 'Leaderboard'
+              'Search requests...'
             }
             placeholderTextColor="#999"
             value={searchQuery}
@@ -612,7 +593,17 @@ export default function ConnectionsScreen() {
           <Pressable style={styles.streaksButton} onPress={() => router.push('/streaks' as any)}>
             <Feather name="zap" size={18} color="#ec4899" />
           </Pressable>
-          <Pressable style={styles.createButton} onPress={() => activeTab === 'messages' ? router.push('/(tabs)/messages' as any) : router.push('/group' as any)}>
+          <Pressable
+            style={styles.createButton}
+            onPress={() => {
+              if (activeTab === 'groups') {
+                router.push('/create-challenge' as any);
+              } else {
+                setActiveTab('messages');
+                setSearchQuery('');
+              }
+            }}
+          >
             <Feather name="plus" size={24} color="#fff" />
           </Pressable>
         </View>
@@ -623,14 +614,14 @@ export default function ConnectionsScreen() {
         {/* Tab pills - fixed at top, never scrolls away */}
         <View style={styles.tabsContainer}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.segmentRow}>
-            {(['messages', 'therapists', 'groups', 'requests', 'leaderboard'] as TabKey[]).map((key) => (
+            {(['messages', 'therapists', 'groups', 'requests'] as TabKey[]).map((key) => (
               <Pressable
                 key={key}
                 style={[styles.segmentChip, activeTab === key && styles.segmentChipActive]}
                 onPress={() => setActiveTab(key)}
               >
                 <Text style={[styles.segmentText, activeTab === key && styles.segmentTextActive]}>
-                  {key === 'messages' ? 'Messages' : key === 'therapists' ? 'Therapists' : key === 'groups' ? 'Groups' : key === 'requests' ? 'Requests' : 'Leaderboard'}
+                  {key === 'messages' ? 'Messages' : key === 'therapists' ? 'Therapists' : key === 'groups' ? 'Groups' : 'Requests'}
                 </Text>
                 {key === 'requests' && requests.length > 0 && (
                   <View style={styles.requestBadge}>
@@ -784,43 +775,6 @@ export default function ConnectionsScreen() {
                 }
                 refreshing={loadingRequests}
                 onRefresh={loadRequests}
-              />
-            )
-          ) : activeTab === 'leaderboard' ? (
-            loadingLeaderboard ? (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color="#ec4899" />
-                <Text style={styles.loadingText}>Loading leaderboard...</Text>
-              </View>
-            ) : (
-              <FlatList
-                style={styles.tabContent}
-                data={leaderboard}
-                keyExtractor={(item) => item.userId}
-                contentContainerStyle={styles.listContent}
-                ListHeaderComponent={
-                  <View style={{ paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e5e7eb' }}>
-                    <Text style={{ fontSize: 15, fontWeight: '600', color: '#374151' }}>Game wins (Tic-Tac-Toe + Chess)</Text>
-                    <Text style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>Top players by total wins</Text>
-                  </View>
-                }
-                renderItem={({ item, index }) => (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#f3f4f6' }}>
-                    <Text style={{ fontSize: 17, fontWeight: '700', color: '#9ca3af', width: 28 }}>#{index + 1}</Text>
-                    <Text style={{ flex: 1, fontSize: 16, fontWeight: '600', color: '#111827' }} numberOfLines={1}>{item.displayName}</Text>
-                    <View style={{ backgroundColor: '#ec4899', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
-                      <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>{item.totalWins} wins</Text>
-                    </View>
-                  </View>
-                )}
-                ListEmptyComponent={
-                  <View style={styles.emptyState}>
-                    <Text style={styles.emptyTitle}>No games played yet</Text>
-                    <Text style={styles.emptySubtitle}>Win Tic-Tac-Toe or Chess with your matches to appear here.</Text>
-                  </View>
-                }
-                refreshing={loadingLeaderboard}
-                onRefresh={loadLeaderboard}
               />
             )
           ) : null}

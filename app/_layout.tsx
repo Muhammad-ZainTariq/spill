@@ -176,6 +176,14 @@ export default function RootLayout() {
             gestureEnabled: true,
           }} 
         />
+        <Stack.Screen
+          name="create-challenge"
+          options={{
+            headerShown: false,
+            gestureEnabled: true,
+            animation: 'slide_from_right',
+          }}
+        />
         <Stack.Screen 
           name="premium" 
           options={{ 

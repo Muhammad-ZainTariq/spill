@@ -104,21 +104,23 @@ export default function CreateChallengeScreen() {
     }
   };
 
+  const horizontalPad = 20;
+
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={[styles.container, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }]}>
-        <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+      <View style={[styles.container, { paddingBottom: insets.bottom + 24 }]}>
+        <View style={[styles.header, { paddingTop: insets.top + 8, paddingHorizontal: horizontalPad }]}>
+          <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={12}>
             <Feather name="arrow-left" size={24} color="#333" />
           </Pressable>
-          <Text style={styles.headerTitle}>
+          <Text style={styles.headerTitle} numberOfLines={1}>
             {isOfficialMode ? 'Create official challenge' : 'Create challenge'}
           </Text>
           <View style={styles.backBtn} />
         </View>
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, { paddingHorizontal: horizontalPad }]}
           keyboardShouldPersistTaps="handled"
         >
           <Text style={styles.label}>Category</Text>
@@ -219,16 +221,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+    paddingBottom: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e2e8f0',
     backgroundColor: '#fff',
   },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '800', color: '#0f172a' },
+  headerTitle: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+    textAlign: 'center',
+    marginHorizontal: 8,
+  },
   scroll: { flex: 1 },
-  scrollContent: { padding: 20 },
+  scrollContent: { paddingTop: 20, paddingBottom: 32 },
   label: { fontSize: 14, fontWeight: '700', color: '#475569', marginBottom: 8 },
   categoryWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   categoryChip: {

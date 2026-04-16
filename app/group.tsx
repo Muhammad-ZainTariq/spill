@@ -112,7 +112,10 @@ import {
     }, []);
 
     useEffect(() => {
-        if (!groupId || typeof groupId !== 'string') return;
+        if (!groupId || typeof groupId !== 'string') {
+            setLoading(false);
+            return;
+        }
 
         setCurrentUserId(auth.currentUser?.uid ?? null);
         loadGroup();
@@ -575,8 +578,15 @@ import {
 
     if (!group) {
         return (
-        <View style={styles.loadingContainer}>
-            <Text style={styles.loadingText}>Group not found</Text>
+        <View style={[styles.loadingContainer, { justifyContent: 'flex-start', paddingTop: insets.top + 12, paddingHorizontal: 24 }]}>
+            <Pressable style={styles.backButtonHeader} onPress={() => router.back()} hitSlop={12}>
+            <Feather name="arrow-left" size={24} color="#333" />
+            </Pressable>
+            <Text style={[styles.loadingText, { marginTop: 32, textAlign: 'center' }]}>
+                {!groupId || typeof groupId !== 'string'
+                ? 'No group selected. Open a group from Connections, or tap + on Groups to create a challenge.'
+                : 'Group not found'}
+            </Text>
         </View>
         );
     }

@@ -36,14 +36,6 @@ export default function Signup() {
   const funnyWords = ['Silly', 'Goofy', 'Wacky', 'Zany', 'Bouncy', 'Bubbly', 'Chirpy', 'Dizzy', 'Fizzy', 'Giggly'];
   const cuteAnimals = ['Panda', 'Bunny', 'Puppy', 'Kitty', 'Duck', 'Frog', 'Bear', 'Pig', 'Bee', 'Bug'];
 
-  const generateHardcodedName = () => {
-    const word = funnyWords[Math.floor(Math.random() * funnyWords.length)];
-    const animal = cuteAnimals[Math.floor(Math.random() * cuteAnimals.length)];
-    const numbers = Math.floor(Math.random() * 999) + 1;
-    setAnonymousUsername(`${word.toLowerCase()}-${animal.toLowerCase()}-${numbers}`);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
   const checkUsernameExists = async (username: string) => {
     try {
       const q = query(collection(db, 'users'), where('anonymous_username', '==', username));
@@ -83,7 +75,8 @@ export default function Signup() {
     try {
       await generateUniqueUsername();
     } catch {
-      generateHardcodedName();
+      setAnonymousUsername(generateRandomUsername());
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } finally {
       setGeneratingName(false);
     }

@@ -79,8 +79,6 @@ export default function Login() {
             return;
           }
         }
-        const { recordLogin } = await import('./functions');
-        await recordLogin();
         router.replace('/success');
       } catch (err: any) {
         const code = err?.code;

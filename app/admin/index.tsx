@@ -92,19 +92,6 @@ export default function AdminDashboard() {
             </View>
           </Pressable>
 
-          <Pressable style={styles.tile} onPress={() => open('/admin/login-stats')}>
-            <View style={[styles.tileIcon, { backgroundColor: 'rgba(14,165,233,0.10)' }]}>
-              <Feather name="bar-chart-2" size={20} color={tokens.colors.blue} />
-            </View>
-            <Text style={styles.tileMeta}>Analytics</Text>
-            <Text style={styles.tileTitle}>Login stats</Text>
-            <Text style={styles.tileDesc}>View login counts per day in a chart.</Text>
-            <View style={styles.tileLink}>
-              <Text style={styles.tileLinkText}>Open</Text>
-              <Feather name="chevron-right" size={16} color={tokens.colors.pink} />
-            </View>
-          </Pressable>
-
           <Pressable style={[styles.tile, styles.tileWide]} onPress={() => open('/create-challenge?official=1')}>
             <View style={[styles.tileIcon, { backgroundColor: 'rgba(244,114,182,0.10)' }]}>
               <Feather name="zap" size={20} color={tokens.colors.pink} />

@@ -1,4 +1,5 @@
 import { auth, db, functions } from '@/lib/firebase';
+import { getMoodEntries as fetchMoodEntriesFirestore } from '@/lib/moodStories';
 import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
 import {
@@ -79,16 +80,50 @@ export interface Post {
   user_vote?: 'upvote' | 'downvote' | null;
 }
 
-/** Feed algorithm: mix of posts from people you follow + discovery (others). Interleaves 1 from followed, 1 from discovery. */
-function mergeFollowedAndDiscovery(followed: any[], discovery: any[]): any[] {
-  const out: any[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < followed.length || j < discovery.length) {
-    if (i < followed.length) out.push(followed[i++]);
-    if (j < discovery.length) out.push(discovery[j++]);
-  }
-  return out;
+/** Parse post time for ranking (ms since epoch). */
+function getPostTimeMs(p: any): number {
+  const raw = p?.created_at;
+  if (!raw) return 0;
+  const t = Date.parse(String(raw));
+  return Number.isFinite(t) ? t : 0;
+}
+
+/**
+ * Home feed ranking (client-side on the latest N posts from Firestore):
+ * - Base = recency (newer posts score higher).
+ * - People you follow get a virtual “recency boost” so their posts surface without hiding fresh discovery.
+ * - Light boost from upvotes + comments (capped) so engaging posts rise slightly.
+ * - Posts flagged for toxicity (not yet approved) are pushed to the bottom.
+ * - Dedupe by post id.
+ */
+const FEED_FOLLOW_BOOST_MS = 40 * 60 * 60 * 1000; // ~40h — followed authors compete with newer strangers fairly
+const FEED_MAX_ENGAGEMENT_MS = 2.5 * 60 * 60 * 1000;
+const FEED_FLAGGED_PENALTY_MS = 50 * 365 * 24 * 60 * 60 * 1000;
+
+function feedRankScore(p: any, followingSet: Set<string>): number {
+  let s = getPostTimeMs(p);
+  if (p.user_id && followingSet.has(p.user_id)) s += FEED_FOLLOW_BOOST_MS;
+  const up = Math.min(800, Number(p.upvotes_count) || 0);
+  const cm = Math.min(400, Number(p.comments_count) || 0);
+  const engagement = Math.min(FEED_MAX_ENGAGEMENT_MS, up * 2_800 + cm * 9_000);
+  s += engagement;
+  if (p.flagged_for_toxicity && !p.approved_safe_at) s -= FEED_FLAGGED_PENALTY_MS;
+  return s;
+}
+
+function rankFeedPosts(posts: any[], followingSet: Set<string>, limit: number): any[] {
+  const seen = new Set<string>();
+  const unique = posts.filter((p) => {
+    const id = p?.id;
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return unique
+    .map((p) => ({ p, score: feedRankScore(p, followingSet) }))
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.p)
+    .slice(0, limit);
 }
 
 export const fetchPosts = async (category?: string): Promise<Post[]> => {
@@ -119,15 +154,8 @@ export const fetchPosts = async (category?: string): Promise<Post[]> => {
       });
     if (category && category !== 'All') posts = posts.filter((p: any) => p.category === category);
 
-    if (uid && posts.length > 0) {
-      const followingIds = await getFollowingIds();
-      const followingSet = new Set(followingIds);
-      const fromFollowed = posts.filter((p: any) => followingSet.has(p.user_id));
-      const discovery = posts.filter((p: any) => !followingSet.has(p.user_id));
-      posts = mergeFollowedAndDiscovery(fromFollowed, discovery).slice(0, 100);
-    } else {
-      posts = posts.slice(0, 100);
-    }
+    const followingSet = uid ? new Set(await getFollowingIds()) : new Set<string>();
+    posts = rankFeedPosts(posts, followingSet, 100);
 
     const withProfiles = await Promise.all(
       posts.map(async (post: any) => {
@@ -191,15 +219,8 @@ export function subscribeToPosts(
         });
       if (category && category !== 'All') posts = posts.filter((p: any) => p.category === category);
 
-      if (uid && posts.length > 0) {
-        const followingIds = await getFollowingIds();
-        const followingSet = new Set(followingIds);
-        const fromFollowed = posts.filter((p: any) => followingSet.has(p.user_id));
-        const discovery = posts.filter((p: any) => !followingSet.has(p.user_id));
-        posts = mergeFollowedAndDiscovery(fromFollowed, discovery).slice(0, 100);
-      } else {
-        posts = posts.slice(0, 100);
-      }
+      const followingSet = uid ? new Set(await getFollowingIds()) : new Set<string>();
+      posts = rankFeedPosts(posts, followingSet, 100);
 
       const withProfiles = await Promise.all(
         posts.map(async (post: any) => {
@@ -956,56 +977,6 @@ export const createStaffUser = async (
     if (code === 'functions/invalid-argument') return { ok: false, error: e?.message || 'Invalid email or password (min 6 characters).' };
     return { ok: false, error: e?.message || 'Could not create staff. Deploy the Cloud Function if you haven’t.' };
   }
-};
-
-/** Record a login event (call after successful sign-in). */
-export const recordLogin = async (): Promise<void> => {
-  const user = auth.currentUser;
-  if (!user) return;
-  try {
-    await addDoc(collection(db, 'login_logs'), {
-      user_id: user.uid,
-      logged_at: new Date().toISOString(),
-    });
-  } catch (e) {
-    console.warn('Could not record login', e);
-  }
-};
-
-/** Admin-only: get login counts per day for the last N days. */
-export const getLoginStatsForAdmin = async (days: number = 30): Promise<{ date: string; count: number }[]> => {
-  const user = auth.currentUser;
-  if (!user) return [];
-  const roleSnap = await getDoc(doc(db, 'users', user.uid));
-  if (!roleSnap.data()?.is_admin) return [];
-
-  const start = new Date();
-  start.setDate(start.getDate() - days);
-  start.setHours(0, 0, 0, 0);
-  const startIso = start.toISOString();
-
-  const q = query(
-    collection(db, 'login_logs'),
-    where('logged_at', '>=', startIso),
-    orderBy('logged_at', 'asc')
-  );
-  const snap = await getDocs(q);
-  const byDay: Record<string, number> = {};
-  for (let d = 0; d <= days; d++) {
-    const dte = new Date(start);
-    dte.setDate(dte.getDate() + d);
-    byDay[dte.toISOString().split('T')[0]] = 0;
-  }
-  snap.docs.forEach((docSnap) => {
-    const at = docSnap.data().logged_at;
-    if (typeof at === 'string') {
-      const day = at.split('T')[0];
-      byDay[day] = (byDay[day] ?? 0) + 1;
-    }
-  });
-  return Object.entries(byDay)
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([date, count]) => ({ date, count }));
 };
 
 // ========================================
@@ -2799,13 +2770,8 @@ export const activatePremium = async () => {
 // MOOD & GRATITUDE FUNCTIONS
 // ========================================
 
-export interface MoodEntry {
-  id: string;
-  user_id: string;
-  mood_value: number; // 1-5
-  note?: string | null;
-  created_at: string;
-}
+export type { MoodEntry } from '@/lib/moodStories';
+export { logMood, getMoodEntries, getAverageMood } from '@/lib/moodStories';
 
 export interface GratitudeEntry {
   id: string;
@@ -2813,72 +2779,6 @@ export interface GratitudeEntry {
   content: string;
   created_at: string;
 }
-
-// Log a mood entry
-export const logMood = async (moodValue: number, note?: string): Promise<MoodEntry | null> => {
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error('Not authenticated');
-
-    if (moodValue < 1 || moodValue > 5) {
-      throw new Error('Mood value must be between 1 and 5');
-    }
-
-    const { data, error } = await supabase
-      .from('mood_entries')
-      .insert({
-        user_id: user.id,
-        mood_value: moodValue,
-        note: note || null,
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data;
-  } catch (error) {
-    console.error('Error logging mood:', error);
-    return null;
-  }
-};
-
-// Get mood entries for a date range
-export const getMoodEntries = async (days: number = 30): Promise<MoodEntry[]> => {
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return [];
-
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-
-    const { data, error } = await supabase
-      .from('mood_entries')
-      .select('*')
-      .eq('user_id', user.id)
-      .gte('created_at', startDate.toISOString())
-      .order('created_at', { ascending: true });
-
-    if (error) throw error;
-    return data || [];
-  } catch (error) {
-    console.error('Error fetching mood entries:', error);
-    return [];
-  }
-};
-
-// Get average mood for a period
-export const getAverageMood = async (days: number = 7): Promise<number | null> => {
-  try {
-    const entries = await getMoodEntries(days);
-    if (entries.length === 0) return null;
-
-    const sum = entries.reduce((acc, entry) => acc + entry.mood_value, 0);
-    return sum / entries.length;
-  } catch (error) {
-    console.error('Error calculating average mood:', error);
-    return null;
-  }
-};
 
 // Add a gratitude entry
 export const addGratitude = async (content: string): Promise<GratitudeEntry | null> => {
@@ -3081,24 +2981,19 @@ export const generateAITherapyPrompt = async (): Promise<string | null> => {
       return null;
     }
 
-    // Get recent posts and mood entries
-    const [postsData, moodData] = await Promise.all([
+    // Get recent posts (Supabase stub / Firestore posts) + mood stories from Firestore
+    const [postsData, moodEntriesFs] = await Promise.all([
       supabase
         .from('posts')
         .select('content, created_at')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .limit(5),
-      supabase
-        .from('mood_entries')
-        .select('mood_value, note, created_at')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(7),
+      fetchMoodEntriesFirestore(21),
     ]);
 
     const recentPosts = postsData.data || [];
-    const recentMoods = moodData.data || [];
+    const recentMoods = moodEntriesFs.slice(-7);
     
     // Calculate average mood
     const avgMood = recentMoods.length > 0
@@ -3175,22 +3070,17 @@ export const getWeeklySummary = async (): Promise<{
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
 
-    const [postsData, moodData] = await Promise.all([
+    const [postsData, moodsFs] = await Promise.all([
       supabase
         .from('posts')
         .select('content, created_at')
         .eq('user_id', user.id)
         .gte('created_at', weekAgo.toISOString()),
-      supabase
-        .from('mood_entries')
-        .select('mood_value, created_at')
-        .eq('user_id', user.id)
-        .gte('created_at', weekAgo.toISOString())
-        .order('created_at', { ascending: true }),
+      fetchMoodEntriesFirestore(7),
     ]);
 
     const posts = postsData.data || [];
-    const moods = moodData.data || [];
+    const moods = moodsFs.map((m) => ({ mood_value: m.mood_value, created_at: m.created_at }));
 
     if (moods.length === 0 && posts.length === 0) {
       return {

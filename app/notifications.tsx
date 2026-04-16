@@ -180,7 +180,7 @@ export default function NotificationsScreen() {
     if (notification.type === 'follow') {
       router.push(`/profile?userId=${notification.profiles.id}` as any);
     } else if (notification.type === 'message' && notification.messages) {
-      router.push(`/(tabs)/messages` as any);
+      router.push('/(tabs)/connections' as any);
     } else if (notification.type === 'group_message' && notification.group_messages) {
       router.push(`/group?groupId=${notification.group_messages.group_id}` as any);
     } else if (notification.type === 'group_streak' && notification.group_id) {

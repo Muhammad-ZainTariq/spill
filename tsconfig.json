@@ -12,6 +12,7 @@
     "app/**/*.tsx",
     "components/**/*.ts",
     "components/**/*.tsx",
+    "lib/**/*.ts",
     "hooks/**/*.ts",
     "constants/**/*.ts",
     ".expo/types/**/*.ts",
