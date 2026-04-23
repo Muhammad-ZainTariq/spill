@@ -1,18 +1,21 @@
 import {
-  approveTherapistBookingRequest,
+  approveMergedTherapistBookingRequests,
   bookTherapistSlot,
   cancelTherapistSession,
   cancelTherapistSlot,
   createTherapistSlot,
   getTherapistProfile,
   getUserLite,
+  groupConsecutiveBookingRequests,
   listAllSlotsForTherapist,
   listBookingRequestsForTherapist,
   listOpenSlotsForTherapist,
   listReviewsForTherapist,
   listSessionsForTherapist,
-  rejectTherapistBookingRequest,
+  listSessionsForUser,
+  rejectMergedTherapistBookingRequests,
   rescheduleTherapistSession,
+  sessionsBySlotId,
   TherapistBookingRequest,
   TherapistProfile,
   TherapistReview,
@@ -24,6 +27,7 @@ import { tokens } from '@/app/ui/tokens';
 import { auth, db } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -46,13 +50,25 @@ function fmtSlot(iso: string) {
   return d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+const EMPTY_TIME_IDXS: number[] = [];
+
 export default function TherapistProfileScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const therapistId = String(params?.id || '').trim();
   const viewParam = String(params?.view || '').trim();
 
-  const meUid = auth.currentUser?.uid || null;
+  const [meUid, setMeUid] = useState<string | null>(() => auth.currentUser?.uid ?? null);
+  const [authInitialized, setAuthInitialized] = useState(false);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setMeUid(user?.uid ?? null);
+      setAuthInitialized(true);
+    });
+    return () => unsub();
+  }, []);
+
   const isMe = !!meUid && meUid === therapistId;
   const activeSection: 'home' | 'appointments' | 'reviews' | 'profile' =
     isMe && (viewParam === 'appointments' || viewParam === 'reviews' || viewParam === 'profile')
@@ -77,6 +93,8 @@ export default function TherapistProfileScreen() {
   const [userMap, setUserMap] = useState<Record<string, any>>({});
   const [reviews, setReviews] = useState<TherapistReview[]>([]);
   const [saving, setSaving] = useState(false);
+  /** Visitor: approved sessions with this therapist only */
+  const [mySessionsWithThisTherapist, setMySessionsWithThisTherapist] = useState<TherapistSession[]>([]);
 
   const [showCreateSlot, setShowCreateSlot] = useState(false);
   const [slotDayIdx, setSlotDayIdx] = useState(0);
@@ -123,13 +141,18 @@ export default function TherapistProfileScreen() {
     if (!therapistId) return;
     setLoading(true);
     try {
-      const [p, s, allS, sess, revs, reqs] = await Promise.all([
+      const [p, s, allS, sess, revs, reqs, mineHere] = await Promise.all([
         getTherapistProfile(therapistId),
         listOpenSlotsForTherapist(therapistId, 25),
         isMe ? listAllSlotsForTherapist(therapistId, 100) : Promise.resolve([]),
         isMe ? listSessionsForTherapist(therapistId, 80) : Promise.resolve([]),
         isMe ? listReviewsForTherapist(therapistId, 30) : Promise.resolve([]),
         isMe ? listBookingRequestsForTherapist(therapistId, 50) : Promise.resolve([]),
+        !isMe && meUid
+          ? listSessionsForUser(meUid, 40).then((all) =>
+              all.filter((x) => String(x.therapist_uid || '') === therapistId)
+            )
+          : Promise.resolve([] as TherapistSession[]),
       ]);
       setProfile(p);
       setSlots(s);
@@ -137,6 +160,7 @@ export default function TherapistProfileScreen() {
       setSessions(sess);
       setReviews(revs);
       setRequests(reqs);
+      setMySessionsWithThisTherapist(mineHere);
       if (p) {
         setEditName(String(p.display_name || ''));
         setEditSpec(String(p.specialization || ''));
@@ -158,18 +182,32 @@ export default function TherapistProfileScreen() {
     } finally {
       setLoading(false);
     }
-  }, [isMe, therapistId]);
+  }, [isMe, meUid, therapistId]);
 
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
+    if (!meUid) return;
     setRefreshing(true);
     await load();
     setRefreshing(false);
-  }, [load]);
+  }, [load, meUid]);
 
   useEffect(() => {
+    if (!authInitialized) return;
+    if (!meUid) {
+      setLoading(false);
+      return;
+    }
     load();
-  }, [load]);
+  }, [authInitialized, meUid, load]);
+
+  useEffect(() => {
+    if (!authInitialized || meUid) return;
+    const t = setTimeout(() => {
+      router.replace('/login' as any);
+    }, 2200);
+    return () => clearTimeout(t);
+  }, [authInitialized, meUid, router]);
 
   // Reset slot selection when opening the create-slot modal so count is accurate
   useEffect(() => {
@@ -205,35 +243,15 @@ export default function TherapistProfileScreen() {
       );
       return;
     }
-    Alert.alert('Request session length', 'Choose how long you want this session to be.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: '30 min',
-        onPress: async () => {
-          setSlots((prev) => prev.filter((s) => s.id !== slotId));
-          const res = await bookTherapistSlot(slotId, 30);
-          if (!res.ok) {
-            Alert.alert('Error', res.error || 'Request failed.');
-            await load();
-          } else {
-            Alert.alert('Request sent', 'Waiting for therapist approval.');
-          }
-        },
-      },
-      {
-        text: '60 min',
-        onPress: async () => {
-          setSlots((prev) => prev.filter((s) => s.id !== slotId));
-          const res = await bookTherapistSlot(slotId, 60);
-          if (!res.ok) {
-            Alert.alert('Error', res.error || 'Request failed.');
-            await load();
-          } else {
-            Alert.alert('Request sent', 'Waiting for therapist approval.');
-          }
-        },
-      },
-    ]);
+    // Availability is stored as a time window (often 60 min); default session request is 30 min (no extra picker).
+    setSlots((prev) => prev.filter((s) => s.id !== slotId));
+    const res = await bookTherapistSlot(slotId, 30);
+    if (!res.ok) {
+      Alert.alert('Error', res.error || 'Request failed.');
+      await load();
+    } else {
+      Alert.alert('Request sent', '30-minute session requested. Waiting for therapist approval.');
+    }
   };
 
   const dateOptions = useMemo(() => {
@@ -288,6 +306,31 @@ export default function TherapistProfileScreen() {
     return allocated;
   }, [slots, slotDayIdx, timeOptions]);
 
+  // Today only: times that are already in the past (same 5‑min buffer as createSlotFromPicker)
+  const pastTimeIdxsForSelectedDay = useMemo(() => {
+    if (slotDayIdx !== 0) return EMPTY_TIME_IDXS;
+    const now = new Date();
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const cutoffMs = now.getTime() + 5 * 60 * 1000;
+    const past: number[] = [];
+    for (let idx = 0; idx < timeOptions.length; idx++) {
+      const t = timeOptions[idx]?.minutes ?? 0;
+      const hh = Math.floor(t / 60);
+      const mm = t % 60;
+      const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hh, mm, 0, 0);
+      if (start.getTime() < cutoffMs) past.push(idx);
+    }
+    return past;
+  }, [slotDayIdx, timeOptions, showCreateSlot]);
+
+  useEffect(() => {
+    if (pastTimeIdxsForSelectedDay.length === 0) return;
+    setSlotTimeIdxs((prev) => {
+      const next = prev.filter((idx) => !pastTimeIdxsForSelectedDay.includes(idx));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [pastTimeIdxsForSelectedDay]);
+
   // User side: group slots by day for filtering
   const slotsByDay = useMemo(() => {
     const map = new Map<string, TherapistSlot[]>();
@@ -323,13 +366,55 @@ export default function TherapistProfileScreen() {
     return slotsByDay.get(key) || [];
   }, [userSlotDayKey, slotDays, slotsByDay, slots]);
 
+  // Hide extra rows when one session spans multiple 30-minute slots (merged approve).
+  const hiddenAppointmentSlotIds = useMemo(() => {
+    const hidden = new Set<string>();
+    const groups = groupConsecutiveBookingRequests(requests);
+    for (const g of groups) {
+      if (g.length <= 1) continue;
+      const sorted = [...g].sort(
+        (a, b) => Date.parse(String(a.start_at || '')) - Date.parse(String(b.start_at || ''))
+      );
+      for (let i = 1; i < sorted.length; i++) {
+        const sid = String(sorted[i].slot_id || '').trim();
+        if (sid) hidden.add(sid);
+      }
+    }
+    for (const s of sessions) {
+      const ids = Array.isArray(s.slot_ids) && s.slot_ids.length > 0
+        ? s.slot_ids.map((x) => String(x || '').trim()).filter(Boolean)
+        : s.slot_id
+          ? [String(s.slot_id)]
+          : [];
+      for (let i = 1; i < ids.length; i++) hidden.add(ids[i]);
+    }
+    return hidden;
+  }, [requests, sessions]);
+
+  const pendingRequestGroupInfo = useMemo(() => {
+    const map = new Map<string, { count: number; firstRequestId: string; rangeEndIso: string; totalMin: number }>();
+    const groups = groupConsecutiveBookingRequests(requests);
+    for (const g of groups) {
+      if (g.length <= 1) continue;
+      const sorted = [...g].sort(
+        (a, b) => Date.parse(String(a.start_at || '')) - Date.parse(String(b.start_at || ''))
+      );
+      const lastEnd = String(sorted[sorted.length - 1]?.end_at || '');
+      const firstId = String(sorted[0]?.id || '');
+      const totalMin = sorted.reduce((acc, r) => acc + Math.round(Number(r.requested_duration_min || 30)), 0);
+      for (const r of sorted) {
+        map.set(String(r.id), { count: sorted.length, firstRequestId: firstId, rangeEndIso: lastEnd, totalMin });
+      }
+    }
+    return map;
+  }, [requests]);
+
   // Unified appointment list: all slots with request/session info for therapist
   const appointmentItems = useMemo(() => {
     if (!isMe) return [];
     const reqBySlot = new Map<string, TherapistBookingRequest>();
     for (const r of requests) reqBySlot.set(String(r.slot_id || ''), r);
-    const sessBySlot = new Map<string, TherapistSession>();
-    for (const s of sessions) sessBySlot.set(String(s.slot_id || ''), s);
+    const sessBySlot = sessionsBySlotId(sessions);
     return allSlots.map((slot) => {
       const req = reqBySlot.get(slot.id);
       const sess = sessBySlot.get(slot.id);
@@ -341,11 +426,15 @@ export default function TherapistProfileScreen() {
     });
   }, [isMe, allSlots, requests, sessions, userMap]);
 
+  const appointmentItemsVisible = useMemo(() => {
+    return appointmentItems.filter((item) => !hiddenAppointmentSlotIds.has(item.slot.id));
+  }, [appointmentItems, hiddenAppointmentSlotIds]);
+
   // Therapist: group appointments by date for day filter
   const appointmentDays = useMemo(() => {
     if (!isMe) return [];
     const map = new Map<string, typeof appointmentItems>();
-    for (const item of appointmentItems) {
+    for (const item of appointmentItemsVisible) {
       const d = new Date(String(item.slot.start_at || ''));
       if (Number.isNaN(d.getTime())) continue;
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -364,15 +453,15 @@ export default function TherapistProfileScreen() {
       const label = isToday ? 'Today' : isTomorrow ? 'Tomorrow' : date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
       return { key, label, count: map.get(key)!.length };
     });
-  }, [isMe, appointmentItems]);
+  }, [isMe, appointmentItemsVisible]);
 
   const displayedAppointmentItems = useMemo(() => {
     const key = therapistApptDayKey || (appointmentDays.length > 0 ? appointmentDays[0].key : null);
-    if (!key || appointmentDays.length === 0) return appointmentItems;
+    if (!key || appointmentDays.length === 0) return appointmentItemsVisible;
     const day = appointmentDays.find((d) => d.key === key);
-    if (!day) return appointmentItems;
+    if (!day) return appointmentItemsVisible;
     const map = new Map<string, typeof appointmentItems>();
-    for (const item of appointmentItems) {
+    for (const item of appointmentItemsVisible) {
       const d = new Date(String(item.slot.start_at || ''));
       if (Number.isNaN(d.getTime())) continue;
       const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -380,7 +469,7 @@ export default function TherapistProfileScreen() {
       map.get(k)!.push(item);
     }
     return map.get(key) || [];
-  }, [therapistApptDayKey, appointmentDays, appointmentItems]);
+  }, [therapistApptDayKey, appointmentDays, appointmentItemsVisible]);
 
   // Auto-select first day when therapist appointments load
   useEffect(() => {
@@ -436,8 +525,7 @@ export default function TherapistProfileScreen() {
           continue;
         }
         try {
-          // Therapist availability is time-only; we store 60-min blocks so users can request 30/60.
-          await createTherapistSlot(60, start.toISOString());
+          await createTherapistSlot(30, start.toISOString());
           created.push(label);
         } catch (err: any) {
           skipped.push({ label, reason: err?.message || 'Failed to create' });
@@ -456,14 +544,24 @@ export default function TherapistProfileScreen() {
   };
 
   const handleApprove = async (requestId: string) => {
-    Alert.alert('Approve request', 'Approve this booking request?', [
+    const groups = groupConsecutiveBookingRequests(requests);
+    const group = groups.find((g) => g.some((r) => r.id === requestId)) || [];
+    const ids =
+      group.length > 0
+        ? [...group].sort(
+            (a, b) => Date.parse(String(a.start_at || '')) - Date.parse(String(b.start_at || ''))
+          ).map((r) => r.id)
+        : [requestId];
+    const mergeNote =
+      ids.length > 1 ? ` This will create one session covering ${ids.length} consecutive slots.` : '';
+    Alert.alert('Approve request', `Approve this booking request?${mergeNote}`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Approve',
         onPress: async () => {
-          const res = await approveTherapistBookingRequest(requestId);
+          const res = await approveMergedTherapistBookingRequests(ids);
           if (!res.ok) Alert.alert('Error', res.error || 'Could not approve.');
-          else Alert.alert('Approved', 'Session scheduled.');
+          else Alert.alert('Approved', ids.length > 1 ? 'Merged session scheduled.' : 'Session scheduled.');
           load();
         },
       },
@@ -471,15 +569,24 @@ export default function TherapistProfileScreen() {
   };
 
   const handleReject = async (requestId: string) => {
-    Alert.alert('Decline request', 'Decline this booking request?', [
+    const groups = groupConsecutiveBookingRequests(requests);
+    const group = groups.find((g) => g.some((r) => r.id === requestId)) || [];
+    const ids =
+      group.length > 0
+        ? [...group].sort(
+            (a, b) => Date.parse(String(a.start_at || '')) - Date.parse(String(b.start_at || ''))
+          ).map((r) => r.id)
+        : [requestId];
+    const mergeNote = ids.length > 1 ? ` All ${ids.length} linked requests will be declined.` : '';
+    Alert.alert('Decline request', `Decline this booking request?${mergeNote}`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Decline',
         style: 'destructive',
         onPress: async () => {
-          const res = await rejectTherapistBookingRequest(requestId);
+          const res = await rejectMergedTherapistBookingRequests(ids);
           if (!res.ok) Alert.alert('Error', res.error || 'Could not decline.');
-          else Alert.alert('Declined', 'Request declined and slot reopened.');
+          else Alert.alert('Declined', 'Request declined and slot(s) reopened.');
           load();
         },
       },
@@ -651,7 +758,18 @@ export default function TherapistProfileScreen() {
         </Text>
       </View>
 
-      {loading ? (
+      {!authInitialized ? (
+        <View style={styles.topContent}>
+          <ActivityIndicator color={tokens.colors.pink} />
+          <Text style={styles.muted}>Loading…</Text>
+        </View>
+      ) : !meUid ? (
+        <View style={styles.topContent}>
+          <Text style={[styles.emptyTitle, { textAlign: 'center' }]}>
+            Access denied; redirected to own role&apos;s home
+          </Text>
+        </View>
+      ) : loading ? (
         <View style={styles.topContent}>
           <ActivityIndicator color={tokens.colors.pink} />
           <Text style={styles.muted}>Loading…</Text>
@@ -715,7 +833,7 @@ export default function TherapistProfileScreen() {
                       <View style={styles.sectionMenuIcon}>
                         <Feather name="calendar" size={18} color={tokens.colors.pink} />
                       </View>
-                      <Text style={styles.sectionMenuMeta}>{appointmentItems.length} items</Text>
+                      <Text style={styles.sectionMenuMeta}>{appointmentItemsVisible.length} items</Text>
                       <Text style={styles.sectionMenuTitle}>Appointments</Text>
                       <Text style={styles.sectionMenuText}>Manage availability, requests, and sessions.</Text>
                       <View style={styles.sectionMenuLink}>
@@ -759,7 +877,7 @@ export default function TherapistProfileScreen() {
                   </View>
                   <Text style={styles.helperMuted}>All your slots. Open slots can be cancelled. Requested slots need approval. Approved slots can be rescheduled or cancelled.</Text>
 
-                  {appointmentItems.length === 0 ? (
+                  {appointmentItemsVisible.length === 0 ? (
                     <View style={styles.emptyState}>
                       <Feather name="calendar" size={40} color={tokens.colors.textMuted} />
                       <Text style={styles.emptyTitle}>No appointments yet</Text>
@@ -800,14 +918,29 @@ export default function TherapistProfileScreen() {
                         {displayedAppointmentItems.map(({ slot, request, session, status, userName }) => {
                           const isPending = !!request && !session;
                           const isScheduled = !!session;
+                          const mergePending = request ? pendingRequestGroupInfo.get(request.id) : undefined;
+                          const apptMetaText =
+                            isScheduled && session
+                              ? `${fmtSlot(session.starts_at)} – ${fmtSlot(session.ends_at)} • ${Math.round(Number(session.duration_min || 0))} min`
+                              : mergePending &&
+                                  mergePending.count > 1 &&
+                                  request &&
+                                  request.id === mergePending.firstRequestId
+                                ? `${fmtSlot(slot.start_at)} – ${fmtSlot(mergePending.rangeEndIso)} • ${mergePending.count} slots, ${mergePending.totalMin} min (pending)`
+                                : `${fmtSlot(slot.start_at)} • ${Math.round(Number(slot.duration_min || 0))} min`;
+                          const canPostpone =
+                            !!isScheduled &&
+                            !!session &&
+                            Number(session.duration_min || 0) <= 30 &&
+                            (!session.slot_ids || session.slot_ids.length <= 1);
                           return (
                         <View key={slot.id} style={styles.apptCard}>
                           <View style={styles.apptCardTop}>
                             <Text style={styles.apptName} numberOfLines={1}>
                               {status === 'open' ? 'Open slot' : userName || 'User'}
                             </Text>
-                            <Text style={styles.apptMeta} numberOfLines={1}>
-                              {fmtSlot(slot.start_at)} • {Math.round(Number(slot.duration_min || 0))} min
+                            <Text style={styles.apptMeta} numberOfLines={2}>
+                              {apptMetaText}
                             </Text>
                             <View style={[styles.apptPill, isPending ? styles.apptPillPending : isScheduled ? styles.apptPillScheduled : styles.apptPillOpen]}>
                               <Text style={[styles.apptPillText, isPending ? styles.apptPillTextPending : isScheduled ? styles.apptPillTextScheduled : styles.apptPillTextOpen]}>
@@ -842,10 +975,12 @@ export default function TherapistProfileScreen() {
                                   <Feather name="message-circle" size={14} color="#fff" />
                                   <Text style={styles.openChatText}>Chat</Text>
                                 </Pressable>
-                                <Pressable style={styles.postponeBtn} onPress={() => handlePostpone(session)}>
-                                  <Feather name="calendar" size={14} color={tokens.colors.blue} />
-                                  <Text style={styles.postponeBtnText}>Postpone</Text>
-                                </Pressable>
+                                {canPostpone ? (
+                                  <Pressable style={styles.postponeBtn} onPress={() => handlePostpone(session)}>
+                                    <Feather name="calendar" size={14} color={tokens.colors.blue} />
+                                    <Text style={styles.postponeBtnText}>Postpone</Text>
+                                  </Pressable>
+                                ) : null}
                                 <Pressable
                                   style={[styles.cancelSessionBtn, cancellingId === session.id && { opacity: 0.5 }]}
                                   onPress={() => handleCancelSession(session.id, userName || 'User')}
@@ -974,11 +1109,11 @@ export default function TherapistProfileScreen() {
 
                     <Text style={[styles.modalLabel, { marginTop: 16 }]}>Quick add</Text>
                     <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
-                      <Pressable style={styles.quickAddBtn} onPress={() => quickAddSlot(60, 60)}>
+                      <Pressable style={styles.quickAddBtn} onPress={() => quickAddSlot(30, 60)}>
                         <Feather name="plus" size={16} color={tokens.colors.pink} />
                         <Text style={styles.quickAddBtnText}>In 1 hour</Text>
                       </Pressable>
-                      <Pressable style={styles.quickAddBtn} onPress={() => quickAddSlot(120, 24 * 60)}>
+                      <Pressable style={styles.quickAddBtn} onPress={() => quickAddSlot(30, 24 * 60)}>
                         <Feather name="plus" size={16} color={tokens.colors.pink} />
                         <Text style={styles.quickAddBtnText}>Tomorrow</Text>
                       </Pressable>
@@ -991,7 +1126,7 @@ export default function TherapistProfileScreen() {
                 <View style={styles.modalBackdrop}>
                   <View style={styles.modalCard}>
                     <View style={styles.modalHeader}>
-                      <View>
+                      <View style={styles.modalHeaderText}>
                         <Text style={styles.modalTitle}>Add availability</Text>
                         <Text style={styles.modalSubtitle}>Select date and times for your open slots</Text>
                       </View>
@@ -1015,11 +1150,12 @@ export default function TherapistProfileScreen() {
 
                     <Text style={styles.modalLabel}>Pick times (tap to select multiple)</Text>
                     <Text style={[styles.helperMuted, { marginBottom: 8 }]}>
-                      Times with a checkmark are already allocated for this date.
+                      Times with a checkmark are already allocated. For today, greyed times with a clock are in the past and cannot be selected.
                     </Text>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.modalScrollContent, { paddingRight: 16 }]}>
                       {timeOptions.map((o, idx) => {
                         const isAllocated = allocatedTimeIdxsForSelectedDay.includes(idx);
+                        const isPast = pastTimeIdxsForSelectedDay.includes(idx);
                         const isSelected = slotTimeIdxs.includes(idx);
                         return (
                           <Pressable
@@ -1027,25 +1163,29 @@ export default function TherapistProfileScreen() {
                             style={[
                               styles.timePill,
                               isAllocated && styles.timePillAllocated,
-                              isSelected && !isAllocated && styles.timePillActive,
+                              isPast && !isAllocated && styles.timePillPast,
+                              isSelected && !isAllocated && !isPast && styles.timePillActive,
                             ]}
                             onPress={() => {
-                              if (isAllocated) return; // Can't select already-allocated times
+                              if (isAllocated || isPast) return;
                               setSlotTimeIdxs((prev) => {
                                 const list = Array.isArray(prev) ? prev : [];
                                 return list.includes(idx) ? list.filter((x) => x !== idx) : [...list, idx];
                               });
                             }}
-                            disabled={isAllocated}
+                            disabled={isAllocated || isPast}
                           >
                             {isAllocated ? (
                               <Feather name="check-circle" size={14} color={tokens.colors.success} style={{ marginRight: 4 }} />
+                            ) : isPast ? (
+                              <Feather name="clock" size={14} color={tokens.colors.textMuted} style={{ marginRight: 4 }} />
                             ) : null}
                             <Text
                               style={[
                                 styles.timePillText,
                                 isAllocated && styles.timePillTextAllocated,
-                                isSelected && !isAllocated && styles.timePillTextActive,
+                                isPast && !isAllocated && styles.timePillTextPast,
+                                isSelected && !isAllocated && !isPast && styles.timePillTextActive,
                               ]}
                             >
                               {o.label}
@@ -1056,7 +1196,7 @@ export default function TherapistProfileScreen() {
                     </ScrollView>
 
                     <Text style={[styles.helperMuted, { marginTop: 4 }]}>
-                      Users will choose 30 or 60 min when booking. Each time = one 60‑min slot.
+                      Each selected time is one 30‑minute slot. Members book longer sessions by booking consecutive slots.
                     </Text>
 
                     <Pressable
@@ -1064,7 +1204,7 @@ export default function TherapistProfileScreen() {
                       onPress={createSlotFromPicker}
                       disabled={slotTimeIdxs.length === 0}
                     >
-                      <Feather name="calendar-plus" size={18} color={slotTimeIdxs.length === 0 ? '#94A3B8' : '#fff'} />
+                      <Feather name="plus-circle" size={18} color={slotTimeIdxs.length === 0 ? '#94A3B8' : '#fff'} />
                       <Text style={[styles.createBtnText, slotTimeIdxs.length === 0 && styles.createBtnTextDisabled]}>
                         {slotTimeIdxs.length === 0
                           ? 'Select times above'
@@ -1079,7 +1219,7 @@ export default function TherapistProfileScreen() {
                 <View style={styles.modalBackdrop}>
                   <View style={styles.modalCard}>
                     <View style={styles.modalHeader}>
-                      <View>
+                      <View style={styles.modalHeaderText}>
                         <Text style={styles.modalTitle}>Postpone session</Text>
                         <Text style={styles.modalSubtitle}>Pick a new slot to reschedule to</Text>
                       </View>
@@ -1148,6 +1288,30 @@ export default function TherapistProfileScreen() {
                   <Text style={styles.heroBio}>{profile.bio}</Text>
                 ) : null}
               </View>
+
+              {mySessionsWithThisTherapist.length > 0 ? (
+                <View style={styles.sectionCard}>
+                  <Text style={styles.sectionTitle}>Your sessions</Text>
+                  <Text style={styles.helperMuted}>Approved bookings open chat at the scheduled start time.</Text>
+                  <View style={{ marginTop: 12, gap: 10 }}>
+                    {mySessionsWithThisTherapist.map((sess) => (
+                      <View key={sess.id} style={styles.slotRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.slotWhen}>
+                            {fmtSlot(sess.starts_at)} – {fmtSlot(sess.ends_at)}
+                          </Text>
+                          <Text style={styles.slotMeta}>
+                            {Math.round(Number(sess.duration_min || 0))} min • Scheduled
+                          </Text>
+                        </View>
+                        <Pressable style={styles.bookBtn} onPress={() => router.push(`/therapist-session/${sess.id}` as any)}>
+                          <Text style={styles.bookBtnText}>Chat</Text>
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
 
               <View style={styles.sectionCard}>
                 <Text style={styles.sectionTitle}>Availability</Text>
@@ -1768,6 +1932,8 @@ const styles = StyleSheet.create({
     borderColor: tokens.colors.border,
   },
   modalHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  // minWidth:0 + flex:1 so long subtitles wrap on narrow phones instead of pushing the close button past the card
+  modalHeaderText: { flex: 1, minWidth: 0, paddingRight: 4 },
   modalTitle: { fontSize: 18, fontWeight: '800', color: tokens.colors.text },
   modalSubtitle: { marginTop: 4, fontSize: 13, color: tokens.colors.textMuted },
   modalClose: {
@@ -1777,6 +1943,7 @@ const styles = StyleSheet.create({
     backgroundColor: tokens.colors.surfaceOverlay,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
   modalLabel: { marginTop: 16, marginBottom: 8, fontSize: 13, fontWeight: '800', color: tokens.colors.textSecondary },
   modalScrollContent: { gap: 10, paddingVertical: 4, paddingHorizontal: 2 },
@@ -1807,9 +1974,15 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(16,185,129,0.3)',
     opacity: 0.9,
   },
+  timePillPast: {
+    backgroundColor: 'rgba(148,163,184,0.1)',
+    borderColor: 'rgba(148,163,184,0.28)',
+    opacity: 0.85,
+  },
   timePillText: { fontSize: 13, fontWeight: '700', color: tokens.colors.textSecondary },
   timePillTextActive: { color: tokens.colors.pink },
   timePillTextAllocated: { color: tokens.colors.success },
+  timePillTextPast: { color: tokens.colors.textMuted },
   createBtn: {
     flexDirection: 'row',
     alignItems: 'center',

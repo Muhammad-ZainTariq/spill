@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -285,10 +286,13 @@ export default function MoodGratitudeScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header */}
+        {/* Header — pink kicker + accent & (same language as Matches tab) */}
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Stories & gratitude</Text>
-          <Text style={styles.headerSubtitle}>Write the day’s story anytime — it stacks in your thread below.</Text>
+          <Text style={styles.headerKicker}>Stories · Gratitude</Text>
+          <Text style={styles.headerTitle}>
+            Stories <Text style={styles.headerTitleAccent}>&</Text> gratitude
+          </Text>
+          <Text style={styles.headerSubtitle}>Write the day’s story anytime. It stacks in your thread below.</Text>
         </View>
 
         {/* Quick Actions */}
@@ -466,8 +470,13 @@ export default function MoodGratitudeScreen() {
         transparent={true}
         onRequestClose={() => setShowFutureModal(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+        <KeyboardAvoidingView
+          style={styles.modalKeyboardRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Future You</Text>
             <Text style={styles.modalDescription}>
               Where do you want to see yourself by a specific date? Set a clear goal and add small steps as you go.
@@ -523,6 +532,7 @@ export default function MoodGratitudeScreen() {
             </View>
           </View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <StoryCheckinModal
@@ -538,8 +548,13 @@ export default function MoodGratitudeScreen() {
         transparent={true}
         onRequestClose={() => setShowGratitudeModal(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+        <KeyboardAvoidingView
+          style={styles.modalKeyboardRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>What are you grateful for?</Text>
             
             {/* AI Suggestion Button */}
@@ -599,6 +614,7 @@ export default function MoodGratitudeScreen() {
             </View>
           </View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Random Gratitude Modal */}
@@ -660,12 +676,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingBottom: 24,
   },
+  headerKicker: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ec4899',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
   headerTitle: {
     fontSize: 28,
     fontWeight: '800',
     color: '#0f172a',
     marginBottom: 6,
     letterSpacing: -0.5,
+  },
+  headerTitleAccent: {
+    color: '#ec4899',
+    fontWeight: '800',
   },
   headerSubtitle: {
     fontSize: 15,
@@ -981,6 +1009,9 @@ const styles = StyleSheet.create({
     color: '#64748b',
     textAlign: 'center',
     lineHeight: 22,
+  },
+  modalKeyboardRoot: {
+    flex: 1,
   },
   modalOverlay: {
     flex: 1,

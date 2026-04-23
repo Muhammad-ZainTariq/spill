@@ -382,7 +382,8 @@
       if (rw) rw.style.display = 'none';
       if (roomCode) {
         setStatus('Joining game...', '', '');
-        socket.emit('joinOrCreate', { roomCode, name: 'Player' });
+        var displayName = (params.get('name') || params.get('player') || '').trim().slice(0, 20) || 'Player';
+        socket.emit('joinOrCreate', { roomCode, name: displayName });
       } else setStatus('Open with ?room= from the Spill app.', '', '');
     });
 

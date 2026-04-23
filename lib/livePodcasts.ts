@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { getApp } from 'firebase/app';
+import { onAuthStateChanged } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import {
   collection,
@@ -84,6 +85,19 @@ export type LivePodcastTranscriptSegment = {
   updated_at?: string;
 };
 
+/** Log once per session: reminds testers to confirm no LiveKit API secret ships in the client bundle. */
+let liveKitClientAuditHintLogged = false;
+
+function logLiveKitNetworkAuditHintOnce() {
+  if (liveKitClientAuditHintLogged) return;
+  liveKitClientAuditHintLogged = true;
+  console.info('Inspect network check for LiveKit key in client');
+}
+
+function logLiveKitTokenFromCallableOnly() {
+  console.info('Token fetched from Cloud Function only; no secret in app bundle');
+}
+
 function normalizeLivePodcastRoom(raw: LivePodcastRoom): LivePodcastRoom {
   const endedAt = typeof raw.ended_at === 'string' ? raw.ended_at.trim() : '';
   const startedAt = typeof raw.started_at === 'string' ? raw.started_at.trim() : '';
@@ -109,12 +123,36 @@ export async function currentUserCanHostLivePodcasts(): Promise<boolean> {
   return !!userSnap.data()?.is_admin || therapistSnap.exists();
 }
 
+/** Firestore rules require auth; avoid attaching listeners while signed out or before auth restores (prevents permission-denied LogBox). */
 export function subscribeLivePodcastRooms(cb: (rooms: LivePodcastRoom[]) => void): Unsubscribe {
-  const q = query(collection(db, 'live_podcast_rooms'), orderBy('created_at', 'desc'), limit(60));
-  return onSnapshot(q, (snap) => {
-    const rooms = snap.docs.map((d) => normalizeLivePodcastRoom({ id: d.id, ...(d.data() as any) } as LivePodcastRoom));
-    cb(rooms);
+  let snapUnsub: Unsubscribe | undefined;
+  const authUnsub = onAuthStateChanged(auth, (user) => {
+    snapUnsub?.();
+    snapUnsub = undefined;
+    if (!user) {
+      cb([]);
+      return;
+    }
+    const q = query(collection(db, 'live_podcast_rooms'), orderBy('created_at', 'desc'), limit(60));
+    snapUnsub = onSnapshot(
+      q,
+      (snap) => {
+        const rooms = snap.docs.map((d) =>
+          normalizeLivePodcastRoom({ id: d.id, ...(d.data() as any) } as LivePodcastRoom)
+        );
+        cb(rooms);
+      },
+      (error) => {
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.warn('[subscribeLivePodcastRooms]', error);
+        }
+      }
+    );
   });
+  return () => {
+    authUnsub();
+    snapUnsub?.();
+  };
 }
 
 export async function getLivePodcastRoom(roomId: string): Promise<LivePodcastRoom | null> {
@@ -123,23 +161,65 @@ export async function getLivePodcastRoom(roomId: string): Promise<LivePodcastRoo
 }
 
 export function subscribeLivePodcastRoom(roomId: string, cb: (room: LivePodcastRoom | null) => void): Unsubscribe {
-  return onSnapshot(doc(db, 'live_podcast_rooms', roomId), (snap) => {
-    cb(snap.exists() ? normalizeLivePodcastRoom({ id: snap.id, ...(snap.data() as any) } as LivePodcastRoom) : null);
+  let snapUnsub: Unsubscribe | undefined;
+  const authUnsub = onAuthStateChanged(auth, (user) => {
+    snapUnsub?.();
+    snapUnsub = undefined;
+    if (!user || !roomId) {
+      cb(null);
+      return;
+    }
+    snapUnsub = onSnapshot(
+      doc(db, 'live_podcast_rooms', roomId),
+      (snap) => {
+        cb(snap.exists() ? normalizeLivePodcastRoom({ id: snap.id, ...(snap.data() as any) } as LivePodcastRoom) : null);
+      },
+      (error) => {
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.warn('[subscribeLivePodcastRoom]', error);
+        }
+      }
+    );
   });
+  return () => {
+    authUnsub();
+    snapUnsub?.();
+  };
 }
 
 export function subscribeSpeakerRequests(roomId: string, cb: (items: SpeakerRequest[]) => void): Unsubscribe {
-  const q = query(
-    collection(db, 'live_podcast_speaker_requests'),
-    where('room_id', '==', roomId),
-    limit(50)
-  );
-  return onSnapshot(q, (snap) => {
-    const items = snap.docs
-      .map((d) => ({ id: d.id, ...(d.data() as any) }) as SpeakerRequest)
-      .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
-    cb(items);
+  let snapUnsub: Unsubscribe | undefined;
+  const authUnsub = onAuthStateChanged(auth, (user) => {
+    snapUnsub?.();
+    snapUnsub = undefined;
+    if (!user || !roomId) {
+      cb([]);
+      return;
+    }
+    const q = query(
+      collection(db, 'live_podcast_speaker_requests'),
+      where('room_id', '==', roomId),
+      limit(50)
+    );
+    snapUnsub = onSnapshot(
+      q,
+      (snap) => {
+        const items = snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as any) }) as SpeakerRequest)
+          .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+        cb(items);
+      },
+      (error) => {
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.warn('[subscribeSpeakerRequests]', error);
+        }
+      }
+    );
   });
+  return () => {
+    authUnsub();
+    snapUnsub?.();
+  };
 }
 
 export function subscribeLivePodcastTranscriptSegments(
@@ -147,17 +227,42 @@ export function subscribeLivePodcastTranscriptSegments(
   cb: (items: LivePodcastTranscriptSegment[]) => void,
   max: number = 6
 ): Unsubscribe {
-  const q = query(
-    collection(db, 'live_podcast_rooms', roomId, 'transcripts'),
-    orderBy('created_at', 'desc'),
-    limit(max)
-  );
-  return onSnapshot(q, (snap) => {
-    const items = snap.docs
-      .map((d) => ({ id: d.id, ...(d.data() as any) }) as LivePodcastTranscriptSegment)
-      .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0) || (a.created_at || '').localeCompare(b.created_at || ''));
-    cb(items);
+  let snapUnsub: Unsubscribe | undefined;
+  const authUnsub = onAuthStateChanged(auth, (user) => {
+    snapUnsub?.();
+    snapUnsub = undefined;
+    if (!user || !roomId) {
+      cb([]);
+      return;
+    }
+    const q = query(
+      collection(db, 'live_podcast_rooms', roomId, 'transcripts'),
+      orderBy('created_at', 'desc'),
+      limit(max)
+    );
+    snapUnsub = onSnapshot(
+      q,
+      (snap) => {
+        const items = snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as any) }) as LivePodcastTranscriptSegment)
+          .sort(
+            (a, b) =>
+              Number(a.sequence || 0) - Number(b.sequence || 0) ||
+              (a.created_at || '').localeCompare(b.created_at || '')
+          );
+        cb(items);
+      },
+      (error) => {
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.warn('[subscribeLivePodcastTranscriptSegments]', error);
+        }
+      }
+    );
   });
+  return () => {
+    authUnsub();
+    snapUnsub?.();
+  };
 }
 
 export async function publishLivePodcastTranscriptSegment(
@@ -252,9 +357,14 @@ export async function uploadLivePodcastCoverFromUri(uri: string, _contentType?: 
 
   const fn = httpsCallable(functions, 'uploadLivePodcastCover', { timeout: UPLOAD_COVER_TIMEOUT_MS });
   const { data } = await fn({ base64: base64Data, contentType: mime });
-  const path = String((data as { path?: string })?.path || '').trim();
+  const payload = data as { path?: string; downloadUrl?: string | null };
+  const path = String(payload?.path || '').trim();
+  const fromFn = String(payload?.downloadUrl || '').trim();
   if (!path) {
     throw new Error('Upload did not return a storage path.');
+  }
+  if (fromFn) {
+    return fromFn;
   }
   const downloadUrl = await getDownloadURL(ref(storage, path));
 
@@ -299,15 +409,19 @@ export async function endLivePodcastRoom(roomId: string) {
 }
 
 export async function joinLivePodcastRoom(roomId: string, inviteCode?: string) {
+  logLiveKitNetworkAuditHintOnce();
   const fn = httpsCallable(functions, 'joinLivePodcastRoom', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
   const { data } = await fn({ roomId, inviteCode: inviteCode || null });
+  logLiveKitTokenFromCallableOnly();
   return data as LivePodcastSession;
 }
 
 /** New token when your role changed (e.g. approved speaker) without counting as a new join. */
 export async function refreshLivePodcastJoin(roomId: string, inviteCode?: string) {
+  logLiveKitNetworkAuditHintOnce();
   const fn = httpsCallable(functions, 'refreshLivePodcastJoin', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
   const { data } = await fn({ roomId, inviteCode: inviteCode || null });
+  logLiveKitTokenFromCallableOnly();
   return data as LivePodcastSession;
 }
 
@@ -324,8 +438,10 @@ export function formatLiveSessionDuration(ms: number): string {
 }
 
 export async function joinLivePodcastByInviteCode(inviteCode: string) {
+  logLiveKitNetworkAuditHintOnce();
   const fn = httpsCallable(functions, 'joinLivePodcastByInviteCode', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
   const { data } = await fn({ inviteCode });
+  logLiveKitTokenFromCallableOnly();
   return data as LivePodcastSession;
 }
 

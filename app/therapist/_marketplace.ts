@@ -47,6 +47,8 @@ export type TherapistSession = {
   therapist_uid: string;
   user_uid: string;
   slot_id: string;
+  /** When a session spans multiple 30-minute slots (merged approve), all Firestore slot ids. */
+  slot_ids?: string[] | null;
   status: 'scheduled' | 'active' | 'ended' | 'cancelled' | string;
   starts_at: string;
   ends_at: string;
@@ -112,6 +114,28 @@ export const upsertMyTherapistProfile = async (patch: Omit<TherapistProfile, 'id
   );
 };
 
+function parseSlotIntervalMs(s: { start_at?: string; end_at?: string; duration_min?: number }): {
+  start: number;
+  end: number;
+} | null {
+  const start = Date.parse(String(s.start_at || ''));
+  if (!Number.isFinite(start)) return null;
+  let end = Date.parse(String(s.end_at || ''));
+  if (!Number.isFinite(end) || end <= start) {
+    const dm = Number(s.duration_min);
+    if (Number.isFinite(dm) && dm > 0) end = start + dm * 60 * 1000;
+    else return null;
+  }
+  return { start, end };
+}
+
+function intervalsOverlapMs(
+  a: { start: number; end: number },
+  b: { start: number; end: number }
+): boolean {
+  return a.start < b.end && a.end > b.start;
+}
+
 export const createTherapistSlot = async (durationMin: number, startAtIso: string): Promise<string> => {
   const u = auth.currentUser;
   if (!u) throw new Error('Not logged in.');
@@ -162,12 +186,30 @@ export const listOpenSlotsForTherapist = async (therapistUid: string, max: numbe
   const snap = await getDocs(q);
   const now = Date.now();
   const seen = new Set<string>();
-  const list: TherapistSlot[] = snap.docs
+  const future = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() as any) }))
-    .filter((s) => String(s.status) === 'open')
+    .filter((s) => !['cancelled'].includes(String(s.status || '')))
     .filter((s) => {
       const t = Date.parse(String(s.start_at || ''));
       return Number.isFinite(t) && t >= now;
+    });
+
+  /** Booked / pending-request intervals block overlapping open rows (e.g. duplicate docs for the same hour). */
+  const blocked: { start: number; end: number }[] = [];
+  for (const s of future) {
+    const st = String(s.status || '');
+    if (st === 'requested' || st === 'booked') {
+      const iv = parseSlotIntervalMs(s);
+      if (iv) blocked.push(iv);
+    }
+  }
+
+  const list: TherapistSlot[] = future
+    .filter((s) => String(s.status) === 'open')
+    .filter((s) => {
+      const iv = parseSlotIntervalMs(s);
+      if (!iv) return false;
+      return !blocked.some((b) => intervalsOverlapMs(iv, b));
     })
     .filter((s) => {
       const key = String(s.start_at || '');
@@ -199,6 +241,35 @@ export const bookTherapistSlot = async (
     return { ok: false, error: e?.message || 'Booking failed.' };
   }
 };
+
+/** Pending requests from the same user with back-to-back slots → one therapist approval group. */
+export function groupConsecutiveBookingRequests(requests: TherapistBookingRequest[]): TherapistBookingRequest[][] {
+  const pending = requests
+    .filter((r) => String(r.status || '') === 'requested')
+    .slice()
+    .sort((a, b) => Date.parse(String(a.start_at || '')) - Date.parse(String(b.start_at || '')));
+  const groups: TherapistBookingRequest[][] = [];
+  const CONSEC_MS = 120000;
+  for (const r of pending) {
+    const rStart = Date.parse(String(r.start_at || ''));
+    const rEnd = Date.parse(String(r.end_at || ''));
+    if (!Number.isFinite(rStart) || !Number.isFinite(rEnd)) continue;
+    if (groups.length === 0) {
+      groups.push([r]);
+      continue;
+    }
+    const last = groups[groups.length - 1];
+    const prev = last[last.length - 1];
+    const pEnd = Date.parse(String(prev.end_at || ''));
+    const sameUser = String(prev.requester_uid) === String(r.requester_uid);
+    const sameTherapist = String(prev.therapist_uid) === String(r.therapist_uid);
+    const consecutive =
+      sameUser && sameTherapist && Number.isFinite(pEnd) && Math.abs(rStart - pEnd) <= CONSEC_MS;
+    if (consecutive) last.push(r);
+    else groups.push([r]);
+  }
+  return groups;
+}
 
 export const listBookingRequestsForTherapist = async (
   therapistUid: string,
@@ -232,6 +303,28 @@ export const approveTherapistBookingRequest = async (
   }
 };
 
+/** Approve one or more consecutive pending requests from the same user (merged session). */
+export const approveMergedTherapistBookingRequests = async (
+  requestIds: string[]
+): Promise<{ ok: boolean; sessionId?: string; error?: string }> => {
+  if (!auth.currentUser) return { ok: false, error: 'Not logged in.' };
+  const ids = requestIds.map((x) => String(x || '').trim()).filter(Boolean);
+  if (ids.length === 0) return { ok: false, error: 'No requests.' };
+  try {
+    if (ids.length === 1) {
+      return approveTherapistBookingRequest(ids[0]);
+    }
+    const fn = httpsCallable<{ requestIds: string[] }, { ok: boolean; sessionId?: string; error?: string }>(
+      functions,
+      'approveMergedTherapistBookingRequests'
+    );
+    const res = await fn({ requestIds: ids });
+    return res.data || { ok: false, error: 'Approve failed.' };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Approve failed.' };
+  }
+};
+
 export const rejectTherapistBookingRequest = async (requestId: string): Promise<{ ok: boolean; error?: string }> => {
   if (!auth.currentUser) return { ok: false, error: 'Not logged in.' };
   try {
@@ -240,6 +333,27 @@ export const rejectTherapistBookingRequest = async (requestId: string): Promise<
       'rejectTherapistBookingRequest'
     );
     const res = await fn({ requestId });
+    return res.data || { ok: false, error: 'Reject failed.' };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Reject failed.' };
+  }
+};
+
+export const rejectMergedTherapistBookingRequests = async (
+  requestIds: string[]
+): Promise<{ ok: boolean; error?: string }> => {
+  if (!auth.currentUser) return { ok: false, error: 'Not logged in.' };
+  const ids = requestIds.map((x) => String(x || '').trim()).filter(Boolean);
+  if (ids.length === 0) return { ok: false, error: 'No requests.' };
+  try {
+    if (ids.length === 1) {
+      return rejectTherapistBookingRequest(ids[0]);
+    }
+    const fn = httpsCallable<{ requestIds: string[] }, { ok: boolean; error?: string }>(
+      functions,
+      'rejectMergedTherapistBookingRequests'
+    );
+    const res = await fn({ requestIds: ids });
     return res.data || { ok: false, error: 'Reject failed.' };
   } catch (e: any) {
     return { ok: false, error: e?.message || 'Reject failed.' };
@@ -304,6 +418,44 @@ export const listSessionsForTherapist = async (therapistUid: string, max: number
     .sort((a, b) => Date.parse(String(a.starts_at || '')) - Date.parse(String(b.starts_at || '')))
     .slice(0, max);
 };
+
+/** Upcoming / recent sessions for the signed-in member (private therapist bookings). */
+export const listSessionsForUser = async (userUid: string, max: number = 40): Promise<TherapistSession[]> => {
+  if (!auth.currentUser) return [];
+  const uid = String(userUid || '').trim();
+  if (!uid) return [];
+  const q = query(collection(db, 'therapist_sessions'), where('user_uid', '==', uid), limit(200));
+  const snap = await getDocs(q);
+  const list: TherapistSession[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+  const now = Date.now();
+  return list
+    .filter((s) => String(s.status) !== 'cancelled')
+    .filter((s) => {
+      const end = Date.parse(String(s.ends_at || ''));
+      return !Number.isFinite(end) || end >= now - 60 * 60 * 1000;
+    })
+    .sort((a, b) => Date.parse(String(a.starts_at || '')) - Date.parse(String(b.starts_at || '')))
+    .slice(0, max);
+};
+
+/** Map slot id → session (including every id in session.slot_ids). */
+export function sessionsBySlotId(sessions: TherapistSession[]): Map<string, TherapistSession> {
+  const m = new Map<string, TherapistSession>();
+  for (const s of sessions) {
+    const ids: string[] = [];
+    if (s.slot_id) ids.push(String(s.slot_id));
+    if (Array.isArray(s.slot_ids)) {
+      for (const x of s.slot_ids) {
+        const id = String(x || '').trim();
+        if (id) ids.push(id);
+      }
+    }
+    for (const id of [...new Set(ids)]) {
+      m.set(id, s);
+    }
+  }
+  return m;
+}
 
 export const getUserLite = async (uid: string): Promise<UserLite | null> => {
   if (!auth.currentUser) return null;

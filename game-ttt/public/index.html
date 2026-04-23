@@ -95,11 +95,14 @@
   </div>
 
   <script>
-    const socket = io();
     const params = new URLSearchParams(window.location.search);
     const roomCode = params.get('room') || '';
+    const socketUrlParam = params.get('socketUrl') || params.get('socket') || '';
     const opponentFromUrl = (params.get('opponent') || params.get('opponentName') || '').trim().slice(0, 30);
     const myNameFromUrl = (params.get('name') || params.get('player') || '').trim().slice(0, 30);
+    const socket = socketUrlParam.trim()
+      ? io(socketUrlParam.trim(), { path: '/socket.io', transports: ['websocket', 'polling'] })
+      : io({ transports: ['websocket', 'polling'] });
     const statusEl = document.getElementById('status');
     const boardEl = document.getElementById('board');
     const gameOverActionsEl = document.getElementById('gameOverActions');
@@ -149,7 +152,7 @@
         roomPill.textContent = 'Room ' + roomCode;
         roomPill.classList.remove('hidden');
         setStatus('Joining game...');
-        socket.emit('joinOrCreate', { roomCode, name: 'Player' });
+        socket.emit('joinOrCreate', { roomCode, name: myName });
       } else {
         setStatus('Open this page with ?room=YOUR_ROOM_ID (e.g. from the Spill app).');
       }

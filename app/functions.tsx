@@ -979,6 +979,13 @@ export const createStaffUser = async (
   }
 };
 
+/** Admin-only: mark an auto-flagged post as safe (clears flag + sets approved_safe_at via Cloud Function). */
+export const approvePostAsSafe = async (postId: string): Promise<void> => {
+  if (!auth.currentUser) throw new Error('Not logged in.');
+  const fn = httpsCallable<{ postId: string }, { ok: boolean }>(functions, 'approvePostAsSafe');
+  await fn({ postId: postId.trim() });
+};
+
 // ========================================
 // MESSAGING FUNCTIONS
 // ========================================
@@ -2780,54 +2787,58 @@ export interface GratitudeEntry {
   created_at: string;
 }
 
-// Add a gratitude entry
+function gratitudeEntriesCol(uid: string) {
+  return collection(db, 'users', uid, 'gratitude_entries');
+}
+
+// Add a gratitude entry (Firestore: users/{uid}/gratitude_entries)
 export const addGratitude = async (content: string): Promise<GratitudeEntry | null> => {
+  const u = auth.currentUser;
+  if (!u) {
+    console.error('addGratitude: not signed in');
+    return null;
+  }
+  const text = content.trim();
+  if (!text) return null;
+
+  const now = new Date().toISOString();
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error('Not authenticated');
-
-    if (!content.trim()) {
-      throw new Error('Gratitude content cannot be empty');
-    }
-
-    const { data, error } = await supabase
-      .from('gratitude_entries')
-      .insert({
-        user_id: user.id,
-        content: content.trim(),
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
+    const ref = await addDoc(gratitudeEntriesCol(u.uid), {
+      content: text,
+      created_at: now,
+    });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    return data;
+    return {
+      id: ref.id,
+      user_id: u.uid,
+      content: text,
+      created_at: now,
+    };
   } catch (error) {
     console.error('Error adding gratitude:', error);
     return null;
   }
 };
 
-// Get all gratitude entries
-export const getGratitudeEntries = async (limit?: number): Promise<GratitudeEntry[]> => {
+// Get all gratitude entries for the signed-in user
+export const getGratitudeEntries = async (limitCount?: number): Promise<GratitudeEntry[]> => {
+  const u = auth.currentUser;
+  if (!u) return [];
+
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return [];
-
-    let query = supabase
-      .from('gratitude_entries')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
-
-    if (limit) {
-      query = query.limit(limit);
-    }
-
-    const { data, error } = await query;
-
-    if (error) throw error;
-    return data || [];
+    const q = limitCount
+      ? query(gratitudeEntriesCol(u.uid), orderBy('created_at', 'desc'), limit(limitCount))
+      : query(gratitudeEntriesCol(u.uid), orderBy('created_at', 'desc'));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        user_id: u.uid,
+        content: String(data.content ?? ''),
+        created_at: String(data.created_at ?? ''),
+      };
+    });
   } catch (error) {
     console.error('Error fetching gratitude entries:', error);
     return [];
@@ -2848,19 +2859,14 @@ export const getRandomGratitude = async (): Promise<GratitudeEntry | null> => {
   }
 };
 
-// Get gratitude count
+// Get gratitude count (plain getDocs — aggregation/count queries can hit permission edge cases with some rule setups)
 export const getGratitudeCount = async (): Promise<number> => {
+  const u = auth.currentUser;
+  if (!u) return 0;
+
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return 0;
-
-    const { count, error } = await supabase
-      .from('gratitude_entries')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', user.id);
-
-    if (error) throw error;
-    return count || 0;
+    const snap = await getDocs(gratitudeEntriesCol(u.uid));
+    return snap.size;
   } catch (error) {
     console.error('Error getting gratitude count:', error);
     return 0;
@@ -2869,17 +2875,11 @@ export const getGratitudeCount = async (): Promise<number> => {
 
 // Delete a gratitude entry
 export const deleteGratitude = async (gratitudeId: string): Promise<boolean> => {
+  const u = auth.currentUser;
+  if (!u) return false;
+
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
-
-    const { error } = await supabase
-      .from('gratitude_entries')
-      .delete()
-      .eq('id', gratitudeId)
-      .eq('user_id', user.id);
-
-    if (error) throw error;
+    await deleteDoc(doc(db, 'users', u.uid, 'gratitude_entries', gratitudeId));
     return true;
   } catch (error) {
     console.error('Error deleting gratitude:', error);
@@ -3857,7 +3857,12 @@ export const subscribeToUnreadNotificationCount = (onCount: (count: number) => v
   const unsub = onSnapshot(
     q,
     (snap) => onCount(snap.size),
-    (err) => console.error('subscribeToUnreadNotificationCount', err)
+    (err: unknown) => {
+      const code = (err as { code?: string })?.code;
+      // Normal when signing out: listener stops with permission-denied before teardown.
+      if (code === 'permission-denied' || code === 'unauthenticated') return;
+      console.error('subscribeToUnreadNotificationCount', err);
+    }
   );
   return unsub;
 };

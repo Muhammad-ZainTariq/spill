@@ -20,6 +20,7 @@ import {
   Image,
   Linking,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -30,6 +31,35 @@ import { WebView } from 'react-native-webview';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const VIDEO_HEIGHT = Math.round(SCREEN_WIDTH * (9 / 16));
+
+/** YouTube embed in RN WebView often returns Error 153 without a full iframe + allow list + cookies + Safari-like UA. */
+const YOUTUBE_WEBVIEW_USER_AGENT =
+  Platform.OS === 'ios'
+    ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+    : 'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+
+function buildYoutubeEmbedHtml(videoId: string): string {
+  const id = encodeURIComponent(videoId.replace(/[^a-zA-Z0-9_-]/g, ''));
+  const qs = [
+    'playsinline=1',
+    'autoplay=1',
+    'mute=0',
+    'rel=0',
+    'modestbranding=1',
+    'controls=1',
+    'enablejsapi=1',
+    'origin=https://www.youtube.com',
+  ].join('&');
+  const src = `https://www.youtube.com/embed/${id}?${qs}`;
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"/>
+<style>html,body{margin:0;padding:0;background:#000;height:100%;width:100%;overflow:hidden}
+.wrap{position:fixed;inset:0;width:100%;height:100%}
+iframe{position:absolute;inset:0;width:100%;height:100%;border:0}</style></head><body>
+<div class="wrap"><iframe src="${src}" title="YouTube video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+allowfullscreen loading="eager" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
+</body></html>`;
+}
 
 const TYPE_LABELS: Record<string, string> = {
   video: 'Video',
@@ -405,14 +435,22 @@ export function ResourcesLibraryScreen({
           {playingVideo && (
             <WebView
               source={{
-                uri: `https://www.youtube.com/embed/${playingVideo.youtubeId}?autoplay=1`,
+                html: buildYoutubeEmbedHtml(playingVideo.youtubeId),
+                baseUrl: 'https://www.youtube.com',
               }}
               style={styles.videoWebView}
+              originWhitelist={['*']}
+              userAgent={YOUTUBE_WEBVIEW_USER_AGENT}
               allowsFullscreenVideo
               allowsInlineMediaPlayback
               mediaPlaybackRequiresUserAction={false}
               javaScriptEnabled
               domStorageEnabled
+              sharedCookiesEnabled
+              thirdPartyCookiesEnabled
+              setSupportMultipleWindows={false}
+              cacheEnabled
+              mixedContentMode="always"
             />
           )}
         </View>

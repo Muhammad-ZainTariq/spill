@@ -39,9 +39,9 @@ service firebase.storage {
       allow write: if false;
     }
 
-    // Live podcast cover images
+    // Live podcast cover images: server may makePublic(); client reads must not fail with storage/unauthorized
     match /live_podcast_covers/{userId}/{fileName} {
-      allow read: if request.auth != null;
+      allow read: if true;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 

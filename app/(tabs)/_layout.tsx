@@ -62,15 +62,27 @@ export default function TabLayout() {
     };
   }, [router]);
 
-  // Keep app icon badge in sync with unread notification count
+  // Keep app icon badge in sync with unread notification count (tear down on logout so snapshot never fires permission errors)
   useEffect(() => {
-    if (!auth.currentUser) return;
-    const unsub = subscribeToUnreadNotificationCount((count) => {
-      setUnreadNotificationCount(count);
-      setNotificationBadgeCount(count);
+    let firestoreUnsub: (() => void) | undefined;
+    const authUnsub = onAuthStateChanged(auth, (user) => {
+      firestoreUnsub?.();
+      firestoreUnsub = undefined;
+      if (!user) {
+        setUnreadNotificationCount(0);
+        setNotificationBadgeCount(0);
+        return;
+      }
+      firestoreUnsub = subscribeToUnreadNotificationCount((count) => {
+        setUnreadNotificationCount(count);
+        setNotificationBadgeCount(count);
+      });
     });
-    return () => unsub();
-  }, [router]);
+    return () => {
+      authUnsub();
+      firestoreUnsub?.();
+    };
+  }, []);
 
   // Listen for game invites app-wide (any tab) — only subscribe once auth is ready
   useEffect(() => {
@@ -158,7 +170,6 @@ export default function TabLayout() {
         tabBarInactiveTintColor: '#9ca3af',
         headerShown: false,
         tabBarButton: HapticTab,
-        animation: 'shift',
         tabBarStyle: {
           position: 'absolute',
           bottom: 0,

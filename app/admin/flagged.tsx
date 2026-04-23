@@ -13,6 +13,7 @@ interface FlaggedPost {
   created_at?: string;
   toxicity_score?: number;
   user_id?: string;
+  approved_safe_at?: string;
 }
 
 export default function FlaggedScreen() {
@@ -29,16 +30,20 @@ export default function FlaggedScreen() {
         orderBy('created_at', 'desc')
       );
       const snap = await getDocs(q);
-      const list: FlaggedPost[] = snap.docs.map((d) => {
-        const data: any = d.data() || {};
-        return {
-          id: d.id,
-          content: String(data.content || ''),
-          created_at: data.created_at,
-          toxicity_score: data.toxicity_score,
-          user_id: data.user_id,
-        };
-      });
+      const list: FlaggedPost[] = snap.docs
+        .map((d) => {
+          const data: any = d.data() || {};
+          return {
+            id: d.id,
+            content: String(data.content || ''),
+            created_at: data.created_at,
+            toxicity_score: data.toxicity_score,
+            user_id: data.user_id,
+            approved_safe_at: data.approved_safe_at as string | undefined,
+          };
+        })
+        // Same rule as the feed: approved posts must not stay in the queue even if flagged_for_toxicity was never cleared (legacy / partial writes).
+        .filter((p) => !p.approved_safe_at);
       setPosts(list);
     } catch (e: any) {
       console.error('Load flagged posts error', e);
@@ -60,6 +65,7 @@ export default function FlaggedScreen() {
       } catch {
         await updateDoc(doc(db, 'posts', postId), {
           approved_safe_at: new Date().toISOString(),
+          flagged_for_toxicity: false,
         });
       }
       setPosts((prev) => prev.filter((p) => p.id !== postId));
@@ -95,11 +101,23 @@ export default function FlaggedScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12}>
-          <Feather name="chevron-left" size={24} color="#111827" />
-        </Pressable>
-        <Text style={styles.title}>Flagged stuff</Text>
-        <View style={{ width: 24 }} />
+        <View style={styles.headerSide}>
+          <Pressable
+            style={styles.headerBackHit}
+            onPress={() => router.back()}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <Feather name="chevron-left" size={24} color="#111827" />
+          </Pressable>
+        </View>
+        <View style={styles.headerCenter} pointerEvents="none">
+          <Text style={styles.title} numberOfLines={1}>
+            Flagged stuff
+          </Text>
+        </View>
+        <View style={styles.headerSide} />
       </View>
       {loading ? (
         <View style={styles.loading}>
@@ -123,20 +141,43 @@ export default function FlaggedScreen() {
   );
 }
 
+const SCREEN_BG = '#f8f9fa';
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8f9fa' },
+  container: { flex: 1, backgroundColor: SCREEN_BG },
   header: {
-    paddingTop: 16,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
+    minHeight: 44,
+    paddingBottom: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#ffffff',
+    backgroundColor: SCREEN_BG,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e5e7eb',
   },
-  title: { fontSize: 18, fontWeight: '700', color: '#111827' },
+  /** Same width as iOS nav bar side — title stays optically centered on screen. */
+  headerSide: {
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerBackHit: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   loadingText: { marginTop: 8, color: '#6b7280', fontSize: 14 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },

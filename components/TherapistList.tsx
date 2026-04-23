@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons';
-import React from 'react';
+import React, { ReactNode } from 'react';
 import { FlatList, Pressable, StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
 
 interface Therapist {
@@ -18,6 +18,8 @@ interface TherapistListProps {
   style?: StyleProp<ViewStyle>;
   onRefresh?: () => void | Promise<void>;
   refreshing?: boolean;
+  /** Rendered above the “Available therapists” heading (e.g. upcoming private sessions). */
+  listHeaderExtra?: ReactNode;
 }
 
 function fmtWhenSlot(iso?: string | null) {
@@ -27,7 +29,15 @@ function fmtWhenSlot(iso?: string | null) {
   return d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-export default function TherapistList({ therapists, onTherapistPress, loading, style, onRefresh, refreshing }: TherapistListProps) {
+export default function TherapistList({
+  therapists,
+  onTherapistPress,
+  loading,
+  style,
+  onRefresh,
+  refreshing,
+  listHeaderExtra,
+}: TherapistListProps) {
   const renderTherapist = ({ item }: { item: Therapist }) => (
     <Pressable style={styles.therapistCard} onPress={() => onTherapistPress(item.id)}>
       <View style={styles.therapistTop}>
@@ -79,6 +89,7 @@ export default function TherapistList({ therapists, onTherapistPress, loading, s
       onRefresh={onRefresh}
       ListHeaderComponent={
         <View style={{ paddingBottom: 16 }}>
+          {listHeaderExtra ? <View style={{ marginBottom: 18 }}>{listHeaderExtra}</View> : null}
           <Text style={{ fontSize: 13, fontWeight: '700', color: '#6b7280', marginBottom: 10, textTransform: 'uppercase' }}>
             Available therapists
           </Text>

@@ -24,29 +24,91 @@ const tttRooms = new Map();
 const tttGames = new Map();
 const tttSocketToRoom = new Map();
 
+function tttSocketLive(ioServer, socketId) {
+  return !!(socketId && ioServer.sockets.sockets.has(socketId));
+}
+
+function resyncTttRoom(ioServer, roomCode, room) {
+  if (!room?.p1 || !room?.p2) return;
+  if (!tttSocketLive(ioServer, room.p1.id) || !tttSocketLive(ioServer, room.p2.id)) return;
+  ioServer.to(room.p1.id).emit('start', { role: 'X', opponent: room.p2.name });
+  ioServer.to(room.p2.id).emit('start', { role: 'O', opponent: room.p1.name });
+  const game = tttGames.get(roomCode);
+  if (game) {
+    ioServer.to(roomCode).emit('state', { board: game.board, turn: game.turn, winner: game.winner });
+  }
+}
+
 io.on('connection', (socket) => {
   socket.on('joinOrCreate', (data) => {
     const { roomCode, name } = data;
     if (!roomCode || !name) return;
     const n = (name && name.trim().slice(0, 20)) || 'Player';
-    const room = tttRooms.get(roomCode);
-    if (room && !room.p2) {
-      room.p2 = { id: socket.id, name: n };
+    let room = tttRooms.get(roomCode);
+
+    if (room) {
+      if (room.p1 && !tttSocketLive(io, room.p1.id)) room.p1 = null;
+      if (room.p2 && !tttSocketLive(io, room.p2.id)) room.p2 = null;
+      if (!room.p1 && !room.p2) {
+        tttRooms.delete(roomCode);
+        tttGames.delete(roomCode);
+        room = undefined;
+      }
+    }
+
+    if (!room) {
+      tttRooms.set(roomCode, { p1: { id: socket.id, name: n }, p2: null });
       socket.join(roomCode);
       tttSocketToRoom.set(socket.id, roomCode);
-      tttGames.set(roomCode, { board: Array(9).fill(''), turn: 'X', winner: null });
-      io.to(room.p1.id).emit('start', { role: 'X', opponent: n });
-      socket.emit('start', { role: 'O', opponent: room.p1.name });
+      socket.emit('waiting', { roomCode });
       return;
     }
-    if (room && room.p2) {
+
+    if (room.p1?.id === socket.id || room.p2?.id === socket.id) {
+      socket.join(roomCode);
+      tttSocketToRoom.set(socket.id, roomCode);
+      if (room.p1 && room.p2) resyncTttRoom(io, roomCode, room);
+      else socket.emit('waiting', { roomCode });
+      return;
+    }
+
+    const p1ok = room.p1 && tttSocketLive(io, room.p1.id);
+    const p2ok = room.p2 && tttSocketLive(io, room.p2.id);
+
+    if (p1ok && p2ok) {
       socket.emit('roomFull');
       return;
     }
-    tttRooms.set(roomCode, { p1: { id: socket.id, name: n }, p2: null });
+
+    if (!p1ok && p2ok) {
+      room.p1 = { id: socket.id, name: n };
+    } else if (p1ok && !p2ok) {
+      room.p2 = { id: socket.id, name: n };
+    } else if (!p1ok && !p2ok) {
+      room.p1 = { id: socket.id, name: n };
+      room.p2 = null;
+    } else {
+      socket.emit('roomFull');
+      return;
+    }
+
     socket.join(roomCode);
     tttSocketToRoom.set(socket.id, roomCode);
-    socket.emit('waiting', { roomCode });
+
+    if (room.p1 && room.p2) {
+      let game = tttGames.get(roomCode);
+      if (!game) {
+        game = { board: Array(9).fill(''), turn: 'X', winner: null };
+        tttGames.set(roomCode, game);
+      }
+      io.to(room.p1.id).emit('start', { role: 'X', opponent: room.p2.name });
+      io.to(room.p2.id).emit('start', { role: 'O', opponent: room.p1.name });
+      io.to(roomCode).emit('state', { board: game.board, turn: game.turn, winner: game.winner });
+    } else {
+      socket.emit('waiting', { roomCode });
+      const other = room.p1 || room.p2;
+      if (other) io.to(other.id).emit('waiting', { roomCode });
+    }
   });
 
   socket.on('move', (data) => {
@@ -66,7 +128,7 @@ io.on('connection', (socket) => {
     if (!roomCode) return;
     const room = tttRooms.get(roomCode);
     const game = tttGames.get(roomCode);
-    if (!room || !room.p2 || !game || !game.winner) return;
+    if (!room || !room.p1 || !room.p2 || !game || !game.winner) return;
     room.replayRequested = room.replayRequested || {};
     const isP1 = room.p1.id === socket.id;
     if (isP1) room.replayRequested.p1 = true;
@@ -87,23 +149,26 @@ io.on('connection', (socket) => {
     const { roomCode } = data;
     if (!roomCode) return;
     const room = tttRooms.get(roomCode);
-    if (!room || !room.p2) return;
+    if (!room || !room.p1 || !room.p2) return;
     const other = room.p1.id === socket.id ? room.p2 : room.p1;
     io.to(other.id).emit('replayDeclined');
   });
 
   socket.on('disconnect', () => {
     const roomCode = tttSocketToRoom.get(socket.id);
-    if (roomCode) {
-      const room = tttRooms.get(roomCode);
-      if (room) {
-        const other = room.p1?.id === socket.id ? room.p2 : room.p1;
-        if (other) io.to(other.id).emit('opponentLeft');
-        tttRooms.delete(roomCode);
-        tttGames.delete(roomCode);
-      }
-      tttSocketToRoom.delete(socket.id);
+    if (!roomCode) return;
+    tttSocketToRoom.delete(socket.id);
+    const room = tttRooms.get(roomCode);
+    if (!room) return;
+    if (room.p1?.id === socket.id) room.p1 = null;
+    if (room.p2?.id === socket.id) room.p2 = null;
+    if (!room.p1 && !room.p2) {
+      tttRooms.delete(roomCode);
+      tttGames.delete(roomCode);
+      return;
     }
+    const other = room.p1 || room.p2;
+    if (other) io.to(other.id).emit('waiting', { roomCode });
   });
 });
 
@@ -113,35 +178,89 @@ const chessRooms = new Map();
 const chessGames = new Map();
 const chessSocketToRoom = new Map();
 
+function chessSocketLive(ns, socketId) {
+  return !!(socketId && ns.sockets.has(socketId));
+}
+
+function startOrResumeChessGame(roomCode, room) {
+  let g = chessGames.get(roomCode);
+  if (!g) {
+    const game = new Chess();
+    g = { chess: game, fen: game.fen(), turn: 'w', result: null };
+    chessGames.set(roomCode, g);
+  }
+  chessIo.to(room.p1.id).emit('start', { color: 'w', opponent: room.p2.name });
+  chessIo.to(room.p2.id).emit('start', { color: 'b', opponent: room.p1.name });
+  chessIo.to(roomCode).emit('gameStart', {
+    p1: { id: room.p1.id, name: room.p1.name },
+    p2: { id: room.p2.id, name: room.p2.name },
+  });
+  chessIo.to(roomCode).emit('state', { fen: g.fen, turn: g.turn, result: g.result });
+}
+
 chessIo.on('connection', (socket) => {
   socket.on('joinOrCreate', (data) => {
     const { roomCode, name } = data;
     if (!roomCode || !name) return;
     const n = (name && name.trim().slice(0, 20)) || 'Player';
-    const room = chessRooms.get(roomCode);
-    if (room && !room.p2) {
-      room.p2 = { id: socket.id, name: n };
+    let room = chessRooms.get(roomCode);
+
+    if (room) {
+      if (room.p1 && !chessSocketLive(chessIo, room.p1.id)) room.p1 = null;
+      if (room.p2 && !chessSocketLive(chessIo, room.p2.id)) room.p2 = null;
+      if (!room.p1 && !room.p2) {
+        chessRooms.delete(roomCode);
+        chessGames.delete(roomCode);
+        room = undefined;
+      }
+    }
+
+    if (!room) {
+      chessRooms.set(roomCode, { p1: { id: socket.id, name: n }, p2: null });
       socket.join(roomCode);
       chessSocketToRoom.set(socket.id, roomCode);
-      const game = new Chess();
-      chessGames.set(roomCode, { chess: game, fen: game.fen(), turn: 'w', result: null });
-      chessIo.to(room.p1.id).emit('start', { color: 'w', opponent: n });
-      socket.emit('start', { color: 'b', opponent: room.p1.name });
-      chessIo.to(roomCode).emit('gameStart', {
-        p1: { id: room.p1.id, name: room.p1.name },
-        p2: { id: room.p2.id, name: room.p2.name },
-      });
-      chessIo.to(roomCode).emit('state', { fen: game.fen(), turn: 'w', result: null });
+      socket.emit('waiting', { roomCode });
       return;
     }
-    if (room && room.p2) {
+
+    if (room.p1?.id === socket.id || room.p2?.id === socket.id) {
+      socket.join(roomCode);
+      chessSocketToRoom.set(socket.id, roomCode);
+      if (room.p1 && room.p2) startOrResumeChessGame(roomCode, room);
+      else socket.emit('waiting', { roomCode });
+      return;
+    }
+
+    const p1ok = room.p1 && chessSocketLive(chessIo, room.p1.id);
+    const p2ok = room.p2 && chessSocketLive(chessIo, room.p2.id);
+
+    if (p1ok && p2ok) {
       socket.emit('roomFull');
       return;
     }
-    chessRooms.set(roomCode, { p1: { id: socket.id, name: n }, p2: null });
+
+    if (!p1ok && p2ok) {
+      room.p1 = { id: socket.id, name: n };
+    } else if (p1ok && !p2ok) {
+      room.p2 = { id: socket.id, name: n };
+    } else if (!p1ok && !p2ok) {
+      room.p1 = { id: socket.id, name: n };
+      room.p2 = null;
+    } else {
+      socket.emit('roomFull');
+      return;
+    }
+
     socket.join(roomCode);
     chessSocketToRoom.set(socket.id, roomCode);
-    socket.emit('waiting', { roomCode });
+
+    if (room.p1 && room.p2) {
+      startOrResumeChessGame(roomCode, room);
+    } else {
+      socket.emit('waiting', { roomCode });
+      const other = room.p1 || room.p2;
+      if (other) chessIo.to(other.id).emit('waiting', { roomCode });
+    }
   });
 
   socket.on('getMoves', (data) => {
@@ -174,16 +293,19 @@ chessIo.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     const roomCode = chessSocketToRoom.get(socket.id);
-    if (roomCode) {
-      const room = chessRooms.get(roomCode);
-      if (room) {
-        const other = room.p1?.id === socket.id ? room.p2 : room.p1;
-        if (other) chessIo.to(other.id).emit('opponentLeft');
-        chessRooms.delete(roomCode);
-        chessGames.delete(roomCode);
-      }
-      chessSocketToRoom.delete(socket.id);
+    if (!roomCode) return;
+    chessSocketToRoom.delete(socket.id);
+    const room = chessRooms.get(roomCode);
+    if (!room) return;
+    if (room.p1?.id === socket.id) room.p1 = null;
+    if (room.p2?.id === socket.id) room.p2 = null;
+    if (!room.p1 && !room.p2) {
+      chessRooms.delete(roomCode);
+      chessGames.delete(roomCode);
+      return;
     }
+    const other = room.p1 || room.p2;
+    if (other) chessIo.to(other.id).emit('waiting', { roomCode });
   });
 });
 

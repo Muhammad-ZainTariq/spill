@@ -118,6 +118,7 @@ export default function Login() {
           'Request received',
           'We received your therapist onboarding request. Our team will review it and email you next steps.'
         );
+        setShowSpecializationPicker(false);
         setShowTherapistApply(false);
         setTherapistName('');
         setTherapistEmail('');
@@ -316,116 +317,173 @@ export default function Login() {
           </View>
         </KeyboardAvoidingView>
 
-        {/* Apply as therapist modal */}
-        <Modal visible={showTherapistApply} animationType="slide" transparent onRequestClose={() => setShowTherapistApply(false)}>
+        {/* Apply as therapist modal (specialization “dropdown” is inline here — nested Modal breaks on web) */}
+        <Modal
+          visible={showTherapistApply}
+          animationType="slide"
+          transparent
+          onRequestClose={() => {
+            if (showSpecializationPicker) setShowSpecializationPicker(false);
+            else setShowTherapistApply(false);
+          }}
+        >
           <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', paddingHorizontal: 16 }}>
             <View
               style={{
                 backgroundColor: '#fff',
                 borderRadius: 18,
                 padding: 20,
-                maxHeight: '80%',
+                maxHeight: '85%',
               }}
             >
-              <ScrollView showsVerticalScrollIndicator={false}>
-                <Text style={{ fontSize: 18, fontWeight: '800', color: '#111827', marginBottom: 8, textAlign: 'center' }}>
-                  Apply as therapist
-                </Text>
-                <Text style={{ fontSize: 13, color: '#6b7280', marginBottom: 16, textAlign: 'center' }}>
-                  Tell us who you are and how you practice. Our team will review and email next steps.
-                </Text>
-                <View style={{ marginBottom: 12 }}>
-                  <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Name</Text>
-                  <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
-                    <TextInput
-                      style={{ paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111827' }}
-                      value={therapistName}
-                      onChangeText={setTherapistName}
-                      placeholder="Your full name"
-                      placeholderTextColor="#9CA3AF"
-                    />
-                  </View>
-                </View>
-                <View style={{ marginBottom: 12 }}>
-                  <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Email</Text>
-                  <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
-                    <TextInput
-                      style={{ paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111827' }}
-                      value={therapistEmail}
-                      onChangeText={setTherapistEmail}
-                      placeholder="you@example.com"
-                      placeholderTextColor="#9CA3AF"
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                    />
-                  </View>
-                </View>
-                <View style={{ marginBottom: 12 }}>
-                  <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Specialization (optional)</Text>
-                  <Pressable
-                    onPress={() => setShowSpecializationPicker(true)}
-                    style={{
-                      backgroundColor: '#F3F4F6',
-                      borderRadius: 12,
-                      borderWidth: 1,
-                      borderColor: '#E5E7EB',
-                      paddingHorizontal: 12,
-                      paddingVertical: 12,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                    }}
-                  >
-                    <Text style={{ fontSize: 15, color: therapistSpecialization ? '#111827' : '#9CA3AF', fontWeight: '600' }}>
-                      {therapistSpecialization || 'Select specialization'}
-                    </Text>
-                    <Feather name="chevron-down" size={18} color="#6b7280" />
-                  </Pressable>
-                </View>
-                <View style={{ marginBottom: 16 }}>
-                  <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Anything else (optional)</Text>
-                  <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
-                    <TextInput
-                      style={{
-                        paddingHorizontal: 12,
-                        paddingVertical: 10,
-                        fontSize: 15,
-                        color: '#111827',
-                        minHeight: 80,
-                        textAlignVertical: 'top',
-                      }}
-                      multiline
-                      value={therapistNote}
-                      onChangeText={setTherapistNote}
-                      placeholder="Share your experience, license, or how you want to use Spill."
-                      placeholderTextColor="#9CA3AF"
-                    />
-                  </View>
-                </View>
-              </ScrollView>
-              <View style={{ flexDirection: 'row', marginTop: 12, justifyContent: 'flex-end' }}>
-                <Pressable
-                  onPress={() => setShowTherapistApply(false)}
-                  style={{ paddingVertical: 10, paddingHorizontal: 14, marginRight: 8 }}
-                >
-                  <Text style={{ color: '#6b7280', fontWeight: '600' }}>Cancel</Text>
-                </Pressable>
-                <Pressable
-                  onPress={handleSubmitTherapistRequest}
-                  disabled={therapistSubmitting}
-                  style={{
-                    backgroundColor: therapistSubmitting ? '#c4b5fd' : '#ec4899',
-                    paddingVertical: 10,
-                    paddingHorizontal: 18,
-                    borderRadius: 999,
-                    opacity: therapistSubmitting ? 0.7 : 1,
-                  }}
-                >
-                  <Text style={{ color: '#fff', fontWeight: '800' }}>
-                    {therapistSubmitting ? 'Sending...' : 'Submit request'}
+              {showSpecializationPicker ? (
+                <>
+                  <Text style={{ fontSize: 18, fontWeight: '800', color: '#111827', marginBottom: 6, textAlign: 'center' }}>
+                    Select specialization
                   </Text>
-                </Pressable>
-              </View>
+                  <Text style={{ fontSize: 13, color: '#6b7280', marginBottom: 12, textAlign: 'center' }}>
+                    Tap an option below
+                  </Text>
+                  <ScrollView
+                    style={{ maxHeight: Platform.OS === 'web' ? 380 : 340 }}
+                    contentContainerStyle={{ paddingBottom: 8 }}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator
+                  >
+                    {SPECIALIZATION_OPTIONS.map((opt) => (
+                      <Pressable
+                        key={opt}
+                        onPress={() => {
+                          setTherapistSpecialization(opt);
+                          setShowSpecializationPicker(false);
+                        }}
+                        style={{
+                          paddingVertical: 12,
+                          paddingHorizontal: 12,
+                          borderRadius: 12,
+                          backgroundColor: therapistSpecialization === opt ? '#fdf2f8' : '#f9fafb',
+                          borderWidth: 1,
+                          borderColor: therapistSpecialization === opt ? '#f9a8d4' : '#e5e7eb',
+                          marginBottom: 8,
+                        }}
+                      >
+                        <Text style={{ fontSize: 14, fontWeight: '800', color: '#111827' }}>{opt}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                  <Pressable
+                    onPress={() => setShowSpecializationPicker(false)}
+                    style={{ paddingVertical: 12, alignItems: 'center', marginTop: 4 }}
+                  >
+                    <Text style={{ color: '#ec4899', fontWeight: '800' }}>← Back to form</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                    <Text style={{ fontSize: 18, fontWeight: '800', color: '#111827', marginBottom: 8, textAlign: 'center' }}>
+                      Apply as therapist
+                    </Text>
+                    <Text style={{ fontSize: 13, color: '#6b7280', marginBottom: 16, textAlign: 'center' }}>
+                      Tell us who you are and how you practice. Our team will review and email next steps.
+                    </Text>
+                    <View style={{ marginBottom: 12 }}>
+                      <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Name</Text>
+                      <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
+                        <TextInput
+                          style={{ paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111827' }}
+                          value={therapistName}
+                          onChangeText={setTherapistName}
+                          placeholder="Your full name"
+                          placeholderTextColor="#9CA3AF"
+                        />
+                      </View>
+                    </View>
+                    <View style={{ marginBottom: 12 }}>
+                      <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Email</Text>
+                      <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
+                        <TextInput
+                          style={{ paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111827' }}
+                          value={therapistEmail}
+                          onChangeText={setTherapistEmail}
+                          placeholder="you@example.com"
+                          placeholderTextColor="#9CA3AF"
+                          keyboardType="email-address"
+                          autoCapitalize="none"
+                        />
+                      </View>
+                    </View>
+                    <View style={{ marginBottom: 12 }}>
+                      <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Specialization (optional)</Text>
+                      <Pressable
+                        onPress={() => setShowSpecializationPicker(true)}
+                        style={{
+                          backgroundColor: '#F3F4F6',
+                          borderRadius: 12,
+                          borderWidth: 1,
+                          borderColor: '#E5E7EB',
+                          paddingHorizontal: 12,
+                          paddingVertical: 12,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <Text style={{ fontSize: 15, color: therapistSpecialization ? '#111827' : '#9CA3AF', fontWeight: '600' }}>
+                          {therapistSpecialization || 'Select specialization'}
+                        </Text>
+                        <Feather name="chevron-down" size={18} color="#6b7280" />
+                      </Pressable>
+                    </View>
+                    <View style={{ marginBottom: 16 }}>
+                      <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 6 }}>Anything else (optional)</Text>
+                      <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
+                        <TextInput
+                          style={{
+                            paddingHorizontal: 12,
+                            paddingVertical: 10,
+                            fontSize: 15,
+                            color: '#111827',
+                            minHeight: 80,
+                            textAlignVertical: 'top',
+                          }}
+                          multiline
+                          value={therapistNote}
+                          onChangeText={setTherapistNote}
+                          placeholder="Share your experience, license, or how you want to use Spill."
+                          placeholderTextColor="#9CA3AF"
+                        />
+                      </View>
+                    </View>
+                  </ScrollView>
+                  <View style={{ flexDirection: 'row', marginTop: 12, justifyContent: 'flex-end' }}>
+                    <Pressable
+                      onPress={() => {
+                        setShowSpecializationPicker(false);
+                        setShowTherapistApply(false);
+                      }}
+                      style={{ paddingVertical: 10, paddingHorizontal: 14, marginRight: 8 }}
+                    >
+                      <Text style={{ color: '#6b7280', fontWeight: '600' }}>Cancel</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={handleSubmitTherapistRequest}
+                      disabled={therapistSubmitting}
+                      style={{
+                        backgroundColor: therapistSubmitting ? '#c4b5fd' : '#ec4899',
+                        paddingVertical: 10,
+                        paddingHorizontal: 18,
+                        borderRadius: 999,
+                        opacity: therapistSubmitting ? 0.7 : 1,
+                      }}
+                    >
+                      <Text style={{ color: '#fff', fontWeight: '800' }}>
+                        {therapistSubmitting ? 'Sending...' : 'Submit request'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </>
+              )}
             </View>
           </View>
         </Modal>
@@ -480,46 +538,6 @@ export default function Login() {
           </View>
         </Modal>
 
-        {/* Specialization picker */}
-        <Modal
-          visible={showSpecializationPicker}
-          animationType="fade"
-          transparent
-          onRequestClose={() => setShowSpecializationPicker(false)}
-        >
-          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', paddingHorizontal: 16 }}>
-            <View style={{ backgroundColor: '#fff', borderRadius: 18, padding: 16, maxHeight: '70%' }}>
-              <Text style={{ fontSize: 16, fontWeight: '900', color: '#111827', marginBottom: 10, textAlign: 'center' }}>
-                Select specialization
-              </Text>
-              <ScrollView showsVerticalScrollIndicator={false}>
-                {SPECIALIZATION_OPTIONS.map((opt) => (
-                  <Pressable
-                    key={opt}
-                    onPress={() => {
-                      setTherapistSpecialization(opt === 'Other' ? 'Other' : opt);
-                      setShowSpecializationPicker(false);
-                    }}
-                    style={{
-                      paddingVertical: 12,
-                      paddingHorizontal: 12,
-                      borderRadius: 12,
-                      backgroundColor: therapistSpecialization === opt ? '#fdf2f8' : 'transparent',
-                      borderWidth: 1,
-                      borderColor: therapistSpecialization === opt ? '#f9a8d4' : 'transparent',
-                      marginBottom: 8,
-                    }}
-                  >
-                    <Text style={{ fontSize: 14, fontWeight: '800', color: '#111827' }}>{opt}</Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-              <Pressable onPress={() => setShowSpecializationPicker(false)} style={{ paddingVertical: 10, alignItems: 'center' }}>
-                <Text style={{ color: '#6b7280', fontWeight: '700' }}>Close</Text>
-              </Pressable>
-            </View>
-          </View>
-        </Modal>
       </View>
     </SafeAreaView>
   );

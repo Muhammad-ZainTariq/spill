@@ -88,12 +88,14 @@ export default function RootLayout() {
         <Stack.Screen name="live" options={{ headerShown: false }} />
         <Stack.Screen name="therapist" options={{ headerShown: false }} />
         <Stack.Screen name="admin" options={{ headerShown: false }} />
-        <Stack.Screen 
-          name="createpost" 
-          options={{ 
+        <Stack.Screen
+          name="createpost"
+          options={{
             title: 'Create Post',
             headerShown: true,
-          }} 
+            // Previous route is the (tabs) group — without this, iOS shows "(tabs)" next to the chevron.
+            headerBackTitle: 'Back',
+          }}
         />
         <Stack.Screen 
           name="settings" 

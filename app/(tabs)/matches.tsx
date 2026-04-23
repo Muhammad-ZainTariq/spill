@@ -2,27 +2,24 @@ import {
     acceptMatchRequest,
     checkPremiumStatus,
     declineMatchRequest,
-    endMatch,
     generateAITherapyPrompt,
     getActiveMatch,
     getAvailableUsers,
-    getMatchMessages,
     getPartnerProfile,
     getPendingMatchRequests,
     getWeeklySummary,
-    sendGameInvite,
-    sendMatchMessage,
     sendMatchRequest,
     subscribeToActiveMatch,
     subscribeToMatchRequests,
 } from '@/app/functions';
-import { auth, storage, ref, uploadBytes, getDownloadURL } from '@/lib/firebase';
+import { auth } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
-import { RecordingPresets, useAudioPlayer, useAudioRecorder } from 'expo-audio';
-import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
+import { onAuthStateChanged } from 'firebase/auth';
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import { StatusBar } from 'expo-status-bar';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -33,10 +30,9 @@ import {
     ScrollView,
     StyleSheet,
     Text,
-    TextInput,
     View
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -59,9 +55,12 @@ const STRUGGLE_CATEGORIES = [
 export default function MatchesScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const tabBarBottomPad = 24 + Math.max(insets.bottom, 8) + 56;
   const [activeTab, setActiveTab] = useState<'therapy' | 'your_match' | 'find_match'>('therapy');
   const [loading, setLoading] = useState(false);
   const [isPremium, setIsPremium] = useState(false);
+  /** Avoid sending users to Premium before the first `checkPremiumStatus` finishes. */
+  const [premiumChecked, setPremiumChecked] = useState(false);
 
   // AI Therapy Prompts state
   const [therapyPrompt, setTherapyPrompt] = useState<string | null>(null);
@@ -86,50 +85,76 @@ export default function MatchesScreen() {
     timeRemaining: number;
   } | null>(null);
   const [partnerProfile, setPartnerProfile] = useState<{ display_name?: string; anonymous_username?: string } | null>(null);
-  const [matchMessages, setMatchMessages] = useState<any[]>([]);
-  const [messageText, setMessageText] = useState('');
-  const [sendingMessage, setSendingMessage] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const messagesEndRef = useRef<FlatList>(null);
-  
-  // Voice Chat state
-  const [isVoiceActive, setIsVoiceActive] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
-  const [partnerInVoice, setPartnerInVoice] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(false);
-  
-  // Audio recorder and player
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const player = useAudioPlayer();
+  const [currentUserId, setCurrentUserId] = useState<string | null>(auth.currentUser?.uid ?? null);
 
   useEffect(() => {
     loadPremiumStatus();
-    loadActiveMatch();
-    loadCurrentUser();
-  }, []);
-
-  useEffect(() => {
-    if (activeTab === 'find_match') {
-      loadAvailableUsers();
-      loadPendingRequests();
-    }
-  }, [activeTab, selectedCategory]);
-
-  useEffect(() => {
-    const unsub = subscribeToMatchRequests((requests) => {
-      setPendingRequests(requests);
+    const unsub = onAuthStateChanged(auth, (user) => {
+      const uid = user?.uid ?? null;
+      setCurrentUserId(uid);
+      if (uid) {
+        loadActiveMatch();
+        loadPremiumStatus();
+      } else {
+        setActiveMatch(null);
+        setPartnerProfile(null);
+        setPendingRequests([]);
+        setIsPremium(false);
+        setPremiumChecked(true);
+      }
     });
     return () => unsub();
   }, []);
 
+  useFocusEffect(
+    useCallback(() => {
+      loadPremiumStatus();
+    }, [])
+  );
+
   useEffect(() => {
+    if (activeTab === 'your_match' || activeTab === 'find_match') {
+      loadPendingRequests();
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'find_match' && isPremium) {
+      loadAvailableUsers();
+    }
+  }, [activeTab, selectedCategory, isPremium]);
+
+  /** If premium lapses while on Find match, leave the tab and open upgrade. */
+  useEffect(() => {
+    if (!premiumChecked) return;
+    if (activeTab === 'find_match' && !isPremium) {
+      setActiveTab('therapy');
+      router.push('/premium' as any);
+    }
+  }, [premiumChecked, isPremium, activeTab, router]);
+
+  useEffect(() => {
+    if (!currentUserId) {
+      setPendingRequests([]);
+      return;
+    }
+    const unsub = subscribeToMatchRequests((requests) => {
+      setPendingRequests(requests);
+    });
+    return () => unsub();
+  }, [currentUserId]);
+
+  useEffect(() => {
+    if (!currentUserId) {
+      setActiveMatch(null);
+      return;
+    }
     const unsub = subscribeToActiveMatch((match) => {
       setActiveMatch(match);
       setPartnerProfile(null);
     });
     return () => unsub();
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => {
     if (!activeMatch?.partnerId) {
@@ -143,26 +168,29 @@ export default function MatchesScreen() {
     return () => { cancelled = true; };
   }, [activeMatch?.partnerId]);
 
-  useEffect(() => {
-    if (activeMatch) {
-      loadMatchMessages();
-      const interval = setInterval(updateMatchTimer, 60000);
-      return () => {
-        clearInterval(interval);
-        setIsVoiceActive(false);
-        setPartnerInVoice(false);
-      };
-    }
-  }, [activeMatch, currentUserId]);
-
 
   const loadPremiumStatus = async () => {
-    const premium = await checkPremiumStatus();
-    setIsPremium(premium);
+    try {
+      const premium = await checkPremiumStatus();
+      setIsPremium(premium);
+    } finally {
+      setPremiumChecked(true);
+    }
   };
 
-  const loadCurrentUser = async () => {
-    setCurrentUserId(auth.currentUser?.uid ?? null);
+  const goToFindMatchOrPremium = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    let premium = isPremium;
+    if (!premiumChecked) {
+      premium = await checkPremiumStatus();
+      setIsPremium(premium);
+      setPremiumChecked(true);
+    }
+    if (!premium) {
+      router.push('/premium' as any);
+      return;
+    }
+    setActiveTab('find_match');
   };
 
   const loadAvailableUsers = async () => {
@@ -195,25 +223,6 @@ export default function MatchesScreen() {
   const loadActiveMatch = async () => {
     const match = await getActiveMatch();
     setActiveMatch(match);
-    if (match) {
-      loadMatchMessages();
-    }
-  };
-
-  const updateMatchTimer = async () => {
-    const match = await getActiveMatch();
-    if (match) {
-      setActiveMatch(match);
-    } else {
-      setActiveMatch(null);
-      Alert.alert('Match Expired', 'Your anonymous match has expired.');
-    }
-  };
-
-  const loadMatchMessages = async () => {
-    if (!activeMatch) return;
-    const messages = await getMatchMessages(activeMatch.id);
-    setMatchMessages(messages);
   };
 
   // AI Therapy Prompts handlers
@@ -323,169 +332,6 @@ export default function MatchesScreen() {
     }
   };
 
-  const handleUnfriend = async () => {
-    if (!activeMatch) return;
-    Alert.alert(
-      'Unfriend',
-      'End this match and remove the connection?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Unfriend',
-          style: 'destructive',
-          onPress: async () => {
-            const success = await endMatch(activeMatch.id);
-            if (success) {
-              setActiveMatch(null);
-              setMatchMessages([]);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            } else {
-              Alert.alert('Error', 'Failed to end match.');
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const handleSendMessage = async () => {
-    if (!messageText.trim() || !activeMatch || sendingMessage) return;
-
-    const content = messageText.trim();
-    setMessageText('');
-    setSendingMessage(true);
-
-    try {
-      const message = await sendMatchMessage(activeMatch.id, content);
-      if (message) {
-        setMatchMessages(prev => [...prev, message]);
-        setTimeout(() => {
-          messagesEndRef.current?.scrollToEnd({ animated: true });
-        }, 100);
-      }
-    } catch (error) {
-      console.error('Error sending message:', error);
-      setMessageText(content);
-    } finally {
-      setSendingMessage(false);
-    }
-  };
-
-  const handleStartVoiceChat = async () => {
-    if (!activeMatch || !currentUserId) return;
-    
-    try {
-      // Request audio permissions (using expo-av for now as expo-audio doesn't have direct permission methods)
-      // Permissions are usually handled automatically when recording starts
-
-      setIsVoiceActive(true);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      // Voice broadcast was Supabase Realtime; partner status not updated without it
-    } catch (error) {
-      console.error('Error starting voice chat:', error);
-      Alert.alert('Error', 'Failed to start voice chat. Please try again.');
-      setIsVoiceActive(false);
-    }
-  };
-
-  const startRecording = async () => {
-    try {
-      // Permissions are handled automatically when prepareToRecordAsync is called
-
-      await recorder.prepareToRecordAsync();
-      recorder.record();
-      setIsRecording(true);
-      console.log('✅ Recording started');
-    } catch (error) {
-      console.error('Error starting recording:', error);
-      Alert.alert('Error', 'Failed to start recording. Please check microphone permissions.');
-    }
-  };
-
-  const stopRecordingAndSend = async () => {
-    const status = recorder.getStatus();
-    if (!status.isRecording) return;
-    
-    try {
-      recorder.stop();
-      const newStatus = recorder.getStatus();
-      const uri = newStatus.url;
-      setIsRecording(false);
-      
-      if (uri && !isMuted) {
-        try {
-          // Read audio file as base64
-          const base64 = await FileSystem.readAsStringAsync(uri, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
-          
-          // Convert base64 to blob for upload
-          const byteArray = Buffer.from(base64, 'base64');
-          
-          // Upload to Firebase Storage
-          const fileName = `voice-chats/${activeMatch?.id}/${currentUserId}_${Date.now()}.m4a`;
-          const storageRef = ref(storage, fileName);
-          await uploadBytes(storageRef, byteArray, { contentType: 'audio/m4a' });
-          const publicUrl = await getDownloadURL(storageRef);
-
-          // Realtime broadcast was Supabase; partner won't get push without Firestore/Realtime
-          console.log('✅ Voice message sent:', publicUrl);
-        } catch (error) {
-          console.error('Error processing audio:', error);
-          Alert.alert('Error', 'Failed to send voice message. Please try again.');
-        }
-      }
-    } catch (error) {
-      console.error('Error stopping recording:', error);
-    }
-  };
-
-  const handleEndVoiceChat = async () => {
-    if (!activeMatch || !currentUserId) return;
-    
-    try {
-      // Stop recording
-      if (recorder.isRecording) {
-        await recorder.stop();
-        setIsRecording(false);
-      }
-
-      // Stop playing
-      if (player.playing) {
-        player.pause();
-        setIsPlaying(false);
-      }
-
-      setIsVoiceActive(false);
-      setIsMuted(false);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      // Voice status broadcast was Supabase Realtime
-    } catch (error) {
-      console.error('Error ending voice chat:', error);
-    }
-  };
-
-  const handleToggleMute = () => {
-    setIsMuted(!isMuted);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  const handlePushToTalk = async () => {
-    if (!recorder.isRecording) {
-      await startRecording();
-    } else {
-      await stopRecordingAndSend();
-    }
-  };
-
-  const formatTimeRemaining = (minutes: number) => {
-    if (minutes <= 0) return 'Expired';
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    if (hours > 0) return `${hours}h ${mins}m`;
-    return `${mins}m`;
-  };
-
   const renderUserCard = ({ item }: { item: any }) => {
     const struggles = item.match_struggles || [];
     const displayName = item.display_name || item.anonymous_username || 'Anonymous';
@@ -540,49 +386,62 @@ export default function MatchesScreen() {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Matches & Therapy</Text>
-      </View>
-      <View style={styles.tabContainer}>
-            <Pressable
-              style={[styles.tab, activeTab === 'therapy' && styles.tabActive]}
-              onPress={() => {
-                setActiveTab('therapy');
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              }}
-            >
-              <Text style={[styles.tabText, activeTab === 'therapy' && styles.tabTextActive]}>
-                AI Therapy
+    <>
+      <StatusBar style="dark" />
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <View style={styles.container}>
+          <View style={styles.topChrome}>
+            <View style={styles.header}>
+              <Text style={styles.headerKicker}>Reflection · Matching</Text>
+              <Text style={styles.headerTitle}>
+                Matches <Text style={styles.headerTitleAccent}>&</Text> Therapy
               </Text>
-            </Pressable>
-            <Pressable
-              style={[styles.tab, activeTab === 'your_match' && styles.tabActive]}
-              onPress={() => {
-                setActiveTab('your_match');
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              }}
-            >
-              <Text style={[styles.tabText, activeTab === 'your_match' && styles.tabTextActive]}>
-                Your match
-              </Text>
-            </Pressable>
-            <Pressable
-              style={[styles.tab, activeTab === 'find_match' && styles.tabActive]}
-              onPress={() => {
-                setActiveTab('find_match');
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              }}
-            >
-              <Text style={[styles.tabText, activeTab === 'find_match' && styles.tabTextActive]}>
-                Find Match
-              </Text>
-            </Pressable>
-      </View>
+            </View>
+            <View style={styles.tabContainer}>
+          <Pressable
+            style={[styles.tab, activeTab === 'therapy' && styles.tabActive]}
+            onPress={() => {
+              setActiveTab('therapy');
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            }}
+          >
+            <Text style={[styles.tabText, activeTab === 'therapy' && styles.tabTextActive]} numberOfLines={1}>
+              AI Therapy
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.tab, activeTab === 'your_match' && styles.tabActive]}
+            onPress={() => {
+              setActiveTab('your_match');
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            }}
+          >
+            <Text style={[styles.tabText, activeTab === 'your_match' && styles.tabTextActive]} numberOfLines={1}>
+              Your match
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.tab, activeTab === 'find_match' && styles.tabActive]}
+            onPress={() => {
+              void goToFindMatchOrPremium();
+            }}
+          >
+            <Text style={[styles.tabText, activeTab === 'find_match' && styles.tabTextActive]} numberOfLines={1}>
+              Find match
+            </Text>
+          </Pressable>
+            </View>
+          </View>
 
+        <View style={styles.body}>
       {activeTab === 'therapy' ? (
-        // AI Therapy Prompts Section
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false} key="therapy">
+        <ScrollView
+          style={styles.content}
+          contentContainerStyle={[styles.therapyScrollContent, { paddingBottom: tabBarBottomPad }]}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          key="therapy"
+        >
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>AI Therapy Prompts</Text>
             <Text style={styles.sectionSubtitle}>
@@ -665,7 +524,6 @@ export default function MatchesScreen() {
           </View>
         </ScrollView>
       ) : activeTab === 'find_match' ? (
-        // Find Match - Browse Users (always visible as its own tab)
         <View style={styles.matchingContainer}>
           {/* Pending Requests Section */}
           {pendingRequests.length > 0 && (
@@ -765,7 +623,7 @@ export default function MatchesScreen() {
               data={availableUsers}
               renderItem={renderUserCard}
               keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.usersList}
+              contentContainerStyle={[styles.usersList, { paddingBottom: tabBarBottomPad }]}
               refreshing={loadingUsers}
               onRefresh={loadAvailableUsers}
             />
@@ -774,15 +632,67 @@ export default function MatchesScreen() {
       ) : (
         // Your match tab: list of matches → tap to open chat (with message box, Play, Unfriend)
         !activeMatch ? (
-          <View style={[styles.emptyContainer, { flex: 1, justifyContent: 'center' }]}>
-            <Feather name="heart" size={48} color="#d1d5db" />
-            <Text style={styles.emptyText}>No matches yet</Text>
-            <Text style={styles.emptySubtext}>Go to Find Match to get matched with someone.</Text>
-            <Pressable style={styles.refreshButton} onPress={() => setActiveTab('find_match')}>
-              <Feather name="users" size={16} color="#ec4899" />
-              <Text style={styles.refreshButtonText}>Find Match</Text>
-            </Pressable>
-          </View>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingBottom: tabBarBottomPad, flexGrow: 1 }}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {pendingRequests.length > 0 && (
+              <View style={styles.requestsSection}>
+                <Text style={styles.requestsTitle}>Pending requests ({pendingRequests.length})</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.requestsScroll}>
+                  {pendingRequests.map((request) => {
+                    const sender = request.profiles;
+                    const senderName = sender?.display_name || sender?.anonymous_username || 'Someone';
+                    return (
+                      <View key={request.id} style={styles.requestCard}>
+                        {sender?.avatar_url ? (
+                          <Image source={{ uri: sender.avatar_url }} style={styles.requestAvatar} />
+                        ) : (
+                          <View style={styles.requestAvatarPlaceholder}>
+                            <Text style={styles.requestAvatarText}>
+                              {senderName.charAt(0).toUpperCase()}
+                            </Text>
+                          </View>
+                        )}
+                        <Text style={styles.requestName}>{senderName}</Text>
+                        <View style={styles.requestActions}>
+                          <Pressable
+                            style={[styles.requestButton, styles.acceptButton]}
+                            onPress={() => handleAcceptRequest(request.id)}
+                          >
+                            <Feather name="check" size={16} color="#fff" />
+                            <Text style={styles.requestButtonText}>Accept</Text>
+                          </Pressable>
+                          <Pressable
+                            style={[styles.requestButton, styles.declineButton]}
+                            onPress={() => handleDeclineRequest(request.id)}
+                          >
+                            <Feather name="x" size={16} color="#fff" />
+                            <Text style={styles.requestButtonText}>Decline</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
+            <View style={[styles.emptyContainer, { flex: 1, justifyContent: 'center', minHeight: 280 }]}>
+              <Feather name="heart" size={48} color="#d1d5db" />
+              <Text style={styles.emptyText}>No matches yet</Text>
+              <Text style={styles.emptySubtext}>
+                {isPremium
+                  ? 'Go to Find Match to get matched with someone.'
+                  : 'Upgrade to Premium to browse people and send match requests.'}
+              </Text>
+              <Pressable style={styles.refreshButton} onPress={() => void goToFindMatchOrPremium()}>
+                <Feather name="users" size={16} color="#ec4899" />
+                <Text style={styles.refreshButtonText}>{isPremium ? 'Find Match' : 'Go Premium'}</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
         ) : (
           // List of people you're matched with — tap to open chat (full screen, no tab bar)
           <View style={styles.matchListContainer}>
@@ -810,56 +720,90 @@ export default function MatchesScreen() {
           </View>
         )
       )}
-    </View>
+        </View>
+      </View>
+      </SafeAreaView>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
+  /** Same as header so the Dynamic Island / status bar area isn’t a different grey. */
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
   container: {
     flex: 1,
     backgroundColor: '#f9fafb',
   },
+  /** One continuous white block: status bar (via safeArea) + header + tabs */
+  topChrome: {
+    backgroundColor: '#ffffff',
+  },
   header: {
-    backgroundColor: '#fff',
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e1e5e9',
+    paddingTop: 4,
+    paddingBottom: 8,
+  },
+  headerKicker: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ec4899',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginBottom: 4,
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#111827',
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0f172a',
+    letterSpacing: -0.6,
+    lineHeight: 28,
+  },
+  headerTitleAccent: {
+    color: '#ec4899',
+    fontWeight: '800',
   },
   tabContainer: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e1e5e9',
+    paddingHorizontal: 12,
+    paddingTop: 0,
+    paddingBottom: 0,
+    gap: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e5e7eb',
   },
   tab: {
     flex: 1,
-    paddingVertical: 12,
+    minWidth: 0,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
     alignItems: 'center',
+    justifyContent: 'center',
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
-    marginRight: 16,
   },
   tabActive: {
     borderBottomColor: '#ec4899',
   },
   tabText: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: '600',
     color: '#9ca3af',
+    textAlign: 'center',
   },
   tabTextActive: {
     color: '#ec4899',
   },
+  body: {
+    flex: 1,
+  },
   content: {
     flex: 1,
+  },
+  therapyScrollContent: {
+    flexGrow: 1,
   },
   section: {
     padding: 20,

@@ -38,6 +38,18 @@ service cloud.firestore {
           && request.resource.data.mood_value >= 1
           && request.resource.data.mood_value <= 5;
       }
+
+      // Mood tab: gratitude jar — users/{uid}/gratitude_entries
+      match /gratitude_entries/{entryId} {
+        allow read, delete: if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null
+          && request.auth.uid == userId
+          && request.resource.data.content is string
+          && request.resource.data.content.size() > 0
+          && request.resource.data.content.size() <= 2000
+          && request.resource.data.created_at is string;
+        allow update: if false;
+      }
     }
 
     // Legacy top-level mood docs (optional migration from older clients)

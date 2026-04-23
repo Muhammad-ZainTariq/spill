@@ -354,7 +354,11 @@ exports.approvePostAsSafe = functions
     const postData = postSnap.data() || {};
     const postOwnerUid = postData.user_id || null;
     const now = new Date().toISOString();
-    await postRef.update({ approved_safe_at: now });
+    // Clear moderation flag so admin query (flagged_for_toxicity == true) matches feed logic (hidden only while flagged && !approved_safe_at).
+    await postRef.update({
+      approved_safe_at: now,
+      flagged_for_toxicity: false,
+    });
     if (reportId && typeof reportId === 'string' && reportId.trim()) {
       await db.collection('reports').doc(reportId.trim()).update({
         status: 'resolved',
@@ -871,6 +875,7 @@ exports.approveTherapistBookingRequest = functions
           therapist_uid: therapistUid,
           user_uid: requesterUid,
           slot_id: slotId,
+          slot_ids: [slotId],
           status: 'scheduled',
           starts_at: startIso,
           ends_at: endsIso,
@@ -897,6 +902,239 @@ exports.approveTherapistBookingRequest = functions
       if (err instanceof functions.https.HttpsError) throw err;
       console.error('approveTherapistBookingRequest failed', err);
       throw new functions.https.HttpsError('internal', err.message || 'Failed to approve booking.');
+    }
+  });
+
+/** Consecutive slot chain tolerance (ms) for merged booking requests */
+const MERGE_CONSEC_MS = 120000;
+
+function slotTimeRangeFromFirestore(slot) {
+  const startAt = String(slot.start_at || '');
+  const startMs = Date.parse(startAt);
+  if (!Number.isFinite(startMs)) return null;
+  let endMs = Date.parse(String(slot.end_at || ''));
+  if (!Number.isFinite(endMs) || endMs <= startMs) {
+    const dm = Number(slot.duration_min);
+    if (Number.isFinite(dm) && dm > 0) endMs = startMs + dm * 60 * 1000;
+    else return null;
+  }
+  return { startMs, endMs, startAt };
+}
+
+// Therapist-only: approve multiple consecutive pending requests from the same user → one session.
+// Body: { requestIds: string[] } sorted by time (client may send any order; server re-sorts).
+exports.approveMergedTherapistBookingRequests = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const uid = context?.auth?.uid;
+    if (!uid) throw new functions.https.HttpsError('unauthenticated', 'You must be logged in.');
+    const rawIds = data?.requestIds;
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      throw new functions.https.HttpsError('invalid-argument', 'requestIds array required.');
+    }
+    const requestIds = rawIds.map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean);
+    if (requestIds.length === 0) throw new functions.https.HttpsError('invalid-argument', 'requestIds array required.');
+    const nowIso = new Date().toISOString();
+
+    try {
+      const out = await db.runTransaction(async (tx) => {
+        const uniq = [...new Set(requestIds)];
+        if (uniq.length !== requestIds.length) {
+          throw new functions.https.HttpsError('invalid-argument', 'Duplicate requestIds.');
+        }
+
+        const reqEntries = [];
+        for (const rid of uniq) {
+          const reqRef = db.collection('therapist_booking_requests').doc(rid);
+          const reqSnap = await tx.get(reqRef);
+          if (!reqSnap.exists) throw new functions.https.HttpsError('not-found', 'Request not found.');
+          reqEntries.push({ reqRef, id: rid, req: reqSnap.data() || {} });
+        }
+
+        reqEntries.sort(
+          (a, b) => Date.parse(String(a.req.start_at || '')) - Date.parse(String(b.req.start_at || ''))
+        );
+
+        const therapistUid = String(reqEntries[0].req.therapist_uid || '').trim();
+        const requesterUid = String(reqEntries[0].req.requester_uid || '').trim();
+        if (!therapistUid || therapistUid !== uid) {
+          throw new functions.https.HttpsError('permission-denied', 'Not your request.');
+        }
+        if (!requesterUid) throw new functions.https.HttpsError('failed-precondition', 'request-invalid');
+
+        for (const { req: r } of reqEntries) {
+          if (String(r.status || '') !== 'requested') {
+            throw new functions.https.HttpsError('failed-precondition', 'request-not-pending');
+          }
+          if (String(r.therapist_uid || '').trim() !== therapistUid) {
+            throw new functions.https.HttpsError('failed-precondition', 'request-therapist-mismatch');
+          }
+          if (String(r.requester_uid || '').trim() !== requesterUid) {
+            throw new functions.https.HttpsError('failed-precondition', 'request-requester-mismatch');
+          }
+        }
+
+        const slotChain = [];
+        for (const { id: reqId, req: r } of reqEntries) {
+          const slotId = String(r.slot_id || '').trim();
+          if (!slotId) throw new functions.https.HttpsError('failed-precondition', 'request-invalid');
+          const slotRef = db.collection('therapist_slots').doc(slotId);
+          const slotSnap = await tx.get(slotRef);
+          if (!slotSnap.exists) throw new functions.https.HttpsError('not-found', 'Slot not found.');
+          const slot = slotSnap.data() || {};
+          if (String(slot.status || '') !== 'requested') {
+            throw new functions.https.HttpsError('failed-precondition', 'slot-not-requested');
+          }
+          if (String(slot.requested_request_id || '').trim() !== reqId) {
+            throw new functions.https.HttpsError('failed-precondition', 'slot-request-mismatch');
+          }
+          const range = slotTimeRangeFromFirestore(slot);
+          if (!range) throw new functions.https.HttpsError('failed-precondition', 'slot-invalid');
+          slotChain.push({ slotRef, slotId, ...range });
+        }
+
+        for (let i = 1; i < slotChain.length; i++) {
+          const gap = slotChain[i].startMs - slotChain[i - 1].endMs;
+          if (Math.abs(gap) > MERGE_CONSEC_MS) {
+            throw new functions.https.HttpsError('failed-precondition', 'slots-not-consecutive');
+          }
+        }
+
+        const firstStartIso = String(reqEntries[0].req.start_at || '');
+        const firstStartMs = Date.parse(firstStartIso);
+        if (!Number.isFinite(firstStartMs)) throw new functions.https.HttpsError('failed-precondition', 'request-invalid');
+
+        const lastEndMs = slotChain[slotChain.length - 1].endMs;
+        const endsIso = new Date(lastEndMs).toISOString();
+        const totalDurMin = Math.round((lastEndMs - firstStartMs) / (60 * 1000));
+        if (totalDurMin < 15) throw new functions.https.HttpsError('failed-precondition', 'session-too-short');
+
+        const sessionRef = db.collection('therapist_sessions').doc();
+        const slotIdsArr = slotChain.map((s) => s.slotId);
+
+        for (const s of slotChain) {
+          tx.update(s.slotRef, {
+            status: 'booked',
+            booked_by_uid: requesterUid,
+            booked_at: nowIso,
+            session_id: sessionRef.id,
+          });
+        }
+        for (const { reqRef } of reqEntries) {
+          tx.update(reqRef, { status: 'approved', approved_at: nowIso, session_id: sessionRef.id });
+        }
+        tx.set(sessionRef, {
+          therapist_uid: therapistUid,
+          user_uid: requesterUid,
+          slot_id: slotIdsArr[0],
+          slot_ids: slotIdsArr,
+          status: 'scheduled',
+          starts_at: firstStartIso,
+          ends_at: endsIso,
+          duration_min: totalDurMin,
+          created_at: nowIso,
+        });
+
+        return { sessionId: sessionRef.id, requesterUid, slotIds: slotIdsArr };
+      });
+
+      try {
+        await db.collection('notifications').add({
+          recipient_id: out.requesterUid,
+          type: 'therapist_booking_approved',
+          title: 'Booking approved',
+          body: 'Your therapist approved your booking request.',
+          read: false,
+          created_at: nowIso,
+          data: { session_id: out.sessionId, slot_ids: out.slotIds },
+        });
+      } catch (e) {}
+
+      return { ok: true, sessionId: out.sessionId };
+    } catch (err) {
+      if (err instanceof functions.https.HttpsError) throw err;
+      console.error('approveMergedTherapistBookingRequests failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Failed to approve booking.');
+    }
+  });
+
+// Therapist-only: reject multiple pending requests and release slots.
+// Body: { requestIds: string[] }
+exports.rejectMergedTherapistBookingRequests = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const uid = context?.auth?.uid;
+    if (!uid) throw new functions.https.HttpsError('unauthenticated', 'You must be logged in.');
+    const rawIds = data?.requestIds;
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      throw new functions.https.HttpsError('invalid-argument', 'requestIds array required.');
+    }
+    const requestIds = rawIds.map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean);
+    if (requestIds.length === 0) throw new functions.https.HttpsError('invalid-argument', 'requestIds array required.');
+    const nowIso = new Date().toISOString();
+
+    try {
+      const out = await db.runTransaction(async (tx) => {
+        const uniq = [...new Set(requestIds)];
+        let requesterUid = '';
+        for (const rid of uniq) {
+          const reqRef = db.collection('therapist_booking_requests').doc(rid);
+          const reqSnap = await tx.get(reqRef);
+          if (!reqSnap.exists) throw new functions.https.HttpsError('not-found', 'Request not found.');
+          const req = reqSnap.data() || {};
+          if (String(req.status || '') !== 'requested') {
+            throw new functions.https.HttpsError('failed-precondition', 'request-not-pending');
+          }
+          const therapistUid = String(req.therapist_uid || '').trim();
+          if (!therapistUid || therapistUid !== uid) {
+            throw new functions.https.HttpsError('permission-denied', 'Not your request.');
+          }
+          const ridRequester = String(req.requester_uid || '').trim();
+          if (!requesterUid) requesterUid = ridRequester;
+          else if (ridRequester !== requesterUid) {
+            throw new functions.https.HttpsError('failed-precondition', 'request-requester-mismatch');
+          }
+
+          const slotId = String(req.slot_id || '').trim();
+          if (slotId) {
+            const slotRef = db.collection('therapist_slots').doc(slotId);
+            const slotSnap = await tx.get(slotRef);
+            if (slotSnap.exists) {
+              const slot = slotSnap.data() || {};
+              if (String(slot.status || '') === 'requested') {
+                tx.update(slotRef, {
+                  status: 'open',
+                  requested_by_uid: null,
+                  requested_at: null,
+                  requested_request_id: null,
+                });
+              }
+            }
+          }
+          tx.update(reqRef, { status: 'rejected', rejected_at: nowIso });
+        }
+        return { requesterUid };
+      });
+
+      try {
+        if (out.requesterUid) {
+          await db.collection('notifications').add({
+            recipient_id: out.requesterUid,
+            type: 'therapist_booking_rejected',
+            title: 'Booking declined',
+            body: 'Your therapist declined the booking request.',
+            read: false,
+            created_at: nowIso,
+            data: {},
+          });
+        }
+      } catch (e) {}
+
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof functions.https.HttpsError) throw err;
+      console.error('rejectMergedTherapistBookingRequests failed', err);
+      throw new functions.https.HttpsError('internal', err.message || 'Failed to reject booking.');
     }
   });
 
@@ -983,10 +1221,12 @@ exports.cancelTherapistSession = functions
         if (status === 'cancelled') throw new functions.https.HttpsError('failed-precondition', 'Already cancelled.');
         const slotId = String(sess.slot_id || '').trim();
         const userUid = String(sess.user_uid || '').trim();
+        const extraIds = Array.isArray(sess.slot_ids) ? sess.slot_ids.map((x) => String(x || '').trim()).filter(Boolean) : [];
+        const slotIdsToRelease = [...new Set([...(slotId ? [slotId] : []), ...extraIds])];
 
         tx.update(sessionRef, { status: 'cancelled', cancelled_at: nowIso });
-        if (slotId) {
-          const slotRef = db.collection('therapist_slots').doc(slotId);
+        for (const sid of slotIdsToRelease) {
+          const slotRef = db.collection('therapist_slots').doc(sid);
           tx.update(slotRef, {
             status: 'open',
             booked_by_uid: null,
@@ -1044,6 +1284,13 @@ exports.rescheduleTherapistSession = functions
         const oldSlotId = String(sess.slot_id || '').trim();
         const dur = Number(sess.duration_min || 60);
         if (![30, 60].includes(dur)) throw new functions.https.HttpsError('failed-precondition', 'Invalid duration.');
+        const extraSlots = Array.isArray(sess.slot_ids) ? sess.slot_ids.length : 0;
+        if (dur > 30 || extraSlots > 1) {
+          throw new functions.https.HttpsError(
+            'failed-precondition',
+            'Reschedule is only available for single 30-minute sessions. Cancel and rebook for longer sessions.'
+          );
+        }
 
         const newSlotSnap = await tx.get(newSlotRef);
         if (!newSlotSnap.exists) throw new functions.https.HttpsError('not-found', 'New slot not found.');
@@ -1079,6 +1326,7 @@ exports.rescheduleTherapistSession = functions
         });
         tx.update(sessionRef, {
           slot_id: newSlotId,
+          slot_ids: [newSlotId],
           starts_at: newStartIso,
           ends_at: newEndIso,
           rescheduled_at: nowIso,

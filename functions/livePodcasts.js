@@ -457,7 +457,17 @@ exports.uploadLivePodcastCover = functions
     bytes: buffer.length,
   });
 
-  return { path: objectPath };
+  // Stable HTTPS URL for Firestore + clients without relying on client-side getDownloadURL + Storage rules.
+  let downloadUrl = null;
+  try {
+    await file.makePublic();
+    const enc = encodeURIComponent(objectPath);
+    downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${STORAGE_BUCKET}/o/${enc}?alt=media`;
+  } catch (pubErr) {
+    console.warn('[uploadLivePodcastCover] makePublic failed (uniform bucket ACL?); client will use getDownloadURL', pubErr?.message);
+  }
+
+  return { path: objectPath, downloadUrl };
   });
 
 exports.createLivePodcastRoom = functions.region('us-central1').https.onCall(async (data, context) => {

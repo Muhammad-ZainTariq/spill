@@ -1,4 +1,11 @@
-import { listOpenSlotsForTherapist, listTherapistProfiles, TherapistProfile } from '@/app/therapist/_marketplace';
+import {
+  getTherapistProfile,
+  listOpenSlotsForTherapist,
+  listSessionsForUser,
+  listTherapistProfiles,
+  TherapistProfile,
+  TherapistSession,
+} from '@/app/therapist/_marketplace';
 import TherapistList from '@/components/TherapistList';
 import { auth, db } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
@@ -73,6 +80,8 @@ export default function ConnectionsScreen() {
   const [loadingRequests, setLoadingRequests] = useState(true);
   const [therapists, setTherapists] = useState<(TherapistProfile & { nextSlotAt?: string | null; openSlots?: number })[]>([]);
   const [loadingTherapists, setLoadingTherapists] = useState(false);
+  const [privateSessions, setPrivateSessions] = useState<TherapistSession[]>([]);
+  const [privateSessionTherapistNames, setPrivateSessionTherapistNames] = useState<Record<string, string>>({});
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -164,6 +173,32 @@ export default function ConnectionsScreen() {
     } finally {
       setLoadingTherapists(false);
     }
+  };
+
+  const loadPrivateSessions = async () => {
+    const u = auth.currentUser;
+    if (!u) {
+      setPrivateSessions([]);
+      setPrivateSessionTherapistNames({});
+      return;
+    }
+    try {
+      const list = await listSessionsForUser(u.uid, 30);
+      setPrivateSessions(list);
+      const tids = [...new Set(list.map((s) => String(s.therapist_uid || '').trim()).filter(Boolean))];
+      const entries = await Promise.all(tids.map(async (tid) => [tid, await getTherapistProfile(tid)] as const));
+      const names: Record<string, string> = {};
+      for (const [tid, p] of entries) {
+        names[tid] = String(p?.display_name || 'Therapist');
+      }
+      setPrivateSessionTherapistNames(names);
+    } catch {
+      setPrivateSessions([]);
+    }
+  };
+
+  const loadTherapistsTab = async () => {
+    await Promise.all([loadTherapists(), loadPrivateSessions()]);
   };
 
   const handleAcceptRequest = async (conversationId: string) => {
@@ -279,12 +314,12 @@ export default function ConnectionsScreen() {
   }, [selectedConversation]);
 
   useEffect(() => {
-    if (activeTab === 'therapists') loadTherapists();
+    if (activeTab === 'therapists') loadTherapistsTab();
   }, [activeTab]);
 
   useFocusEffect(
     React.useCallback(() => {
-      if (activeTab === 'therapists') loadTherapists();
+      if (activeTab === 'therapists') loadTherapistsTab();
     }, [activeTab])
   );
 
@@ -691,8 +726,49 @@ export default function ConnectionsScreen() {
               loading={loadingTherapists}
               onTherapistPress={(id: string) => router.push(`/therapist/${id}` as any)}
               style={styles.tabContent}
-              onRefresh={loadTherapists}
+              onRefresh={loadTherapistsTab}
               refreshing={loadingTherapists}
+              listHeaderExtra={
+                privateSessions.length > 0 ? (
+                  <View style={{ gap: 10 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: '#6b7280', textTransform: 'uppercase' }}>
+                      Your private sessions
+                    </Text>
+                    {privateSessions.map((s) => {
+                      const name = privateSessionTherapistNames[s.therapist_uid] || 'Therapist';
+                      return (
+                        <Pressable
+                          key={s.id}
+                          style={{
+                            backgroundColor: '#fff',
+                            borderRadius: 16,
+                            padding: 14,
+                            borderWidth: 1,
+                            borderColor: '#e5e7eb',
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                          }}
+                          onPress={() => router.push(`/therapist-session/${s.id}` as any)}
+                        >
+                          <View style={{ flex: 1, paddingRight: 12 }}>
+                            <Text style={{ fontSize: 15, fontWeight: '800', color: '#111827' }} numberOfLines={1}>
+                              {name}
+                            </Text>
+                            <Text style={{ fontSize: 12, fontWeight: '600', color: '#6b7280', marginTop: 4 }} numberOfLines={2}>
+                              {fmtWhenSlot(s.starts_at)} – {fmtWhenSlot(s.ends_at)}
+                            </Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Feather name="message-circle" size={18} color="#ec4899" />
+                            <Text style={{ fontSize: 13, fontWeight: '800', color: '#ec4899' }}>Chat</Text>
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ) : null
+              }
             />
           ) : activeTab === 'groups' ? (
             loadingGroups ? (
