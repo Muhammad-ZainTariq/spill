@@ -177,8 +177,12 @@ export default function MatchesScreen() {
       return;
     }
     const unsub = subscribeToActiveMatch((match) => {
-      setActiveMatch(match);
-      setPartnerProfile(null);
+      setActiveMatch((prev) => {
+        if (prev?.partnerId !== match?.partnerId) {
+          setPartnerProfile(null);
+        }
+        return match;
+      });
     });
     return () => unsub();
   }, [currentUserId]);

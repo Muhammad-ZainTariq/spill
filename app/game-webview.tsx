@@ -208,8 +208,8 @@ export default function GameWebViewScreen() {
           try {
             const data = JSON.parse(e.nativeEvent.data);
             if (data?.type === 'leave') handleBack();
-            if (data?.type === 'game_over' && data?.roomCode && (data?.result === 'win' || data?.result === 'loss' || data?.result === 'draw')) {
-              recordGameResult(data.roomCode, data.result, data.gameType || 'tictactoe').catch(() => {});
+            if (data?.type === 'game_over' && (data?.result === 'win' || data?.result === 'loss' || data?.result === 'draw')) {
+              recordGameResult(matchId, data.result, data.gameType || 'tictactoe').catch(() => {});
             }
           } catch (_) {}
         }}

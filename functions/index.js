@@ -7,6 +7,10 @@ admin.initializeApp();
 
 const db = admin.firestore();
 
+function pushTokenDocId(token) {
+  return Buffer.from(String(token || '')).toString('base64url').slice(0, 180);
+}
+
 /** Admins or anyone with a therapist_profiles doc can upload learning-resource PDFs/covers. */
 async function canUploadTherapistLearningFiles(uid) {
   if (!uid) return false;
@@ -1369,6 +1373,19 @@ async function sendPushToUser(recipientId, title, body, payload) {
     });
       return { ok: false, error: 'No push token' };
     }
+    try {
+      const tokenOwnerSnap = await db.collection('expo_push_tokens').doc(pushTokenDocId(expoPushToken)).get();
+      const tokenOwner = tokenOwnerSnap.exists ? String((tokenOwnerSnap.data() || {}).owner_uid || '') : '';
+      if (tokenOwner && tokenOwner !== userId) {
+        console.warn('sendPushToUser: token currently belongs to another signed-in user, skipping push', {
+          recipientId: userId,
+          tokenOwner,
+        });
+        return { ok: false, error: 'Push token belongs to another signed-in user' };
+      }
+    } catch (e) {
+      console.warn('sendPushToUser: token ownership check failed', e);
+    }
     const recipientIdTrimmed = recipientId.trim();
     let badge = 0;
     try {
@@ -1414,6 +1431,33 @@ async function sendPushToUser(recipientId, title, body, payload) {
     return { ok: false, error: err.message || 'Failed to send push.' };
   }
 }
+
+exports.registerExpoPushToken = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+    }
+    const uid = context.auth.uid;
+    const token = String((data || {}).token || '').trim();
+    if (!token || !token.startsWith('ExponentPushToken[')) {
+      throw new functions.https.HttpsError('invalid-argument', 'Valid Expo push token is required.');
+    }
+    const now = new Date().toISOString();
+    const batch = db.batch();
+    batch.set(
+      db.collection('users').doc(uid),
+      { expo_push_token: token, expo_push_token_owner_uid: uid, expo_push_token_updated_at: now },
+      { merge: true }
+    );
+    batch.set(
+      db.collection('expo_push_tokens').doc(pushTokenDocId(token)),
+      { token, owner_uid: uid, updated_at: now },
+      { merge: true }
+    );
+    await batch.commit();
+    return { ok: true };
+  });
 
 // Callable: send an Expo push notification to a user (used for game invites, match accepted, etc.)
 exports.sendExpoPush = functions

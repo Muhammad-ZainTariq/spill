@@ -1,8 +1,9 @@
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
-import { auth, db } from './firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { auth } from './firebase';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from './firebase';
 
 const projectId = (Constants.expoConfig as any)?.extra?.eas?.projectId;
 const isAndroidExpoGo = Platform.OS === 'android' && Constants.executionEnvironment === 'storeClient';
@@ -71,7 +72,8 @@ export async function savePushTokenToFirestore(): Promise<void> {
   try {
     const token = await registerForPushNotificationsAsync();
     if (token) {
-      await setDoc(doc(db, 'users', uid), { expo_push_token: token }, { merge: true });
+      const registerPushToken = httpsCallable<{ token: string }, { ok: boolean }>(functions, 'registerExpoPushToken');
+      await registerPushToken({ token });
     }
   } catch (e) {
     console.warn('Failed to save push token', e);
