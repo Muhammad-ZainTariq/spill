@@ -2,8 +2,7 @@ import { auth, db, functions } from '@/lib/firebase';
 import { getMoodEntries as fetchMoodEntriesFirestore } from '@/lib/moodStories';
 import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
-import {
-    addDoc,
+import {addDoc,
     collection,
     deleteDoc,
     deleteField,
@@ -4308,8 +4307,7 @@ export const subscribeToGameInvites = (
   const q = query(
     notifRef,
     where('recipient_id', '==', uid),
-    where('type', '==', 'game_invite'),
-    limit(30)
+    where('type', '==', 'game_invite')
   );
   const unsub = onSnapshot(
     q,

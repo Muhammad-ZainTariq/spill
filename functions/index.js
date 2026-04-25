@@ -1377,11 +1377,14 @@ async function sendPushToUser(recipientId, title, body, payload) {
       const tokenOwnerSnap = await db.collection('expo_push_tokens').doc(pushTokenDocId(expoPushToken)).get();
       const tokenOwner = tokenOwnerSnap.exists ? String((tokenOwnerSnap.data() || {}).owner_uid || '') : '';
       if (tokenOwner && tokenOwner !== userId) {
-        console.warn('sendPushToUser: token currently belongs to another signed-in user, skipping push', {
+        console.warn('sendPushToUser: token owner mismatch; reassigning token to recipient before push', {
           recipientId: userId,
           tokenOwner,
         });
-        return { ok: false, error: 'Push token belongs to another signed-in user' };
+        await db.collection('expo_push_tokens').doc(pushTokenDocId(expoPushToken)).set(
+          { token: expoPushToken, owner_uid: userId, updated_at: new Date().toISOString() },
+          { merge: true }
+        );
       }
     } catch (e) {
       console.warn('sendPushToUser: token ownership check failed', e);

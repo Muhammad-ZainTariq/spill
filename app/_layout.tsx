@@ -10,6 +10,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import 'react-native-reanimated';
 
+import { GameInviteProvider } from '@/components/GameInviteProvider';
 import { LivePodcastProvider } from '@/components/live/LivePodcastProvider';
 
 export default function RootLayout() {
@@ -20,6 +21,7 @@ export default function RootLayout() {
       <KeyboardProvider statusBarTranslucent navigationBarTranslucent>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <LivePodcastProvider>
+          <GameInviteProvider>
           <Stack>
         <Stack.Screen 
           name="index" 
@@ -246,6 +248,7 @@ export default function RootLayout() {
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
         <StatusBar style="auto" />
+        </GameInviteProvider>
         </LivePodcastProvider>
       </ThemeProvider>
       </KeyboardProvider>

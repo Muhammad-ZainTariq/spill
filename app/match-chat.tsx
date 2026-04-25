@@ -1,24 +1,17 @@
 import { Feather } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { onAuthStateChanged } from 'firebase/auth';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   endMatch,
   fetchUserProfile,
   getPartnerProfile,
-  clearMatchLastGameInvite,
-  markGameInviteNotificationsReadForMatch,
-  type MatchLastGameInvite,
   reportMatchMessage,
   sendGameInvite,
   sendMatchMessage,
-  setGameInviteAccepted,
-  setGameInviteDeclined,
-  setGameInviteExpired,
-  subscribeToMatchLastGameInvite,
   subscribeToMatchGameScore,
   subscribeToMatchMessages,
 } from '@/app/functions';
@@ -78,29 +71,6 @@ function toChatData(loading: boolean, messages: ChatMessage[]): ChatDataItem[] {
   return out.reverse();
 }
 
-const GAME_TITLES: Record<string, string> = { tictactoe: 'Tic-Tac-Toe', chess: 'Chess' };
-
-function gameTitle(t: string) {
-  const k = (t || 'tictactoe').toLowerCase();
-  return GAME_TITLES[k] || t || 'a game';
-}
-
-/** Inviter “they declined” strip: only in the short window after `declined_at` (not old stuck rows). */
-const DECLINED_AT_LIVE_MS = 2 * 60 * 60 * 1000;
-
-function inviteCreatedAtIsRecent(iso: string, maxAgeMs: number) {
-  if (!iso?.trim()) return false;
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return false;
-  return Date.now() - t < maxAgeMs;
-}
-
-function inviteExpiresAtIsFuture(iso?: string) {
-  if (!iso?.trim()) return false;
-  const t = Date.parse(iso);
-  return !Number.isNaN(t) && t > Date.now();
-}
-
 export default function MatchChatScreen() {
   const router = useRouter();
   const rawParams = useLocalSearchParams<{ matchId: string | string[]; partnerId: string | string[] }>();
@@ -115,11 +85,6 @@ export default function MatchChatScreen() {
   const [sending, setSending] = useState(false);
   const [gameScore, setGameScore] = useState<{ myWins: number; partnerWins: number }>({ myWins: 0, partnerWins: 0 });
   const [currentUserId, setCurrentUserId] = useState<string | null>(auth.currentUser?.uid ?? null);
-  const [lastGameInvite, setLastGameInvite] = useState<MatchLastGameInvite>(null);
-  const [declinedBannerDismissed, setDeclinedBannerDismissed] = useState(false);
-  const [gameInviteBusy, setGameInviteBusy] = useState(false);
-  const gameInviteReadKeyRef = useRef<string>('');
-  const lastInviteKeyRef = useRef<string>('');
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setCurrentUserId(u?.uid ?? null));
@@ -168,45 +133,6 @@ export default function MatchChatScreen() {
     const unsub = subscribeToMatchGameScore(matchId, setGameScore);
     return () => unsub();
   }, [matchId]);
-
-  useEffect(() => {
-    if (!matchId) return;
-    return subscribeToMatchLastGameInvite(matchId, setLastGameInvite);
-  }, [matchId]);
-
-  useEffect(() => {
-    const key = [lastGameInvite?.status, lastGameInvite?.created_at, lastGameInvite?.declined_at].join('|');
-    if (key && key !== lastInviteKeyRef.current) {
-      lastInviteKeyRef.current = key;
-      setDeclinedBannerDismissed(false);
-    }
-  }, [lastGameInvite?.status, lastGameInvite?.created_at, lastGameInvite?.declined_at]);
-
-  // Mark inbox read only when we would show the live (fresh) pending recipient banner.
-  useEffect(() => {
-    if (!matchId || !currentUserId || !partnerId || !lastGameInvite) return;
-    if (lastGameInvite.status !== 'pending' || lastGameInvite.from_user_id !== partnerId) return;
-    if (!inviteExpiresAtIsFuture(lastGameInvite.expires_at)) return;
-    const key = `${lastGameInvite.created_at}`;
-    if (gameInviteReadKeyRef.current === key) return;
-    gameInviteReadKeyRef.current = key;
-    void markGameInviteNotificationsReadForMatch(matchId);
-  }, [matchId, currentUserId, partnerId, lastGameInvite]);
-
-  useEffect(() => {
-    if (!matchId || !lastGameInvite || lastGameInvite.status !== 'pending') return;
-    const expiresAt = Date.parse(lastGameInvite.expires_at || '');
-    if (Number.isNaN(expiresAt)) return;
-    const delay = expiresAt - Date.now();
-    if (delay <= 0) {
-      void setGameInviteExpired(matchId, lastGameInvite.invite_id);
-      return;
-    }
-    const id = setTimeout(() => {
-      void setGameInviteExpired(matchId, lastGameInvite.invite_id);
-    }, delay + 250);
-    return () => clearTimeout(id);
-  }, [matchId, lastGameInvite]);
 
   const handleSend = useCallback(async () => {
     const content = text.trim();
@@ -271,146 +197,6 @@ export default function MatchChatScreen() {
   const displayPartnerName = partnerProfile
     ? (partnerProfile.display_name || partnerProfile.anonymous_username || 'Anonymous')
     : 'Your match';
-
-  const onJoinFromBanner = useCallback(async () => {
-    if (!matchId || !lastGameInvite) return;
-    setGameInviteBusy(true);
-    try {
-      void markGameInviteNotificationsReadForMatch(matchId);
-      const accepted = await setGameInviteAccepted(matchId, lastGameInvite.invite_id);
-      if (!accepted) {
-        Alert.alert('Invite ended', 'This game invite is no longer active.');
-        return;
-      }
-      const gt = (lastGameInvite.game_type || 'tictactoe').toLowerCase();
-      router.push({
-        pathname: '/game-webview',
-        params: { room: lastGameInvite.game_room_id || lastGameInvite.invite_id, matchId, gameType: gt, opponentName: displayPartnerName, myName, inviteId: lastGameInvite.invite_id },
-      } as any);
-    } finally {
-      setGameInviteBusy(false);
-    }
-  }, [matchId, lastGameInvite, displayPartnerName, myName, router]);
-
-  const onDeclineFromBanner = useCallback(async () => {
-    if (!matchId || !lastGameInvite?.invite_id) return;
-    setGameInviteBusy(true);
-    try {
-      await setGameInviteDeclined(matchId, lastGameInvite.invite_id);
-      void markGameInviteNotificationsReadForMatch(matchId);
-    } finally {
-      setGameInviteBusy(false);
-    }
-  }, [matchId, lastGameInvite?.invite_id]);
-
-  const onResendFromBanner = useCallback(async () => {
-    if (!matchId || !partnerId || !lastGameInvite) return;
-    setGameInviteBusy(true);
-    try {
-      const inviteId = await sendGameInvite(partnerId, matchId, lastGameInvite.game_type || 'tictactoe');
-      if (!inviteId) {
-        Alert.alert('Could not send', 'Try again in a moment.');
-        return;
-      }
-      router.push({
-        pathname: '/game-webview',
-        params: {
-          room: inviteId,
-          matchId,
-          gameType: lastGameInvite.game_type || 'tictactoe',
-          opponentName: displayPartnerName,
-          myName,
-          inviteId,
-        },
-      } as any);
-    } finally {
-      setGameInviteBusy(false);
-    }
-  }, [matchId, partnerId, lastGameInvite, displayPartnerName, myName, router]);
-
-  const gameInviteBanner = useMemo(() => {
-    if (!currentUserId || !partnerId || !lastGameInvite) return null;
-    const st = (lastGameInvite.status || 'none').toLowerCase();
-    const gt = lastGameInvite.game_type;
-    const freshPending =
-      st === 'pending' &&
-      lastGameInvite.from_user_id === partnerId &&
-      inviteExpiresAtIsFuture(lastGameInvite.expires_at);
-
-    if (freshPending) {
-      return (
-        <View style={styles.inviteCard} accessibilityRole="summary">
-          <Text style={styles.inviteKicker}>Game invite</Text>
-          <Text style={styles.inviteLine}>
-            {displayPartnerName} invited you to play {gameTitle(gt)}
-          </Text>
-          {gameInviteBusy ? (
-            <View style={styles.inviteBusyRow}>
-              <ActivityIndicator size="small" color={tokens.colors.pink} />
-            </View>
-          ) : (
-            <View style={styles.inviteActions}>
-              <Pressable onPress={onDeclineFromBanner} style={[styles.inviteBtn, styles.inviteBtnGhost]}>
-                <Text style={styles.inviteBtnGhostText}>Decline</Text>
-              </Pressable>
-              <Pressable onPress={onJoinFromBanner} style={[styles.inviteBtn, styles.inviteBtnPrimary]}>
-                <Text style={styles.inviteBtnPrimaryText}>Join</Text>
-              </Pressable>
-            </View>
-          )}
-        </View>
-      );
-    }
-    const declinedAt = lastGameInvite.declined_at;
-    const isLiveDeclineForSender =
-      st === 'declined' &&
-      lastGameInvite.from_user_id === currentUserId &&
-      !declinedBannerDismissed &&
-      !!declinedAt?.trim() &&
-      inviteCreatedAtIsRecent(declinedAt, DECLINED_AT_LIVE_MS);
-
-    if (isLiveDeclineForSender) {
-      return (
-        <View style={[styles.inviteCard, styles.inviteCardMuted]} accessibilityRole="summary">
-          <Text style={styles.inviteLine}>
-            {displayPartnerName} declined the game invite
-          </Text>
-          {gameInviteBusy ? (
-            <View style={styles.inviteBusyRow}>
-              <ActivityIndicator size="small" color={tokens.colors.pink} />
-            </View>
-          ) : (
-            <View style={styles.inviteActions}>
-              <Pressable
-                onPress={() => {
-                  setDeclinedBannerDismissed(true);
-                  if (matchId) void clearMatchLastGameInvite(matchId);
-                }}
-                style={[styles.inviteBtn, styles.inviteBtnGhost]}
-              >
-                <Text style={styles.inviteBtnGhostText}>Dismiss</Text>
-              </Pressable>
-              <Pressable onPress={onResendFromBanner} style={[styles.inviteBtn, styles.inviteBtnPrimary]}>
-                <Text style={styles.inviteBtnPrimaryText}>Resend</Text>
-              </Pressable>
-            </View>
-          )}
-        </View>
-      );
-    }
-    return null;
-  }, [
-    matchId,
-    currentUserId,
-    partnerId,
-    lastGameInvite,
-    displayPartnerName,
-    declinedBannerDismissed,
-    gameInviteBusy,
-    onJoinFromBanner,
-    onDeclineFromBanner,
-    onResendFromBanner,
-  ]);
 
   const handlePlay = () => {
     if (!matchId || !partnerId) return;
@@ -502,7 +288,6 @@ export default function MatchChatScreen() {
         showEmoji={true}
         placeholder="Message..."
         onReportMessage={handleReportMessage}
-        contentAboveList={gameInviteBanner}
       />
     </SafeAreaView>
   );
@@ -512,26 +297,4 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: tokens.colors.bg },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   headerBtnText: { fontSize: 13, fontWeight: '600', color: tokens.colors.text },
-  inviteCard: {
-    marginHorizontal: tokens.spacing.screenHorizontal,
-    marginBottom: 10,
-    padding: 12,
-    borderRadius: 14,
-    backgroundColor: tokens.colors.surface,
-    borderWidth: 1,
-    borderColor: 'rgba(244, 114, 182, 0.45)',
-  },
-  inviteCardMuted: {
-    borderColor: tokens.colors.border,
-    backgroundColor: tokens.colors.surfaceElevated,
-  },
-  inviteKicker: { fontSize: 11, fontWeight: '700', color: tokens.colors.pink, letterSpacing: 0.6, marginBottom: 4, textTransform: 'uppercase' },
-  inviteLine: { fontSize: 14, fontWeight: '600', color: tokens.colors.text, lineHeight: 20 },
-  inviteActions: { flexDirection: 'row', gap: 10, marginTop: 10 },
-  inviteBusyRow: { alignItems: 'center', marginTop: 10, paddingVertical: 4 },
-  inviteBtn: { flex: 1, minHeight: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
-  inviteBtnPrimary: { backgroundColor: tokens.colors.pink },
-  inviteBtnPrimaryText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  inviteBtnGhost: { backgroundColor: tokens.colors.surfaceElevated, borderWidth: 1, borderColor: tokens.colors.border },
-  inviteBtnGhostText: { color: tokens.colors.text, fontSize: 15, fontWeight: '600' },
 });
