@@ -31,12 +31,14 @@ export default function GameWebViewScreen() {
   const insets = useSafeAreaInsets();
   const raw = useLocalSearchParams<{
     room?: string | string[];
+    matchId?: string | string[];
     gameType?: string | string[];
     inviteId?: string | string[];
     opponentName?: string | string[];
     myName?: string | string[];
   }>();
   const room = paramStr(raw.room);
+  const matchId = paramStr(raw.matchId) || room;
   const gameType = paramStr(raw.gameType) || 'tictactoe';
   const inviteId = paramStr(raw.inviteId);
   const opponentNameParam = paramStr(raw.opponentName);
@@ -50,35 +52,35 @@ export default function GameWebViewScreen() {
   }, []);
 
   useEffect(() => {
-    if (!room?.trim() || !inviteId) return;
-    const unsub = subscribeToMatchLastGameInvite(room, setLastGameInvite);
+    if (!matchId?.trim() || !inviteId) return;
+    const unsub = subscribeToMatchLastGameInvite(matchId, setLastGameInvite);
     return () => unsub();
-  }, [room, inviteId]);
+  }, [matchId, inviteId]);
 
   const inviteMatchesScreen = !!inviteId && lastGameInvite?.invite_id === inviteId;
   const iSentThisInvite = inviteMatchesScreen && !!currentUserId && lastGameInvite?.from_user_id === currentUserId;
 
   useEffect(() => {
-    if (!room || !inviteMatchesScreen || lastGameInvite?.status !== 'pending') return;
+    if (!matchId || !inviteMatchesScreen || lastGameInvite?.status !== 'pending') return;
     const expiresAt = Date.parse(lastGameInvite.expires_at || '');
     if (Number.isNaN(expiresAt)) return;
     const delay = expiresAt - Date.now();
     if (delay <= 0) {
-      void setGameInviteExpired(room, inviteId);
+      void setGameInviteExpired(matchId, inviteId);
       return;
     }
     const id = setTimeout(() => {
-      void setGameInviteExpired(room, inviteId);
+      void setGameInviteExpired(matchId, inviteId);
     }, delay + 250);
     return () => clearTimeout(id);
-  }, [room, inviteId, inviteMatchesScreen, lastGameInvite]);
+  }, [matchId, inviteId, inviteMatchesScreen, lastGameInvite]);
 
   const handleBack = useCallback(() => {
-    if (room && inviteId) {
-      void setGameInviteCancelled(room, inviteId);
+    if (matchId && inviteId) {
+      void setGameInviteCancelled(matchId, inviteId);
     }
     router.back();
-  }, [room, inviteId, router]);
+  }, [matchId, inviteId, router]);
 
   const gameBaseUrl =
     (Constants as any)?.expoConfig?.extra?.gameBaseUrl ||

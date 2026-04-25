@@ -285,7 +285,7 @@ export default function MatchChatScreen() {
       const gt = (lastGameInvite.game_type || 'tictactoe').toLowerCase();
       router.push({
         pathname: '/game-webview',
-        params: { room: matchId, gameType: gt, opponentName: displayPartnerName, myName, inviteId: lastGameInvite.invite_id },
+        params: { room: lastGameInvite.game_room_id || lastGameInvite.invite_id, matchId, gameType: gt, opponentName: displayPartnerName, myName, inviteId: lastGameInvite.invite_id },
       } as any);
     } finally {
       setGameInviteBusy(false);
@@ -315,7 +315,8 @@ export default function MatchChatScreen() {
       router.push({
         pathname: '/game-webview',
         params: {
-          room: matchId,
+          room: inviteId,
+          matchId,
           gameType: lastGameInvite.game_type || 'tictactoe',
           opponentName: displayPartnerName,
           myName,
@@ -424,7 +425,7 @@ export default function MatchChatScreen() {
           }
           router.push({
             pathname: '/game-webview',
-            params: { room: matchId, gameType: 'tictactoe', opponentName: displayPartnerName, myName, inviteId },
+            params: { room: inviteId, matchId, gameType: 'tictactoe', opponentName: displayPartnerName, myName, inviteId },
           } as any);
         },
       },
@@ -438,7 +439,7 @@ export default function MatchChatScreen() {
           }
           router.push({
             pathname: '/game-webview',
-            params: { room: matchId, gameType: 'chess', opponentName: displayPartnerName, myName, inviteId },
+            params: { room: inviteId, matchId, gameType: 'chess', opponentName: displayPartnerName, myName, inviteId },
           } as any);
         },
       },

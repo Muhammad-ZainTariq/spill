@@ -3915,7 +3915,8 @@ function inviteIsoIsFuture(iso: string): boolean {
 async function markGameInviteNotificationsReadForMatchAndInvite(
   matchId: string,
   inviteId?: string,
-  recipientId?: string
+  recipientId?: string,
+  inviteStatus?: string
 ): Promise<void> {
   const uid = auth.currentUser?.uid;
   const targetRecipientId = recipientId || uid;
@@ -3933,7 +3934,7 @@ async function markGameInviteNotificationsReadForMatchAndInvite(
     const data = d.data() as { match_id?: string; invite_id?: string; read?: boolean };
     if (data.read || String(data.match_id) !== String(matchId)) continue;
     if (inviteId && String(data.invite_id || '') !== String(inviteId)) continue;
-    batch.update(d.ref, { read: true });
+    batch.update(d.ref, { read: true, ...(inviteStatus ? { invite_status: inviteStatus } : {}) });
     n += 1;
   }
   if (n) await batch.commit();
@@ -3966,6 +3967,7 @@ export const sendGameInvite = async (
 
     const now = new Date().toISOString();
     const inviteId = createGameInviteId(matchId, uid);
+    const gameRoomId = inviteId;
     const expiresAt = isoAfter(GAME_INVITE_TTL_MS);
     const notifRef = doc(collection(db, 'notifications'));
     const batch = writeBatch(db);
@@ -3976,14 +3978,17 @@ export const sendGameInvite = async (
       read: false,
       from_user_id: uid,
       match_id: matchId,
-      room_id: matchId,
+      room_id: gameRoomId,
       game_type: gameTypeNorm,
       invite_id: inviteId,
+      invite_status: 'pending',
       expires_at: expiresAt,
     });
     batch.update(matchRef, {
       last_game_invite: {
         invite_id: inviteId,
+        notification_id: notifRef.id,
+        game_room_id: gameRoomId,
         game_type: gameTypeNorm,
         from_user_id: uid,
         to_user_id: partnerId,
@@ -3999,7 +4004,7 @@ export const sendGameInvite = async (
       partnerId,
       'Game invite',
       `Your match invited you to play ${gameLabel}.`,
-      { type: 'game_invite', match_id: matchId, game_type: gameTypeNorm, invite_id: inviteId }
+      { type: 'game_invite', match_id: matchId, room_id: gameRoomId, game_type: gameTypeNorm, invite_id: inviteId }
     );
     return inviteId;
   } catch (error) {
@@ -4033,7 +4038,7 @@ export const setGameInviteDeclined = async (matchId: string, inviteId?: string):
         updated_at: declinedAt,
       },
     });
-    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, uid);
+    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, uid, 'declined');
   } catch (error) {
     console.error('Error setting game invite declined:', error);
   }
@@ -4042,6 +4047,8 @@ export const setGameInviteDeclined = async (matchId: string, inviteId?: string):
 /** Live `last_game_invite` on the match (participants can read the match doc). */
 export type MatchLastGameInvite = {
   invite_id: string;
+  notification_id?: string;
+  game_room_id: string;
   game_type: string;
   from_user_id: string;
   to_user_id?: string;
@@ -4099,6 +4106,8 @@ export const subscribeToMatchLastGameInvite = (
       const acceptedAt = aa ? lastGameInviteCreatedAtToIso(aa) : undefined;
       onChange({
         invite_id: String(inv.invite_id || ''),
+        notification_id: inv.notification_id ? String(inv.notification_id) : undefined,
+        game_room_id: String(inv.game_room_id || inv.invite_id || ''),
         game_type: String(inv.game_type || 'tictactoe').toLowerCase(),
         from_user_id: String(inv.from_user_id),
         to_user_id: inv.to_user_id ? String(inv.to_user_id) : undefined,
@@ -4138,7 +4147,7 @@ export const setGameInviteAccepted = async (matchId: string, inviteId?: string):
         updated_at: acceptedAt,
       },
     });
-    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, uid);
+    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, uid, 'accepted');
     return true;
   } catch (e) {
     console.warn('setGameInviteAccepted', e);
@@ -4167,7 +4176,7 @@ export const setGameInviteCancelled = async (matchId: string, inviteId?: string)
         updated_at: cancelledAt,
       },
     });
-    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, prev.to_user_id || undefined);
+    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, prev.to_user_id || undefined, 'cancelled');
   } catch (e) {
     console.warn('setGameInviteCancelled', e);
   }
@@ -4196,7 +4205,7 @@ export const setGameInviteExpired = async (matchId: string, inviteId?: string): 
         updated_at: expiredAt,
       },
     });
-    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, prev.to_user_id || undefined);
+    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, prev.to_user_id || undefined, 'expired');
   } catch (e) {
     console.warn('setGameInviteExpired', e);
   }
@@ -4281,10 +4290,12 @@ export const subscribeToGameInvites = (
     invites: {
       id: string;
       invite_id: string;
+      game_room_id: string;
       game_type: string;
       match_id: string;
       from_user_id: string;
       read: boolean;
+      invite_status: string;
       created_at: string;
       expires_at: string;
     }[]
@@ -4308,10 +4319,12 @@ export const subscribeToGameInvites = (
         return {
           id: d.id,
           invite_id: String(data.invite_id || ''),
+          game_room_id: String(data.room_id || data.game_room_id || data.invite_id || ''),
           game_type: (data.game_type || 'tictactoe').toLowerCase(),
           match_id: data.match_id || '',
           from_user_id: data.from_user_id || '',
           read: !!data.read,
+          invite_status: String(data.invite_status || 'pending').toLowerCase(),
           created_at: data.created_at || '',
           expires_at: lastGameInviteCreatedAtToIso(data.expires_at),
         };
@@ -4320,6 +4333,11 @@ export const subscribeToGameInvites = (
       let staleCount = 0;
       const activeInvites = rawInvites.map((invite, idx) => {
         if (invite.read) return invite;
+        if (invite.invite_status !== 'pending') {
+          batch.update(snap.docs[idx].ref, { read: true });
+          staleCount += 1;
+          return { ...invite, read: true };
+        }
         const hasRequiredFields = !!invite.match_id && !!invite.invite_id;
         const stillFresh = inviteIsoIsFuture(invite.expires_at);
         if (!hasRequiredFields || !stillFresh) {

@@ -22,6 +22,7 @@ export default function TabLayout() {
   const [gameInvitePrompt, setGameInvitePrompt] = useState<{
     id: string;
     invite_id: string;
+    game_room_id: string;
     match_id: string;
     game_type: string;
   } | null>(null);
@@ -57,7 +58,7 @@ export default function TabLayout() {
             }
             router.push({
               pathname: '/game-webview',
-              params: { room: String(d.match_id), gameType, inviteId: d.invite_id ? String(d.invite_id) : undefined },
+              params: { room: d.room_id ? String(d.room_id) : String(d.invite_id || d.match_id), matchId: String(d.match_id), gameType, inviteId: d.invite_id ? String(d.invite_id) : undefined },
             } as any);
           })();
         } else if (d?.type === 'group_streak' && d?.group_id) {
@@ -136,6 +137,7 @@ export default function TabLayout() {
         setGameInvitePrompt({
           id: next.id,
           invite_id: next.invite_id,
+          game_room_id: next.game_room_id,
           match_id: next.match_id,
           game_type: (next.game_type || 'tictactoe').toLowerCase(),
         });
@@ -200,7 +202,7 @@ export default function TabLayout() {
       setTimeout(() => {
         router.push({
           pathname: '/game-webview',
-          params: { room: String(payload.match_id), gameType: gt, inviteId: payload.invite_id },
+          params: { room: payload.game_room_id || payload.invite_id, matchId: String(payload.match_id), gameType: gt, inviteId: payload.invite_id },
         } as any);
       }, 50);
     })();
