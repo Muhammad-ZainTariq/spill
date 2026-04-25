@@ -9,8 +9,14 @@ const { Server } = require('socket.io');
 const { Chess } = require('chess.js');
 
 const app = express();
+app.set('trust proxy', 1);
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+const io = new Server(server, {
+  cors: { origin: '*' },
+  // Longer timeouts help Render free tier (cold start) + mobile networks
+  connectTimeout: 60_000,
+  pingTimeout: 60_000,
+});
 
 const PORT = process.env.PORT || 3000;
 
@@ -101,6 +107,7 @@ io.on('connection', (socket) => {
         game = { board: Array(9).fill(''), turn: 'X', winner: null };
         tttGames.set(roomCode, game);
       }
+      room.started = true;
       io.to(room.p1.id).emit('start', { role: 'X', opponent: room.p2.name });
       io.to(room.p2.id).emit('start', { role: 'O', opponent: room.p1.name });
       io.to(roomCode).emit('state', { board: game.board, turn: game.turn, winner: game.winner });
@@ -168,7 +175,13 @@ io.on('connection', (socket) => {
       return;
     }
     const other = room.p1 || room.p2;
-    if (other) io.to(other.id).emit('waiting', { roomCode });
+    if (other) {
+      if (room.started || tttGames.has(roomCode)) {
+        io.to(other.id).emit('opponentLeft', { roomCode });
+      } else {
+        io.to(other.id).emit('waiting', { roomCode });
+      }
+    }
   });
 });
 
@@ -189,6 +202,7 @@ function startOrResumeChessGame(roomCode, room) {
     g = { chess: game, fen: game.fen(), turn: 'w', result: null };
     chessGames.set(roomCode, g);
   }
+  room.started = true;
   chessIo.to(room.p1.id).emit('start', { color: 'w', opponent: room.p2.name });
   chessIo.to(room.p2.id).emit('start', { color: 'b', opponent: room.p1.name });
   chessIo.to(roomCode).emit('gameStart', {
@@ -305,10 +319,16 @@ chessIo.on('connection', (socket) => {
       return;
     }
     const other = room.p1 || room.p2;
-    if (other) chessIo.to(other.id).emit('waiting', { roomCode });
+    if (other) {
+      if (room.started || chessGames.has(roomCode)) {
+        chessIo.to(other.id).emit('opponentLeft', { roomCode });
+      } else {
+        chessIo.to(other.id).emit('waiting', { roomCode });
+      }
+    }
   });
 });
 
-server.listen(PORT, () => {
-  console.log('Games server at http://localhost:' + PORT + ' (/, /chess)');
+server.listen(PORT, '0.0.0.0', () => {
+  console.log('Games server listening on 0.0.0.0:' + PORT + ' (/, /chess)');
 });

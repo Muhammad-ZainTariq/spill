@@ -15,6 +15,7 @@ import {
   getLivePodcastRoom,
   joinLivePodcastRoom,
   leaveLivePodcastRoom,
+  LivePodcastInviteDoc,
   LivePodcastRoom,
   LivePodcastTranscriptSegment,
   moderateLivePodcastParticipant,
@@ -24,6 +25,7 @@ import {
   startLivePodcastRoom,
   subscribeLivePodcastTranscriptSegments,
   subscribeLivePodcastRoom,
+  subscribeRoomCoHostInvites,
   subscribeSpeakerRequests,
 } from '@/lib/livePodcasts';
 
@@ -33,6 +35,23 @@ function prettyStatus(room: LivePodcastRoom | null) {
   if (room.status === 'scheduled') return room.scheduled_for ? `Scheduled · ${new Date(room.scheduled_for).toLocaleString()}` : 'Scheduled';
   if (room.status === 'ended') return 'Ended';
   return room.status;
+}
+
+function formatCoHostInviteMeta(inv: LivePodcastInviteDoc): string {
+  const max = Number(inv.max_uses || 1);
+  const used = Number(inv.uses_count || 0);
+  const left = Math.max(0, max - used);
+  let expLabel = '';
+  if (inv.expires_at) {
+    const t = Date.parse(String(inv.expires_at));
+    if (!Number.isNaN(t)) {
+      const mins = Math.max(0, Math.round((t - Date.now()) / 60000));
+      if (mins >= 1440) expLabel = ` · expires in ~${Math.round(mins / 1440)}d`;
+      else if (mins >= 60) expLabel = ` · expires in ~${Math.round(mins / 60)}h`;
+      else expLabel = ` · expires in ~${mins}m`;
+    }
+  }
+  return `${left} use${left === 1 ? '' : 's'} left${expLabel}`;
 }
 
 export default function LivePodcastRoomScreen() {
@@ -59,6 +78,7 @@ export default function LivePodcastRoomScreen() {
   const [micBusy, setMicBusy] = useState(false);
   const [modBusy, setModBusy] = useState<string | null>(null);
   const [participantMenuTarget, setParticipantMenuTarget] = useState<{ identity: string; name: string } | null>(null);
+  const [hostCoHostInvites, setHostCoHostInvites] = useState<LivePodcastInviteDoc[]>([]);
   const therapistHomePath = auth.currentUser?.uid ? `/therapist/${auth.currentUser.uid}` : '/live';
 
   const sessionForThisRoom = !!activeSession && activeSession.room.id === roomId;
@@ -82,6 +102,15 @@ export default function LivePodcastRoomScreen() {
       unsubTranscripts();
     };
   }, [roomId, sessionForThisRoom, updateRoom]);
+
+  useEffect(() => {
+    if (!roomId || !isRoomHost) {
+      setHostCoHostInvites([]);
+      return;
+    }
+    const unsub = subscribeRoomCoHostInvites(roomId, setHostCoHostInvites);
+    return unsub;
+  }, [roomId, isRoomHost]);
 
   const pendingRequests = useMemo(
     () => speakerRequests.filter((item) => item.status === 'waiting'),
@@ -188,8 +217,7 @@ export default function LivePodcastRoomScreen() {
   const handleInvite = async () => {
     if (!roomId) return;
     try {
-      const res = await createLivePodcastInviteCode(roomId, 'co_host');
-      Alert.alert('Co-host code', `${res.code}\nExpires in ${res.expiresInMinutes} minutes.`);
+      await createLivePodcastInviteCode(roomId, 'co_host');
     } catch (error: any) {
       Alert.alert('Could not create invite', error?.message || 'Try again.');
     }
@@ -302,6 +330,32 @@ export default function LivePodcastRoomScreen() {
           ) : null}
         </View>
 
+        {isRoomHost && room && room.status !== 'ended' ? (
+          <View style={styles.coHostShareCard}>
+            <View style={styles.coHostShareHead}>
+              <View style={styles.coHostShareIcon}>
+                <Feather name="key" size={18} color="#2563eb" />
+              </View>
+              <Text style={styles.coHostShareTitle}>Co-host code</Text>
+            </View>
+            <Text style={styles.coHostShareDesc}>
+              Share this code so someone can join from Live → Join as co-host. They can connect after you go live.
+            </Text>
+            {hostCoHostInvites.length > 0 ? (
+              <>
+                <Text style={styles.coHostCodeMono} selectable>
+                  {hostCoHostInvites[0].code}
+                </Text>
+                <Text style={styles.coHostShareMeta}>{formatCoHostInviteMeta(hostCoHostInvites[0])}</Text>
+              </>
+            ) : (
+              <Text style={styles.coHostShareEmpty}>
+                No active code yet — tap &quot;Create new co-host code&quot; in Host controls below.
+              </Text>
+            )}
+          </View>
+        ) : null}
+
         <View style={styles.captionCard}>
           <View style={styles.captionHeader}>
             <Feather name="message-square" size={15} color={tokens.colors.pink} />
@@ -391,9 +445,12 @@ export default function LivePodcastRoomScreen() {
                 </Pressable>
               ) : null}
               <Pressable style={styles.secondaryBtn} onPress={handleInvite}>
-                <Text style={styles.secondaryBtnText}>Create co-host code</Text>
+                <Text style={styles.secondaryBtnText}>Create new co-host code</Text>
               </Pressable>
             </View>
+            <Text style={styles.helperText}>
+              Your current code is shown in the card above. Use the button to generate a new one anytime (the latest appears first).
+            </Text>
             {room?.status === 'live' ? (
               <Pressable style={[styles.dangerBtnWide, busy && styles.btnDisabled]} onPress={handleEnd} disabled={busy}>
                 <Text style={styles.dangerBtnText}>{busy ? 'Ending…' : 'End live broadcast'}</Text>
@@ -742,6 +799,59 @@ const styles = StyleSheet.create({
     color: tokens.colors.text,
     fontSize: 12,
     fontWeight: '800',
+  },
+  coHostShareCard: {
+    backgroundColor: 'rgba(37,99,235,0.08)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(37,99,235,0.22)',
+    padding: 16,
+    gap: 10,
+  },
+  coHostShareHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  coHostShareIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  coHostShareTitle: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: tokens.colors.text,
+  },
+  coHostShareDesc: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: tokens.colors.textSecondary,
+  },
+  coHostCodeMono: {
+    fontSize: 26,
+    fontWeight: '900',
+    letterSpacing: 2,
+    color: tokens.colors.text,
+    textAlign: 'center',
+    paddingVertical: 8,
+  },
+  coHostShareMeta: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: tokens.colors.textMuted,
+    textAlign: 'center',
+  },
+  coHostShareEmpty: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    color: tokens.colors.textSecondary,
+    fontStyle: 'italic',
   },
   panel: {
     backgroundColor: tokens.colors.surface,

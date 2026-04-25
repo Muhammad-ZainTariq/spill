@@ -10,11 +10,12 @@ import {
   query,
   setDoc,
 } from 'firebase/firestore';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth, db } from '@/lib/firebase';
 import { getUserLite, submitTherapistSessionReview } from '@/app/therapist/_marketplace';
+import { reportTherapistSessionMessage } from '@/app/functions';
 import { SharedChatLayout, chatStyles, type ChatDataItem } from '@/components/SharedChatUI';
 import { HuzzPressable } from '@/app/ui/components/HuzzPressable.native';
 import { tokens } from '@/app/ui/tokens';
@@ -303,6 +304,37 @@ export default function TherapistSessionScreen() {
 
   const chatData = useMemo(() => toChatData(messages), [messages]);
 
+  const handleReportMessage = useCallback(
+    (msg: { id: string; fromUid: string; text: string }) => {
+      if (!sessionId || !otherUid || msg.fromUid !== otherUid) return;
+      const submit = (reason: string) => {
+        void (async () => {
+          try {
+            await reportTherapistSessionMessage({
+              sessionId,
+              targetUid: msg.fromUid,
+              messageId: msg.id,
+              messageContent: msg.text,
+              reason,
+            });
+            Alert.alert('Reported', 'Thanks — our team will review this message.');
+          } catch (e: any) {
+            Alert.alert('Could not report', e?.message || 'Try again.');
+          }
+        })();
+      };
+      Alert.alert('Report message', 'Moderators can see the reported message. What’s the issue?', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Harassment', style: 'destructive', onPress: () => submit('harassment') },
+        { text: 'Unprofessional', style: 'destructive', onPress: () => submit('unprofessional') },
+        { text: 'Self-harm / crisis', style: 'destructive', onPress: () => submit('self_harm') },
+        { text: 'Spam or scam', style: 'destructive', onPress: () => submit('spam') },
+        { text: 'Other', onPress: () => submit('other') },
+      ]);
+    },
+    [sessionId, otherUid]
+  );
+
   const handleSubmitReview = async () => {
     if (!sessionId || !session || !meUid || !isPatient) return;
     if (submittingReview) return;
@@ -503,6 +535,7 @@ export default function TherapistSessionScreen() {
           hasEnded ? 'Session ended' : !hasStarted ? 'Session not started' : patientLocked ? 'Locked (therapist-only)' : 'Message…'
         }
         inputEditable={!hasEnded && hasStarted && !patientLocked}
+        onReportMessage={handleReportMessage}
       />
     </View>
   );

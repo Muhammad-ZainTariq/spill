@@ -6,6 +6,7 @@ import {
     addDoc,
     collection,
     deleteDoc,
+    deleteField,
     doc,
     getDoc,
     getDocs,
@@ -22,6 +23,17 @@ import {
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { Alert } from 'react-native';
+
+/** Listeners often hit this while signing out; logging it spams LogBox. */
+function isBenignFirestoreAuthTransitionError(err: unknown): boolean {
+  const code = (err as { code?: string })?.code;
+  return code === 'permission-denied' || code === 'unauthenticated';
+}
+
+function logFirestoreSnapshotError(label: string, err: unknown): void {
+  if (isBenignFirestoreAuthTransitionError(err)) return;
+  console.error(label, err);
+}
 
 // Stub for removed Supabase – returns empty data; migrate to Firestore when needed
 const _stub = (out: any) => Promise.resolve(out);
@@ -205,50 +217,56 @@ export function subscribeToPosts(
     limit(150)
   );
 
-  return onSnapshot(q, async (snap) => {
-    try {
-      const uid = auth.currentUser?.uid;
-      let posts: any[] = snap.docs
-        .map((d) => {
-          const data = d.data();
-          return { id: d.id, ...data, created_at: normCreatedAt(data) };
-        })
-        .filter((p: any) => {
-          if (p.is_vent && p.expires_at) return new Date(p.expires_at) > now;
-          return true;
-        });
-      if (category && category !== 'All') posts = posts.filter((p: any) => p.category === category);
+  return onSnapshot(
+    q,
+    async (snap) => {
+      try {
+        const uid = auth.currentUser?.uid;
+        let posts: any[] = snap.docs
+          .map((d) => {
+            const data = d.data();
+            return { id: d.id, ...data, created_at: normCreatedAt(data) };
+          })
+          .filter((p: any) => {
+            if (p.is_vent && p.expires_at) return new Date(p.expires_at) > now;
+            return true;
+          });
+        if (category && category !== 'All') posts = posts.filter((p: any) => p.category === category);
 
-      const followingSet = uid ? new Set(await getFollowingIds()) : new Set<string>();
-      posts = rankFeedPosts(posts, followingSet, 100);
+        const followingSet = uid ? new Set(await getFollowingIds()) : new Set<string>();
+        posts = rankFeedPosts(posts, followingSet, 100);
 
-      const withProfiles = await Promise.all(
-        posts.map(async (post: any) => {
-          let profile = null;
-          const userSnap = await getDoc(doc(db, 'users', post.user_id));
-          if (userSnap.exists()) {
-            const d = userSnap.data();
-            profile = { display_name: d?.display_name, anonymous_username: d?.anonymous_username, avatar_url: d?.avatar_url };
-          }
-          const post_stats = {
-            upvotes_count: post.upvotes_count ?? 0,
-            downvotes_count: post.downvotes_count ?? 0,
-            views_count: post.views_count ?? 0,
-            comments_count: post.comments_count ?? 0,
-          };
-          let userVote: 'upvote' | 'downvote' | null = null;
-          if (uid) {
-            const voteSnap = await getDocs(query(collection(db, 'postVotes'), where('post_id', '==', post.id), where('user_id', '==', uid), limit(1)));
-            if (!voteSnap.empty) userVote = (voteSnap.docs[0].data().vote_type as 'upvote' | 'downvote') || null;
-          }
-          return { ...post, profiles: profile, post_stats, user_vote: userVote };
-        })
-      );
-      callback(withProfiles);
-    } catch (error) {
-      console.error('subscribeToPosts enrichment error:', error);
-    }
-  });
+        const withProfiles = await Promise.all(
+          posts.map(async (post: any) => {
+            let profile = null;
+            const userSnap = await getDoc(doc(db, 'users', post.user_id));
+            if (userSnap.exists()) {
+              const d = userSnap.data();
+              profile = { display_name: d?.display_name, anonymous_username: d?.anonymous_username, avatar_url: d?.avatar_url };
+            }
+            const post_stats = {
+              upvotes_count: post.upvotes_count ?? 0,
+              downvotes_count: post.downvotes_count ?? 0,
+              views_count: post.views_count ?? 0,
+              comments_count: post.comments_count ?? 0,
+            };
+            let userVote: 'upvote' | 'downvote' | null = null;
+            if (uid) {
+              const voteSnap = await getDocs(query(collection(db, 'postVotes'), where('post_id', '==', post.id), where('user_id', '==', uid), limit(1)));
+              if (!voteSnap.empty) userVote = (voteSnap.docs[0].data().vote_type as 'upvote' | 'downvote') || null;
+            }
+            return { ...post, profiles: profile, post_stats, user_vote: userVote };
+          })
+        );
+        callback(withProfiles);
+      } catch (error) {
+        if (!isBenignFirestoreAuthTransitionError(error)) {
+          console.error('subscribeToPosts enrichment error:', error);
+        }
+      }
+    },
+    (err) => logFirestoreSnapshotError('subscribeToPosts', err)
+  );
 }
 
 export const createPost = async (content: string, mediaUrl?: string) => {
@@ -1063,6 +1081,70 @@ export const reportDmUser = async (params: {
   return true;
 };
 
+/** Report a specific message in an anonymous match chat (admin queue). */
+export const reportMatchMessage = async (params: {
+  matchId: string;
+  targetUid: string;
+  messageId: string;
+  messageContent: string;
+  reason: string;
+}): Promise<boolean> => {
+  const u = auth.currentUser;
+  if (!u) throw new Error('Not authenticated');
+  const matchId = String(params?.matchId || '').trim();
+  const targetUid = String(params?.targetUid || '').trim();
+  const messageId = String(params?.messageId || '').trim();
+  const reason = String(params?.reason || '').trim() || 'other';
+  const messageContent = String(params?.messageContent || '').trim().slice(0, 2000);
+  if (!matchId || !targetUid || !messageId) throw new Error('Missing fields.');
+  if (targetUid === u.uid) throw new Error('You cannot report your own message.');
+  const now = new Date().toISOString();
+  await addDoc(collection(db, 'reports'), {
+    reporter_uid: u.uid,
+    target_uid: targetUid,
+    type: 'match_message',
+    match_id: matchId,
+    message_id: messageId,
+    message_content: messageContent,
+    reason,
+    created_at: now,
+    status: 'pending',
+  });
+  return true;
+};
+
+/** Report a message in a therapist session chat (admin queue). */
+export const reportTherapistSessionMessage = async (params: {
+  sessionId: string;
+  targetUid: string;
+  messageId: string;
+  messageContent: string;
+  reason: string;
+}): Promise<boolean> => {
+  const u = auth.currentUser;
+  if (!u) throw new Error('Not authenticated');
+  const sessionId = String(params?.sessionId || '').trim();
+  const targetUid = String(params?.targetUid || '').trim();
+  const messageId = String(params?.messageId || '').trim();
+  const reason = String(params?.reason || '').trim() || 'other';
+  const messageContent = String(params?.messageContent || '').trim().slice(0, 2000);
+  if (!sessionId || !targetUid || !messageId) throw new Error('Missing fields.');
+  if (targetUid === u.uid) throw new Error('You cannot report your own message.');
+  const now = new Date().toISOString();
+  await addDoc(collection(db, 'reports'), {
+    reporter_uid: u.uid,
+    target_uid: targetUid,
+    type: 'therapist_session_message',
+    session_id: sessionId,
+    message_id: messageId,
+    message_content: messageContent,
+    reason,
+    created_at: now,
+    status: 'pending',
+  });
+  return true;
+};
+
 export const getOrCreateConversation = async (userId: string) => {
   const user = auth.currentUser;
   if (!user) throw new Error('Not authenticated');
@@ -1765,7 +1847,7 @@ export const subscribeToTodayProofs = (
       proofs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       onProofs(proofs);
     },
-    (err) => console.error('subscribeToTodayProofs', err)
+    (err) => logFirestoreSnapshotError('subscribeToTodayProofs', err)
   );
   return unsub;
 };
@@ -1800,7 +1882,7 @@ export const subscribeToGroupStreakFeed = (
       }));
       onPosts(posts);
     },
-    (err) => console.error('subscribeToGroupStreakFeed', err)
+    (err) => logFirestoreSnapshotError('subscribeToGroupStreakFeed', err)
   );
   return unsub;
 };
@@ -3153,22 +3235,51 @@ export const getWeeklySummary = async (): Promise<{
 // ANONYMOUS MATCHING FUNCTIONS (Firestore)
 // ========================================
 
-// Get available users for matching (those who opted in). Excludes users we already sent a request to.
+// Get available users for matching (those who opted in). Excludes only pending outbound requests and current active partner.
 export const getAvailableUsers = async (category?: string): Promise<any[]> => {
   try {
     const uid = auth.currentUser?.uid;
     if (!uid) return [];
 
+    let activePartnerId: string | null = null;
+    try {
+      const matchesRef = collection(db, 'anonymous_matches');
+      const [as1, as2] = await Promise.all([
+        getDocs(query(matchesRef, where('user1_id', '==', uid), where('status', '==', 'active'), limit(1))),
+        getDocs(query(matchesRef, where('user2_id', '==', uid), where('status', '==', 'active'), limit(1))),
+      ]);
+      const md = (as1.docs[0] || as2.docs[0])?.data() as any;
+      if (md) {
+        activePartnerId = String(md.user1_id === uid ? md.user2_id : md.user1_id);
+      }
+    } catch {
+      activePartnerId = null;
+    }
+
     const usersRef = collection(db, 'users');
-    const q = query(
-      usersRef,
-      where('available_for_matches', '==', true),
-      limit(100)
-    );
-    const snap = await getDocs(q);
+    const cap = 100;
+    let snap;
+    if (category && category !== 'All') {
+      try {
+        snap = await getDocs(
+          query(
+            usersRef,
+            where('available_for_matches', '==', true),
+            where('match_struggles', 'array-contains', category),
+            limit(cap)
+          )
+        );
+      } catch {
+        snap = await getDocs(query(usersRef, where('available_for_matches', '==', true), limit(cap)));
+      }
+    } else {
+      snap = await getDocs(query(usersRef, where('available_for_matches', '==', true), limit(cap)));
+    }
+
     let list: any[] = [];
     snap.docs.forEach((d) => {
       if (d.id === uid) return;
+      if (activePartnerId && d.id === activePartnerId) return;
       const data = d.data();
       list.push({
         id: d.id,
@@ -3180,21 +3291,19 @@ export const getAvailableUsers = async (category?: string): Promise<any[]> => {
     });
 
     const sentRequestSnap = await getDocs(
-      query(
-        collection(db, 'match_requests'),
-        where('sender_id', '==', uid),
-        limit(100)
-      )
+      query(collection(db, 'match_requests'), where('sender_id', '==', uid), limit(100))
     );
+    // Only block people we're still waiting on. "Accepted" without an active match would hide ex-partners forever after unfriend.
     const alreadyRequestedIds = new Set(
-      sentRequestSnap.docs
-        .filter((d) => d.data().status === 'pending' || d.data().status === 'accepted')
-        .map((d) => d.data().receiver_id)
+      sentRequestSnap.docs.filter((d) => d.data().status === 'pending').map((d) => d.data().receiver_id)
     );
     list = list.filter((u: any) => !alreadyRequestedIds.has(u.id));
 
     if (category && category !== 'All' && list.length > 0) {
-      list = list.filter((u: any) => (u.match_struggles || []).includes(category));
+      const c = String(category);
+      list = list.filter((u: any) =>
+        (u.match_struggles || []).some((s: string) => String(s).toLowerCase() === c.toLowerCase())
+      );
     }
     return list;
   } catch (error) {
@@ -3203,31 +3312,111 @@ export const getAvailableUsers = async (category?: string): Promise<any[]> => {
   }
 };
 
+type MatchRequestRow = {
+  ref: ReturnType<typeof doc>;
+  status: string;
+  sender_id: string;
+  receiver_id: string;
+  created_at?: string;
+};
+
+async function pairHasActiveMatchBetween(a: string, b: string): Promise<boolean> {
+  const matchesRef = collection(db, 'anonymous_matches');
+  const [snap1, snap2] = await Promise.all([
+    getDocs(query(matchesRef, where('user1_id', '==', a), where('status', '==', 'active'), limit(25))),
+    getDocs(query(matchesRef, where('user2_id', '==', a), where('status', '==', 'active'), limit(25))),
+  ]);
+  for (const d of snap1.docs) {
+    if ((d.data() as any).user2_id === b) return true;
+  }
+  for (const d of snap2.docs) {
+    if ((d.data() as any).user1_id === b) return true;
+  }
+  return false;
+}
+
+async function fetchMatchRequestsBetweenUsers(uid: string, targetUserId: string): Promise<MatchRequestRow[]> {
+  const requestsRef = collection(db, 'match_requests');
+  // Only query docs the current user may read (sender or receiver). Querying by *their* sender_id alone
+  // can return requests to other people and Firestore rejects the whole query.
+  const [outSnap, inSnap] = await Promise.all([
+    getDocs(query(requestsRef, where('sender_id', '==', uid), limit(50))),
+    getDocs(query(requestsRef, where('receiver_id', '==', uid), limit(50))),
+  ]);
+  const rows: MatchRequestRow[] = [];
+  outSnap.docs.forEach((d) => {
+    const x = d.data() as any;
+    if (x.receiver_id === targetUserId) {
+      rows.push({
+        ref: d.ref,
+        status: x.status,
+        sender_id: x.sender_id,
+        receiver_id: x.receiver_id,
+        created_at: x.created_at,
+      });
+    }
+  });
+  inSnap.docs.forEach((d) => {
+    const x = d.data() as any;
+    if (x.sender_id === targetUserId) {
+      rows.push({
+        ref: d.ref,
+        status: x.status,
+        sender_id: x.sender_id,
+        receiver_id: x.receiver_id,
+        created_at: x.created_at,
+      });
+    }
+  });
+  return rows;
+}
+
 // Send a match request to a specific user
 export const sendMatchRequest = async (targetUserId: string): Promise<string | null> => {
   try {
     const uid = auth.currentUser?.uid;
     if (!uid) return null;
+    const target = String(targetUserId || '').trim();
+    if (!target || target === uid) return null;
 
     const requestsRef = collection(db, 'match_requests');
-    const existingSnap = await getDocs(
-      query(
-        requestsRef,
-        where('sender_id', '==', uid),
-        where('receiver_id', '==', targetUserId),
-        limit(1)
-      )
+    const [rowsData, hasActive] = await Promise.all([
+      fetchMatchRequestsBetweenUsers(uid, target),
+      pairHasActiveMatchBetween(uid, target),
+    ]);
+
+    if (hasActive) return null;
+
+    const now = new Date().toISOString();
+    const acceptedToEnd = rowsData.filter((r) => r.status === 'accepted');
+    if (acceptedToEnd.length > 0) {
+      const batch = writeBatch(db);
+      acceptedToEnd.forEach((r) => batch.update(r.ref, { status: 'ended', ended_at: now }));
+      await batch.commit();
+    }
+
+    const endedIds = new Set(acceptedToEnd.map((r) => r.ref.id));
+    const rows = rowsData.map((r) =>
+      endedIds.has(r.ref.id) ? { ...r, status: 'ended' } : r
     );
-    if (!existingSnap.empty) {
-      const status = existingSnap.docs[0].data().status;
-      if (status === 'pending' || status === 'accepted') return null;
+
+    if (rows.some((r) => r.status === 'pending')) return null;
+
+    const outbound = rows.filter((r) => r.sender_id === uid && r.receiver_id === target);
+    const reusable = outbound
+      .filter((r) => r.status === 'ended' || r.status === 'declined')
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))[0];
+
+    if (reusable?.ref) {
+      await updateDoc(reusable.ref, { status: 'pending', created_at: now });
+      return reusable.ref.id;
     }
 
     const ref = await addDoc(requestsRef, {
       sender_id: uid,
-      receiver_id: targetUserId,
+      receiver_id: target,
       status: 'pending',
-      created_at: new Date().toISOString(),
+      created_at: now,
     });
     return ref.id;
   } catch (error) {
@@ -3236,26 +3425,85 @@ export const sendMatchRequest = async (targetUserId: string): Promise<string | n
   }
 };
 
+function isMatchRequestPending(data: { status?: unknown }): boolean {
+  return String(data?.status ?? '').toLowerCase() === 'pending';
+}
+
+const INBOUND_MATCH_REQUESTS_CAP = 500;
+
 // Subscribe to pending match requests in real time (requests sent TO current user). Returns unsubscribe.
-export const subscribeToMatchRequests = (onUpdate: (requests: any[]) => void): (() => void) => {
-  const uid = auth.currentUser?.uid;
+// Pass `forUid` from app state (e.g. onAuthStateChanged) so the query always matches the same user as your UI.
+export const subscribeToMatchRequests = (
+  forUid: string | null | undefined,
+  onUpdate: (requests: any[]) => void
+): (() => void) => {
+  const uid = forUid || auth.currentUser?.uid;
   if (!uid) return () => {};
   const requestsRef = collection(db, 'match_requests');
-  const q = query(
-    requestsRef,
-    where('receiver_id', '==', uid),
-    where('status', '==', 'pending'),
-    limit(50)
-  );
+  // Single-field query: rules allow reads for receiver. Large cap avoids missing new `pending` docs when
+  // the user has many historical inbound rows (Firestore returns an arbitrary subset without orderBy).
+  const q = query(requestsRef, where('receiver_id', '==', uid), limit(INBOUND_MATCH_REQUESTS_CAP));
   const unsub = onSnapshot(
     q,
     async (snap) => {
       const requests = snap.docs
         .map((d) => ({ id: d.id, ...d.data(), created_at: (d.data() as any).created_at || '' }))
+        .filter((r: any) => isMatchRequestPending(r))
         .sort((a: any, b: any) => (b.created_at || '').localeCompare(a.created_at || ''));
-      const senderIds = [...new Set(requests.map((r: any) => r.sender_id))];
+      const senderIds = [...new Set(requests.map((r: any) => r.sender_id).filter(Boolean))];
       const profiles: Record<string, any> = {};
-      for (const sid of senderIds) {
+      try {
+        for (const sid of senderIds) {
+          try {
+            const userSnap = await getDoc(doc(db, 'users', sid));
+            if (userSnap.exists()) {
+              const d = userSnap.data();
+              profiles[sid] = {
+                id: sid,
+                display_name: d?.display_name ?? null,
+                anonymous_username: d?.anonymous_username ?? null,
+                avatar_url: d?.avatar_url ?? null,
+                match_struggles: d?.match_struggles ?? [],
+              };
+            }
+          } catch (e) {
+            if (!isBenignFirestoreAuthTransitionError(e)) {
+              console.warn('subscribeToMatchRequests: profile load failed for', sid, e);
+            }
+          }
+        }
+      } catch (e) {
+        if (!isBenignFirestoreAuthTransitionError(e)) {
+          console.warn('subscribeToMatchRequests: profile batch failed', e);
+        }
+      }
+      onUpdate(requests.map((r: any) => ({ ...r, profiles: profiles[r.sender_id] || null })));
+    },
+    (err) => logFirestoreSnapshotError('subscribeToMatchRequests', err)
+  );
+  return unsub;
+};
+
+// Get pending match requests (requests sent to current user)
+export const getPendingMatchRequests = async (forUid?: string | null): Promise<any[]> => {
+  try {
+    const uid = forUid || auth.currentUser?.uid;
+    if (!uid) return [];
+
+    const requestsRef = collection(db, 'match_requests');
+    const snap = await getDocs(
+      query(requestsRef, where('receiver_id', '==', uid), limit(INBOUND_MATCH_REQUESTS_CAP))
+    );
+    if (snap.empty) return [];
+
+    const requests = snap.docs
+      .map((d) => ({ id: d.id, ...d.data(), created_at: (d.data() as any).created_at || '' }))
+      .filter((r: any) => isMatchRequestPending(r))
+      .sort((a: any, b: any) => (b.created_at || '').localeCompare(a.created_at || ''));
+    const senderIds = [...new Set(requests.map((r: any) => r.sender_id).filter(Boolean))];
+    const profiles: Record<string, any> = {};
+    for (const sid of senderIds) {
+      try {
         const userSnap = await getDoc(doc(db, 'users', sid));
         if (userSnap.exists()) {
           const d = userSnap.data();
@@ -3267,47 +3515,10 @@ export const subscribeToMatchRequests = (onUpdate: (requests: any[]) => void): (
             match_struggles: d?.match_struggles ?? [],
           };
         }
-      }
-      onUpdate(requests.map((r: any) => ({ ...r, profiles: profiles[r.sender_id] || null })));
-    },
-    (err) => console.error('subscribeToMatchRequests', err)
-  );
-  return unsub;
-};
-
-// Get pending match requests (requests sent to current user)
-export const getPendingMatchRequests = async (): Promise<any[]> => {
-  try {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return [];
-
-    const requestsRef = collection(db, 'match_requests');
-    const snap = await getDocs(
-      query(
-        requestsRef,
-        where('receiver_id', '==', uid),
-        where('status', '==', 'pending'),
-        limit(50)
-      )
-    );
-    if (snap.empty) return [];
-
-    const requests = snap.docs
-      .map((d) => ({ id: d.id, ...d.data(), created_at: (d.data() as any).created_at || '' }))
-      .sort((a: any, b: any) => (b.created_at || '').localeCompare(a.created_at || ''));
-    const senderIds = [...new Set(requests.map((r: any) => r.sender_id))];
-    const profiles: Record<string, any> = {};
-    for (const sid of senderIds) {
-      const userSnap = await getDoc(doc(db, 'users', sid));
-      if (userSnap.exists()) {
-        const d = userSnap.data();
-        profiles[sid] = {
-          id: sid,
-          display_name: d?.display_name ?? null,
-          anonymous_username: d?.anonymous_username ?? null,
-          avatar_url: d?.avatar_url ?? null,
-          match_struggles: d?.match_struggles ?? [],
-        };
+      } catch (e) {
+        if (!isBenignFirestoreAuthTransitionError(e)) {
+          console.warn('getPendingMatchRequests: profile load failed for', sid, e);
+        }
       }
     }
     return requests.map((r: any) => ({
@@ -3457,8 +3668,8 @@ export const subscribeToActiveMatch = (
     getActiveMatch().then((m) => onUpdate(m));
   };
 
-  const unsub1 = onSnapshot(q1, refresh, (err) => console.error('subscribeToActiveMatch (user1)', err));
-  const unsub2 = onSnapshot(q2, refresh, (err) => console.error('subscribeToActiveMatch (user2)', err));
+  const unsub1 = onSnapshot(q1, refresh, (err) => logFirestoreSnapshotError('subscribeToActiveMatch (user1)', err));
+  const unsub2 = onSnapshot(q2, refresh, (err) => logFirestoreSnapshotError('subscribeToActiveMatch (user2)', err));
 
   return () => {
     unsub1();
@@ -3499,7 +3710,42 @@ export const endMatch = async (matchId: string): Promise<boolean> => {
     if (!matchSnap.exists()) return false;
     const d = matchSnap.data()!;
     if (d.user1_id !== uid && d.user2_id !== uid) return false;
-    await updateDoc(matchRef, { status: 'ended' });
+    const user1 = String(d.user1_id || '');
+    const user2 = String(d.user2_id || '');
+    const now = new Date().toISOString();
+
+    await updateDoc(matchRef, { status: 'ended', ended_at: now });
+
+    const endPairRequests = async (senderId: string, receiverId: string) => {
+      // Only read docs the current user is allowed to see (must be sender or receiver on each doc).
+      const snap =
+        uid === senderId
+          ? await getDocs(
+              query(collection(db, 'match_requests'), where('sender_id', '==', senderId), limit(50))
+            )
+          : await getDocs(
+              query(collection(db, 'match_requests'), where('receiver_id', '==', receiverId), limit(50))
+            );
+      const batch = writeBatch(db);
+      let n = 0;
+      snap.docs.forEach((docSnap) => {
+        const x = docSnap.data() as any;
+        if (x.sender_id !== senderId || x.receiver_id !== receiverId) return;
+        if (x.status !== 'pending' && x.status !== 'accepted') return;
+        batch.update(docSnap.ref, { status: 'ended', ended_at: now });
+        n++;
+      });
+      if (n > 0) await batch.commit();
+    };
+
+    await endPairRequests(user1, user2);
+    await endPairRequests(user2, user1);
+
+    try {
+      await updateDoc(doc(db, 'users', uid), { available_for_matches: true });
+    } catch (e) {
+      console.warn('endMatch: could not re-enable available_for_matches for user', e);
+    }
     return true;
   } catch (error) {
     console.error('Error ending match:', error);
@@ -3593,7 +3839,10 @@ export const subscribeToMatchGameScore = (
         partnerWins: Number(score[partnerId]) || 0,
       });
     },
-    (err) => console.warn('subscribeToMatchGameScore', err)
+    (err) => {
+      if (isBenignFirestoreAuthTransitionError(err)) return;
+      console.warn('subscribeToMatchGameScore', err);
+    }
   );
 };
 
@@ -3648,69 +3897,111 @@ async function sendPushToUser(
   }
 }
 
+const GAME_INVITE_TTL_MS = 2 * 60 * 1000;
+
+function createGameInviteId(matchId: string, uid: string): string {
+  return `${matchId}_${uid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function isoAfter(ms: number): string {
+  return new Date(Date.now() + ms).toISOString();
+}
+
+function inviteIsoIsFuture(iso: string): boolean {
+  const t = Date.parse(iso);
+  return !Number.isNaN(t) && t > Date.now();
+}
+
+async function markGameInviteNotificationsReadForMatchAndInvite(
+  matchId: string,
+  inviteId?: string,
+  recipientId?: string
+): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  const targetRecipientId = recipientId || uid;
+  if (!uid || !targetRecipientId || !matchId) return;
+  const q = query(
+    collection(db, 'notifications'),
+    where('recipient_id', '==', targetRecipientId),
+    where('type', '==', 'game_invite'),
+    limit(50)
+  );
+  const snap = await getDocs(q);
+  const batch = writeBatch(db);
+  let n = 0;
+  for (const d of snap.docs) {
+    const data = d.data() as { match_id?: string; invite_id?: string; read?: boolean };
+    if (data.read || String(data.match_id) !== String(matchId)) continue;
+    if (inviteId && String(data.invite_id || '') !== String(inviteId)) continue;
+    batch.update(d.ref, { read: true });
+    n += 1;
+  }
+  if (n) await batch.commit();
+}
+
 // Send a game invite to your match partner (in-app notification + push to tray)
 export const sendGameInvite = async (
   partnerId: string,
   matchId: string,
   gameType: string
-): Promise<boolean> => {
+): Promise<string | false> => {
   try {
     const uid = auth.currentUser?.uid;
     if (!uid) return false;
     if (!partnerId || partnerId === uid) return false;
+    const gameTypeNorm = (gameType || 'tictactoe').toLowerCase();
+    const matchRef = doc(db, 'anonymous_matches', matchId);
+    const snap = await getDoc(matchRef);
+    if (!snap.exists()) return false;
+    const matchData = snap.data() as any;
+    if (matchData.user1_id !== uid && matchData.user2_id !== uid) return false;
 
-    // If we already have a recent pending invite from our partner for this same game,
-    // don't send a new invite back (prevents "both users invite each other" spam).
-    try {
-      const matchRef = doc(db, 'anonymous_matches', matchId);
-      const snap = await getDoc(matchRef);
-      if (snap.exists()) {
-        const inv = (snap.data() as any)?.last_game_invite;
-        const createdAt = inv?.created_at ? Date.parse(inv.created_at) : 0;
-        const isRecent = createdAt && (Date.now() - createdAt) < 2 * 60 * 1000; // 2 min
-        if (
-          inv?.status === 'pending' &&
-          (inv?.game_type || '').toLowerCase() === (gameType || 'tictactoe').toLowerCase() &&
-          inv?.from_user_id === partnerId &&
-          isRecent
-        ) {
-          return true;
-        }
-      }
-    } catch (_) {
-      // ignore and continue sending
+    const prev = matchData?.last_game_invite;
+    const prevExpiresAt = lastGameInviteCreatedAtToIso(prev?.expires_at);
+    const prevIsLivePending = prev?.status === 'pending' && inviteIsoIsFuture(prevExpiresAt);
+    if (prevIsLivePending) {
+      // No duplicate pushes while a live invite is already waiting.
+      return prev.from_user_id === uid ? String(prev.invite_id || '') : false;
     }
 
-    const gameTypeNorm = (gameType || 'tictactoe').toLowerCase();
-    const notifRef = collection(db, 'notifications');
-    await addDoc(notifRef, {
+    const now = new Date().toISOString();
+    const inviteId = createGameInviteId(matchId, uid);
+    const expiresAt = isoAfter(GAME_INVITE_TTL_MS);
+    const notifRef = doc(collection(db, 'notifications'));
+    const batch = writeBatch(db);
+    batch.set(notifRef, {
       recipient_id: partnerId,
       type: 'game_invite',
-      created_at: new Date().toISOString(),
+      created_at: now,
       read: false,
       from_user_id: uid,
       match_id: matchId,
       room_id: matchId,
       game_type: gameTypeNorm,
+      invite_id: inviteId,
+      expires_at: expiresAt,
     });
-    const now = new Date().toISOString();
-    const matchRef = doc(db, 'anonymous_matches', matchId);
-    await updateDoc(matchRef, {
+    batch.update(matchRef, {
       last_game_invite: {
+        invite_id: inviteId,
         game_type: gameTypeNorm,
         from_user_id: uid,
+        to_user_id: partnerId,
         status: 'pending',
         created_at: now,
+        updated_at: now,
+        expires_at: expiresAt,
       },
     });
+    await batch.commit();
     const gameLabel = GAME_LABELS[gameTypeNorm] || GAME_LABELS[gameType] || gameType;
     await sendPushToUser(
       partnerId,
       'Game invite',
       `Your match invited you to play ${gameLabel}.`,
-      { type: 'game_invite', match_id: matchId, game_type: gameTypeNorm }
+      { type: 'game_invite', match_id: matchId, game_type: gameTypeNorm, invite_id: inviteId }
     );
-    return true;
+    return inviteId;
   } catch (error) {
     console.error('Error sending game invite:', error);
     return false;
@@ -3718,13 +4009,19 @@ export const sendGameInvite = async (
 };
 
 // Called when recipient taps "Later" so the sender can see the invite was declined
-export const setGameInviteDeclined = async (matchId: string): Promise<void> => {
+export const setGameInviteDeclined = async (matchId: string, inviteId?: string): Promise<void> => {
   try {
+    const uid = auth.currentUser?.uid;
+    if (!uid || !inviteId) return;
     const matchRef = doc(db, 'anonymous_matches', matchId);
     const snap = await getDoc(matchRef);
     if (!snap.exists()) return;
     const data = snap.data() as any;
     const prev = data?.last_game_invite || {};
+    if (prev.status !== 'pending') return;
+    if (String(prev.invite_id || '') !== String(inviteId)) return;
+    if (prev.from_user_id === uid) return;
+    const declinedAt = new Date().toISOString();
     await updateDoc(matchRef, {
       last_game_invite: {
         ...prev,
@@ -3732,10 +4029,218 @@ export const setGameInviteDeclined = async (matchId: string): Promise<void> => {
         game_type: prev.game_type || '',
         from_user_id: prev.from_user_id || '',
         created_at: prev.created_at || new Date().toISOString(),
+        declined_at: declinedAt,
+        updated_at: declinedAt,
       },
     });
+    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, uid);
   } catch (error) {
     console.error('Error setting game invite declined:', error);
+  }
+};
+
+/** Live `last_game_invite` on the match (participants can read the match doc). */
+export type MatchLastGameInvite = {
+  invite_id: string;
+  game_type: string;
+  from_user_id: string;
+  to_user_id?: string;
+  /** `none` = legacy / missing field in Firestore — do not treat as an active pending invite. */
+  status: string;
+  created_at: string;
+  updated_at?: string;
+  expires_at?: string;
+  /** Set when the recipient declines; use for a short "live" inviter message only. */
+  declined_at?: string;
+  cancelled_at?: string;
+  accepted_at?: string;
+} | null;
+
+function lastGameInviteCreatedAtToIso(v: unknown): string {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  try {
+    if (v instanceof Date) return v.toISOString();
+    const anyV = v as { toDate?: () => Date; toMillis?: () => number };
+    if (typeof anyV.toDate === 'function') return anyV.toDate().toISOString();
+    if (typeof anyV.toMillis === 'function') return new Date(anyV.toMillis()).toISOString();
+  } catch {
+    /* ignore */
+  }
+  return '';
+}
+
+export const subscribeToMatchLastGameInvite = (
+  matchId: string,
+  onChange: (invite: MatchLastGameInvite) => void
+): (() => void) => {
+  if (!matchId) return () => {};
+  const matchRef = doc(db, 'anonymous_matches', matchId);
+  const unsub = onSnapshot(
+    matchRef,
+    (snap) => {
+      if (!snap.exists()) {
+        onChange(null);
+        return;
+      }
+      const inv = (snap.data() as any)?.last_game_invite;
+      if (!inv || !inv.from_user_id) {
+        onChange(null);
+        return;
+      }
+      const rawStatus = inv.status;
+      const status =
+        rawStatus != null && String(rawStatus).trim() !== '' ? String(rawStatus).toLowerCase() : 'none';
+      const da = (inv as { declined_at?: unknown }).declined_at;
+      const ca = (inv as { cancelled_at?: unknown }).cancelled_at;
+      const aa = (inv as { accepted_at?: unknown }).accepted_at;
+      const declinedAt = da ? lastGameInviteCreatedAtToIso(da) : undefined;
+      const cancelledAt = ca ? lastGameInviteCreatedAtToIso(ca) : undefined;
+      const acceptedAt = aa ? lastGameInviteCreatedAtToIso(aa) : undefined;
+      onChange({
+        invite_id: String(inv.invite_id || ''),
+        game_type: String(inv.game_type || 'tictactoe').toLowerCase(),
+        from_user_id: String(inv.from_user_id),
+        to_user_id: inv.to_user_id ? String(inv.to_user_id) : undefined,
+        status,
+        created_at: lastGameInviteCreatedAtToIso(inv.created_at),
+        updated_at: lastGameInviteCreatedAtToIso(inv.updated_at),
+        expires_at: lastGameInviteCreatedAtToIso(inv.expires_at),
+        declined_at: status === 'declined' && declinedAt ? declinedAt : undefined,
+        cancelled_at: status === 'cancelled' && cancelledAt ? cancelledAt : undefined,
+        accepted_at: status === 'accepted' && acceptedAt ? acceptedAt : undefined,
+      });
+    },
+    (err) => logFirestoreSnapshotError('subscribeToMatchLastGameInvite', err)
+  );
+  return unsub;
+};
+
+export const setGameInviteAccepted = async (matchId: string, inviteId?: string): Promise<boolean> => {
+  const uid = auth.currentUser?.uid;
+  if (!uid || !matchId || !inviteId) return false;
+  try {
+    const matchRef = doc(db, 'anonymous_matches', matchId);
+    const snap = await getDoc(matchRef);
+    if (!snap.exists()) return false;
+    const data = snap.data() as any;
+    const prev = data?.last_game_invite || {};
+    if (prev.status !== 'pending') return false;
+    if (String(prev.invite_id || '') !== String(inviteId)) return false;
+    if (prev.from_user_id === uid) return false;
+    if (prev.expires_at && !inviteIsoIsFuture(lastGameInviteCreatedAtToIso(prev.expires_at))) return false;
+    const acceptedAt = new Date().toISOString();
+    await updateDoc(matchRef, {
+      last_game_invite: {
+        ...prev,
+        status: 'accepted',
+        accepted_at: acceptedAt,
+        updated_at: acceptedAt,
+      },
+    });
+    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, uid);
+    return true;
+  } catch (e) {
+    console.warn('setGameInviteAccepted', e);
+    return false;
+  }
+};
+
+export const setGameInviteCancelled = async (matchId: string, inviteId?: string): Promise<void> => {
+  const uid = auth.currentUser?.uid;
+  if (!uid || !matchId || !inviteId) return;
+  try {
+    const matchRef = doc(db, 'anonymous_matches', matchId);
+    const snap = await getDoc(matchRef);
+    if (!snap.exists()) return;
+    const data = snap.data() as any;
+    const prev = data?.last_game_invite || {};
+    if (prev.status !== 'pending') return;
+    if (String(prev.invite_id || '') !== String(inviteId)) return;
+    if (prev.from_user_id !== uid) return;
+    const cancelledAt = new Date().toISOString();
+    await updateDoc(matchRef, {
+      last_game_invite: {
+        ...prev,
+        status: 'cancelled',
+        cancelled_at: cancelledAt,
+        updated_at: cancelledAt,
+      },
+    });
+    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, prev.to_user_id || undefined);
+  } catch (e) {
+    console.warn('setGameInviteCancelled', e);
+  }
+};
+
+export const setGameInviteExpired = async (matchId: string, inviteId?: string): Promise<void> => {
+  const uid = auth.currentUser?.uid;
+  if (!uid || !matchId || !inviteId) return;
+  try {
+    const matchRef = doc(db, 'anonymous_matches', matchId);
+    const snap = await getDoc(matchRef);
+    if (!snap.exists()) return;
+    const data = snap.data() as any;
+    if (data.user1_id !== uid && data.user2_id !== uid) return;
+    const prev = data?.last_game_invite || {};
+    if (prev.status !== 'pending') return;
+    if (String(prev.invite_id || '') !== String(inviteId)) return;
+    const expiresAtIso = lastGameInviteCreatedAtToIso(prev.expires_at);
+    if (!expiresAtIso || inviteIsoIsFuture(expiresAtIso)) return;
+    const expiredAt = new Date().toISOString();
+    await updateDoc(matchRef, {
+      last_game_invite: {
+        ...prev,
+        status: 'expired',
+        expired_at: expiredAt,
+        updated_at: expiredAt,
+      },
+    });
+    await markGameInviteNotificationsReadForMatchAndInvite(matchId, inviteId, prev.to_user_id || undefined);
+  } catch (e) {
+    console.warn('setGameInviteExpired', e);
+  }
+};
+
+/** Remove `last_game_invite` from the match (e.g. inviter dismissed the “declined” banner so it doesn’t linger). */
+export const clearMatchLastGameInvite = async (matchId: string): Promise<void> => {
+  const uid = auth.currentUser?.uid;
+  if (!uid || !matchId) return;
+  try {
+    const matchRef = doc(db, 'anonymous_matches', matchId);
+    const snap = await getDoc(matchRef);
+    if (!snap.exists()) return;
+    const d = snap.data() as { user1_id?: string; user2_id?: string };
+    if (d.user1_id !== uid && d.user2_id !== uid) return;
+    await updateDoc(matchRef, { last_game_invite: deleteField() });
+  } catch (e) {
+    console.warn('clearMatchLastGameInvite', e);
+  }
+};
+
+/** Mark unread game_invite notifications for this match so the global tab prompt does not duplicate chat. */
+export const markGameInviteNotificationsReadForMatch = async (matchId: string): Promise<void> => {
+  const uid = auth.currentUser?.uid;
+  if (!uid || !matchId) return;
+  try {
+    const q = query(
+      collection(db, 'notifications'),
+      where('recipient_id', '==', uid),
+      where('type', '==', 'game_invite'),
+      limit(50)
+    );
+    const snap = await getDocs(q);
+    const batch = writeBatch(db);
+    let n = 0;
+    for (const d of snap.docs) {
+      const data = d.data() as { match_id?: string; read?: boolean };
+      if (data.read || String(data.match_id) !== String(matchId)) continue;
+      batch.update(d.ref, { read: true });
+      n += 1;
+    }
+    if (n) await batch.commit();
+  } catch (e) {
+    console.warn('markGameInviteNotificationsReadForMatch', e);
   }
 };
 
@@ -3755,22 +4260,35 @@ export const subscribeToMatchGameInviteStatus = (
       if (!snap.exists()) return;
       const data = snap.data() as any;
       const inv = data?.last_game_invite;
+      const invGt = String(inv?.game_type || 'tictactoe').toLowerCase();
+      const wantGt = String(gameType || 'tictactoe').toLowerCase();
       if (
         inv?.from_user_id === uid &&
-        (inv?.game_type || '') === (gameType || '') &&
+        invGt === wantGt &&
         inv?.status === 'declined'
       ) {
         onDeclined();
       }
     },
-    (err) => console.error('subscribeToMatchGameInviteStatus', err)
+    (err) => logFirestoreSnapshotError('subscribeToMatchGameInviteStatus', err)
   );
   return unsub;
 };
 
 // Subscribe to game invites (so we can show in-app alert when partner invites you)
 export const subscribeToGameInvites = (
-  onInvites: (invites: { id: string; game_type: string; match_id: string; from_user_id: string; read: boolean }[]) => void
+  onInvites: (
+    invites: {
+      id: string;
+      invite_id: string;
+      game_type: string;
+      match_id: string;
+      from_user_id: string;
+      read: boolean;
+      created_at: string;
+      expires_at: string;
+    }[]
+  ) => void
 ): (() => void) => {
   const uid = auth.currentUser?.uid;
   if (!uid) return () => {};
@@ -3784,22 +4302,42 @@ export const subscribeToGameInvites = (
   );
   const unsub = onSnapshot(
     q,
-    (snap) => {
-      const invites = snap.docs.map((d) => {
+    async (snap) => {
+      const rawInvites = snap.docs.map((d) => {
         const data = d.data() as any;
         return {
           id: d.id,
+          invite_id: String(data.invite_id || ''),
           game_type: (data.game_type || 'tictactoe').toLowerCase(),
           match_id: data.match_id || '',
           from_user_id: data.from_user_id || '',
           read: !!data.read,
           created_at: data.created_at || '',
+          expires_at: lastGameInviteCreatedAtToIso(data.expires_at),
         };
       });
-      invites.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
-      onInvites(invites);
+      const batch = writeBatch(db);
+      let staleCount = 0;
+      const activeInvites = rawInvites.map((invite, idx) => {
+        if (invite.read) return invite;
+        const hasRequiredFields = !!invite.match_id && !!invite.invite_id;
+        const stillFresh = inviteIsoIsFuture(invite.expires_at);
+        if (!hasRequiredFields || !stillFresh) {
+          batch.update(snap.docs[idx].ref, { read: true });
+          staleCount += 1;
+          return { ...invite, read: true };
+        }
+        return invite;
+      });
+      if (staleCount) {
+        try {
+          await batch.commit();
+        } catch {}
+      }
+      activeInvites.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+      onInvites(activeInvites);
     },
-    (err) => console.error('subscribeToGameInvites', err)
+    (err) => logFirestoreSnapshotError('subscribeToGameInvites', err)
   );
   return unsub;
 };
@@ -3837,7 +4375,7 @@ export const subscribeToLivePodcastNotifications = (
       items.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
       onNotifications(items);
     },
-    (err) => console.error('subscribeToLivePodcastNotifications', err)
+    (err) => logFirestoreSnapshotError('subscribeToLivePodcastNotifications', err)
   );
   return unsub;
 };
@@ -3857,12 +4395,7 @@ export const subscribeToUnreadNotificationCount = (onCount: (count: number) => v
   const unsub = onSnapshot(
     q,
     (snap) => onCount(snap.size),
-    (err: unknown) => {
-      const code = (err as { code?: string })?.code;
-      // Normal when signing out: listener stops with permission-denied before teardown.
-      if (code === 'permission-denied' || code === 'unauthenticated') return;
-      console.error('subscribeToUnreadNotificationCount', err);
-    }
+    (err: unknown) => logFirestoreSnapshotError('subscribeToUnreadNotificationCount', err)
   );
   return unsub;
 };
@@ -3911,7 +4444,7 @@ export const subscribeToMatchMessages = (
       list.sort((a: any, b: any) => (a.created_at || '').localeCompare(b.created_at || ''));
       onMessages(list);
     },
-    (err) => console.error('subscribeToMatchMessages', err)
+    (err) => logFirestoreSnapshotError('subscribeToMatchMessages', err)
   );
   return unsub;
 };

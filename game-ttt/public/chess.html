@@ -68,6 +68,8 @@
     .status-card.game-over.lose .status-text { color: #f87171; }
     .game-over-actions { display: flex; gap: 10px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
     .game-over-actions.hidden { display: none !important; }
+    .opponent-left-actions { display: flex; justify-content: center; margin-top: 12px; }
+    .opponent-left-actions.hidden { display: none !important; }
     .btn-game-over {
       padding: 10px 20px;
       border-radius: 10px;
@@ -178,6 +180,9 @@
       <button type="button" class="btn-game-over btn-replay">Replay</button>
       <button type="button" class="btn-game-over btn-leave">Leave</button>
     </div>
+    <div id="opponentLeftActions" class="opponent-left-actions hidden">
+      <button type="button" class="btn-game-over btn-leave">Back to match</button>
+    </div>
   </div>
   <div id="boardWrap" class="board-wrap hidden">
     <div id="board" class="board"></div>
@@ -188,15 +193,17 @@
     const roomCode = params.get('room') || '';
     const socketUrlParam = params.get('socketUrl') || params.get('socket') || '';
     const opponentFromUrl = (params.get('opponent') || params.get('opponentName') || '').trim().slice(0, 30);
+    var chessSocketOpts = { path: '/socket.io', transports: ['polling', 'websocket'], upgrade: true, reconnectionAttempts: 8, reconnectionDelay: 500 };
     const socket = socketUrlParam.trim()
-      ? io(socketUrlParam.trim() + '/chess', { path: '/socket.io', transports: ['websocket', 'polling'] })
-      : io('/chess', { transports: ['websocket', 'polling'] });
+      ? io(socketUrlParam.trim() + '/chess', chessSocketOpts)
+      : io('/chess', chessSocketOpts);
     let connectionFailed = false;
     const statusCard = document.getElementById('statusCard');
     const statusText = document.getElementById('statusText');
     const statusSub = document.getElementById('statusSub');
     const boardWrap = document.getElementById('boardWrap');
     const boardEl = document.getElementById('board');
+    const opponentLeftActionsEl = document.getElementById('opponentLeftActions');
     let myColor = null;
     let opponentName = opponentFromUrl || 'Opponent';
     let state = { fen: '', turn: 'w', result: null, lastMove: null };
@@ -313,6 +320,7 @@
         }
       } else {
         gameOverActionsEl.classList.add('hidden');
+        opponentLeftActionsEl.classList.add('hidden');
         if (state.turn === myColor) {
           if (selected && validMoves.length) setStatus('Your turn', 'Tap a green square to move.', 'you-turn');
           else if (selected) setStatus('Your turn', 'Loading moves…', 'you-turn');
@@ -412,6 +420,7 @@
 
     socket.on('waiting', () => {
       boardWrap.classList.add('hidden');
+      opponentLeftActionsEl.classList.add('hidden');
       setStatus('Waiting for opponent...', 'Share the game link or wait.', '');
     });
 
@@ -422,6 +431,7 @@
         opponentName = (opponent || 'Opponent').trim().slice(0, 30) || 'Opponent';
       }
       boardWrap.classList.remove('hidden');
+      opponentLeftActionsEl.classList.add('hidden');
     }
 
     socket.on('start', (data) => {
@@ -451,7 +461,14 @@
     });
 
     socket.on('roomFull', () => setStatus('Room full.', '', ''));
-    socket.on('opponentLeft', () => setStatus('Opponent left.', 'You can go back.', ''));
+    socket.on('opponentLeft', () => {
+      selected = null;
+      validMoves = [];
+      boardWrap.classList.add('hidden');
+      gameOverActionsEl.classList.add('hidden');
+      opponentLeftActionsEl.classList.remove('hidden');
+      setStatus((opponentName || 'Opponent') + ' left the game.', 'You can go back to your match.', 'game-over');
+    });
 
     document.getElementById('gameOverActions').addEventListener('click', (e) => {
       if (e.target.classList.contains('btn-replay')) {
@@ -462,6 +479,13 @@
         } else {
           window.close();
         }
+      }
+    });
+    opponentLeftActionsEl.addEventListener('click', () => {
+      if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'leave' }));
+      } else {
+        window.close();
       }
     });
   </script>

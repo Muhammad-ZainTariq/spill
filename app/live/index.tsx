@@ -131,7 +131,9 @@ export default function LivePodcastHubScreen() {
           <Pressable style={[styles.codeBtn, joiningByCode && styles.codeBtnDisabled]} onPress={handleJoinByCode} disabled={joiningByCode}>
             <Text style={styles.codeBtnText}>{joiningByCode ? 'Joining...' : 'Join with code'}</Text>
           </Pressable>
-          <Text style={styles.codeHelper}>The host still starts the broadcast. This is only for invited co-hosts and speakers.</Text>
+          <Text style={styles.codeHelper}>
+            The host starts the broadcast first. When they create a live podcast, a co-host code is generated automatically to share with you; they can also create a new code from the room screen.
+          </Text>
         </View>
 
         <Section title="Live now" icon="radio">

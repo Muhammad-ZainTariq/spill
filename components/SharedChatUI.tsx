@@ -9,6 +9,7 @@ import {
   FlatList,
   Keyboard,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -58,6 +59,8 @@ export interface SharedChatLayoutProps {
   placeholder?: string;
   inputEditable?: boolean;
   onScrollToBottom?: () => void;
+  /** Long-press someone else’s bubble to report that message */
+  onReportMessage?: (msg: { id: string; fromUid: string; text: string }) => void;
 }
 
 export function SharedChatLayout({
@@ -75,6 +78,7 @@ export function SharedChatLayout({
   placeholder = 'Message...',
   inputEditable = true,
   onScrollToBottom,
+  onReportMessage,
 }: SharedChatLayoutProps) {
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<any>>(null);
@@ -91,6 +95,15 @@ export function SharedChatLayout({
     },
     [onScrollToBottom]
   );
+
+  /** Inverted list: new items append in data; keep view pinned to bottom when the user is already at the bottom. */
+  useEffect(() => {
+    if (!atBottomRef.current) return;
+    const id = requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [chatData.length]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -131,11 +144,15 @@ export function SharedChatLayout({
           keyExtractor={(item) => String(item.id)}
           inverted
           scrollEventThrottle={100}
-          maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
           onScroll={(e) => {
             const y = e?.nativeEvent?.contentOffset?.y ?? 0;
             atBottomRef.current = y < 40;
             setShowScrollToBottom(y > 120);
+          }}
+          onContentSizeChange={() => {
+            if (atBottomRef.current) {
+              requestAnimationFrame(() => scrollToBottom(true));
+            }
           }}
           renderItem={({ item }) => {
             if (item?._type === 'day') {
@@ -157,17 +174,38 @@ export function SharedChatLayout({
             }
             if (item?._type !== 'msg') return null;
             const mine = item.fromUid === currentUserId;
+            const bubble = (
+              <View style={[chatStyles.bubble, mine ? chatStyles.bubbleMine : chatStyles.bubbleTheirs]}>
+                <Text style={[chatStyles.bubbleText, mine ? chatStyles.bubbleTextMine : chatStyles.bubbleTextTheirs]}>
+                  {String(item.text || '')}
+                  <Text style={[chatStyles.timeInline, !mine && chatStyles.timeInlineTheirs]}>
+                    {'  '}
+                    {formatTime(item.createdAt)}
+                  </Text>
+                </Text>
+              </View>
+            );
             return (
               <Animated.View entering={FadeInUp.duration(220).easing(Easing.out(Easing.cubic))}>
-                <View style={[chatStyles.bubble, mine ? chatStyles.bubbleMine : chatStyles.bubbleTheirs]}>
-                  <Text style={[chatStyles.bubbleText, mine ? chatStyles.bubbleTextMine : chatStyles.bubbleTextTheirs]}>
-                    {String(item.text || '')}
-                    <Text style={[chatStyles.timeInline, !mine && chatStyles.timeInlineTheirs]}>
-                      {'  '}
-                      {formatTime(item.createdAt)}
-                    </Text>
-                  </Text>
-                </View>
+                {!mine && onReportMessage ? (
+                  <Pressable
+                    onLongPress={() => {
+                      try {
+                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                      } catch {}
+                      onReportMessage({
+                        id: String(item.id),
+                        fromUid: String(item.fromUid),
+                        text: String(item.text || ''),
+                      });
+                    }}
+                    delayLongPress={380}
+                  >
+                    {bubble}
+                  </Pressable>
+                ) : (
+                  bubble
+                )}
               </Animated.View>
             );
           }}

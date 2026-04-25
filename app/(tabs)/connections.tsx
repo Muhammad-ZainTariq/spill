@@ -1,10 +1,5 @@
 import {
-  getTherapistProfile,
-  listOpenSlotsForTherapist,
-  listSessionsForUser,
-  listTherapistProfiles,
-  TherapistProfile,
-  TherapistSession,
+  getTherapistProfile, listOpenSlotsForTherapist, listSessionsForUser, listTherapistProfiles, TherapistProfile, TherapistSession,
 } from '@/app/therapist/_marketplace';
 import TherapistList from '@/components/TherapistList';
 import { auth, db } from '@/lib/firebase';
@@ -13,37 +8,14 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { doc, getDoc } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  acceptMessageRequest,
-  blockUser,
-  CHALLENGE_CATEGORIES,
-  declineMessageRequest,
-  fetchMessages,
-  formatTimeAgo,
-  getConversations,
-  getCurrentUserRole,
-  getGroups,
-  getOfficialChallenges,
-  getOrCreateConversation,
-  getPendingRequests,
-  Group,
-  reportDmUser,
-  sendMessage,
+  acceptMatchRequest, acceptMessageRequest, blockUser, CHALLENGE_CATEGORIES, declineMatchRequest, declineMessageRequest, fetchMessages, formatTimeAgo,
+  getConversations, getCurrentUserRole, getGroups, getOfficialChallenges, getOrCreateConversation, getPendingMatchRequests, getPendingRequests,
+  Group, reportDmUser, sendMessage,
 } from '../functions';
 
 interface Message {
@@ -143,8 +115,36 @@ export default function ConnectionsScreen() {
   const loadRequests = async () => {
     try {
       setLoadingRequests(true);
-      const reqs = await getPendingRequests();
-      setRequests(reqs);
+      const uid = auth.currentUser?.uid ?? null;
+      const [dmReqs, matchReqsRaw] = await Promise.all([
+        getPendingRequests(),
+        uid ? getPendingMatchRequests(uid) : Promise.resolve([]),
+      ]);
+      // Connections "Requests" previously only showed DM conversation invites.
+      // Match requests (match_requests collection) live on Matches — merge them here too.
+      const matchItems = matchReqsRaw.map((m: any) => ({
+        kind: 'match' as const,
+        id: m.id,
+        otherUser: m.profiles
+          ? {
+              id: m.sender_id,
+              display_name: m.profiles.display_name,
+              anonymous_username: m.profiles.anonymous_username,
+              avatar_url: m.profiles.avatar_url,
+            }
+          : {
+              id: m.sender_id,
+              display_name: null,
+              anonymous_username: null,
+              avatar_url: null,
+            },
+        updated_at: m.created_at || '',
+      }));
+      const messageItems = dmReqs.map((r: any) => ({ kind: 'message' as const, ...r }));
+      const combined = [...matchItems, ...messageItems].sort(
+        (a, b) => new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime()
+      );
+      setRequests(combined);
     } catch (e) {
       console.error('Error loading requests (connections):', e);
       setRequests([]);
@@ -212,6 +212,22 @@ export default function ConnectionsScreen() {
   const handleDeclineRequest = async (conversationId: string) => {
     const success = await declineMessageRequest(conversationId);
     if (success) loadRequests();
+  };
+
+  const handleAcceptMatchRequest = async (requestId: string) => {
+    const success = await acceptMatchRequest(requestId);
+    if (success) {
+      loadRequests();
+      Alert.alert('Friend added', 'Open Friends → Your friends to chat.');
+    } else {
+      Alert.alert('Could not accept', 'Try again.');
+    }
+  };
+
+  const handleDeclineMatchRequest = async (requestId: string) => {
+    const success = await declineMatchRequest(requestId);
+    if (success) loadRequests();
+    else Alert.alert('Could not decline', 'Try again.');
   };
 
   const loadSettings = async () => {
@@ -293,7 +309,7 @@ export default function ConnectionsScreen() {
   };
 
   useEffect(() => {
-    setCurrentUserId(auth.currentUser?.uid || null);
+    const unsubAuth = onAuthStateChanged(auth, (u) => setCurrentUserId(u?.uid ?? null));
     loadConversations();
     loadGroups();
     loadOfficialChallenges();
@@ -303,7 +319,10 @@ export default function ConnectionsScreen() {
       loadConversations();
       loadRequests();
     }, 10000);
-    return () => clearInterval(interval);
+    return () => {
+      unsubAuth();
+      clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -460,6 +479,7 @@ export default function ConnectionsScreen() {
 
   const renderRequestItem = ({ item }: { item: any }) => {
     const displayName = item.otherUser?.display_name || item.otherUser?.anonymous_username || 'Anonymous';
+    const isMatch = item.kind === 'match';
     return (
       <View style={styles.requestItem}>
         <View style={styles.requestHeader}>
@@ -472,17 +492,27 @@ export default function ConnectionsScreen() {
           )}
           <View style={styles.requestInfo}>
             <Text style={styles.requestName}>{displayName}</Text>
-            {item.firstMessage && (
+            {isMatch ? (
+              <Text style={styles.requestMessage} numberOfLines={2}>
+                Friend request — wants to connect in Friends
+              </Text>
+            ) : item.firstMessage ? (
               <Text style={styles.requestMessage} numberOfLines={2}>{item.firstMessage.content}</Text>
-            )}
+            ) : null}
             <Text style={styles.requestTime}>{item.updated_at ? formatTimeAgo(item.updated_at) : ''}</Text>
           </View>
         </View>
         <View style={styles.requestActions}>
-          <Pressable style={styles.declineButton} onPress={() => handleDeclineRequest(item.id)}>
+          <Pressable
+            style={styles.declineButton}
+            onPress={() => (isMatch ? handleDeclineMatchRequest(item.id) : handleDeclineRequest(item.id))}
+          >
             <Text style={styles.declineButtonText}>Decline</Text>
           </Pressable>
-          <Pressable style={styles.acceptButton} onPress={() => handleAcceptRequest(item.id)}>
+          <Pressable
+            style={styles.acceptButton}
+            onPress={() => (isMatch ? handleAcceptMatchRequest(item.id) : handleAcceptRequest(item.id))}
+          >
             <Text style={styles.acceptButtonText}>Accept</Text>
           </Pressable>
         </View>
@@ -510,23 +540,70 @@ export default function ConnectionsScreen() {
     );
   };
 
-  const renderMessage = ({ item }: { item: Message }) => {
-    const isMe = item.sender_id === currentUserId;
-    return (
-      <View style={[styles.messageRow, isMe && styles.messageRowMe]}>
+  if (selectedConversation) {
+    const displayName = selectedConversation.otherUser?.display_name || selectedConversation.otherUser?.anonymous_username || 'Anonymous';
+    const otherUserId = selectedConversation.otherUser?.id;
+
+    const renderMessage = ({ item }: { item: Message }) => {
+      const uid = currentUserId;
+      const sid = item.sender_id != null ? String(item.sender_id) : '';
+      const oid = otherUserId != null ? String(otherUserId) : '';
+      const isMe = !!uid && sid === String(uid);
+      const bubble = (
         <View style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleOther]}>
           <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{item.content}</Text>
           <Text style={[styles.messageTime, isMe && styles.messageTimeMe]}>
             {item.created_at ? formatTimeAgo(item.created_at) : ''}
           </Text>
         </View>
-      </View>
-    );
-  };
-
-  if (selectedConversation) {
-    const displayName = selectedConversation.otherUser?.display_name || selectedConversation.otherUser?.anonymous_username || 'Anonymous';
-    const otherUserId = selectedConversation.otherUser?.id;
+      );
+      const fromPeer = !oid || sid === oid;
+      const canReport =
+        !isMe &&
+        !!uid &&
+        !!sid &&
+        fromPeer &&
+        !!selectedConversation.id &&
+        !!item.id;
+      return (
+        <View style={[styles.messageRow, isMe && styles.messageRowMe]}>
+          {canReport ? (
+            <Pressable
+              onLongPress={() => {
+                const submit = (reason: string) => {
+                  void (async () => {
+                    try {
+                      await reportDmUser({
+                        targetUid: String(item.sender_id),
+                        conversationId: selectedConversation.id,
+                        reason,
+                        messageId: item.id,
+                        details: String(item.content || '').slice(0, 2000),
+                      });
+                      Alert.alert('Reported', 'Thanks — our team will review this message.');
+                    } catch (e: any) {
+                      Alert.alert('Could not report', e?.message || 'Try again.');
+                    }
+                  })();
+                };
+                Alert.alert('Report message', 'Moderators can see this message. What’s the issue?', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Harassment', style: 'destructive', onPress: () => submit('harassment') },
+                  { text: 'Self-harm / crisis', style: 'destructive', onPress: () => submit('self_harm') },
+                  { text: 'Spam or scam', style: 'destructive', onPress: () => submit('spam') },
+                  { text: 'Other', onPress: () => submit('other') },
+                ]);
+              }}
+              delayLongPress={380}
+            >
+              {bubble}
+            </Pressable>
+          ) : (
+            bubble
+          )}
+        </View>
+      );
+    };
     return (
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 20}>
         <View style={{ flex: 1, backgroundColor: '#f8f9fa' }}>
@@ -571,6 +648,7 @@ export default function ConnectionsScreen() {
           <View style={styles.messagesListContainer}>
             <FlatList
               ref={flatListRef}
+              style={{ flex: 1 }}
               inverted
               data={[...messages].slice().reverse()}
               renderItem={renderMessage}
@@ -578,6 +656,8 @@ export default function ConnectionsScreen() {
               contentContainerStyle={[styles.messagesList, { paddingBottom: 12 }]}
               keyboardDismissMode="interactive"
               keyboardShouldPersistTaps="handled"
+              onContentSizeChange={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })}
+              onLayout={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: false })}
             />
           </View>
 
@@ -840,13 +920,13 @@ export default function ConnectionsScreen() {
               <FlatList
                 style={styles.tabContent}
                 data={filteredRequests}
-                keyExtractor={(item) => item.id}
+                keyExtractor={(item) => `${item.kind || 'message'}-${item.id}`}
                 renderItem={renderRequestItem}
                 contentContainerStyle={styles.listContent}
                 ListEmptyComponent={
                   <View style={styles.emptyState}>
-                    <Text style={styles.emptyTitle}>No message requests</Text>
-                    <Text style={styles.emptySubtitle}>You're all caught up!</Text>
+                    <Text style={styles.emptyTitle}>No requests</Text>
+                    <Text style={styles.emptySubtitle}>Message invites and friend requests will show here.</Text>
                   </View>
                 }
                 refreshing={loadingRequests}

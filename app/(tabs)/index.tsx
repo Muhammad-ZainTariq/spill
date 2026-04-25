@@ -1,57 +1,17 @@
-                                                        import { extractYoutubeId, youtubeThumbnailUrl } from '@/app/therapist/_marketplace';
+import { extractYoutubeId, youtubeThumbnailUrl } from '@/app/therapist/_marketplace';
+import { useLivePodcast } from '@/components/live/LivePodcastProvider';
+import { SpeakingWave } from '@/components/live/SpeakingWave';
+import { LivePodcastRoom, subscribeLivePodcastRooms } from '@/lib/livePodcasts';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useEffect, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Dimensions,
-  KeyboardAvoidingView,
-  Linking,
-  Modal,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import Reanimated, {
-  Easing,
-  useAnimatedStyle,
-  useSharedValue,
-  withSequence,
-  withSpring,
-  withTiming
-} from 'react-native-reanimated';
+import { ActivityIndicator, Alert, Animated, Dimensions, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, } from 'react-native';
+import Reanimated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLivePodcast } from '@/components/live/LivePodcastProvider';
-import {
-  addComment,
-  cancelPremium,
-  checkPremiumStatus,
-  deletePost,
-  downvotePost,
-  fetchComments,
-  fetchPosts,
-  fetchUserProfile,
-  formatTimeAgo,
-  getAIOpinion,
-  handleMoreOptions,
-  handleScroll,
-  Post,
-  removeVote,
-  subscribeToPosts,
-  upvotePost
-} from '../functions';
-import { SpeakingWave } from '@/components/live/SpeakingWave';
-import { LivePodcastRoom, subscribeLivePodcastRooms } from '@/lib/livePodcasts';
+import { addComment, cancelPremium, checkPremiumStatus, deletePost, downvotePost, fetchComments, fetchPosts, fetchUserProfile, formatTimeAgo, getAIOpinion, handleMoreOptions, handleScroll, Post, removeVote, subscribeToPosts, upvotePost } from '../functions';
 
 type SheetComment = {
   id: string;

@@ -1,8 +1,9 @@
-import { recordGameResult, subscribeToMatchGameInviteStatus } from '@/app/functions';
+import { recordGameResult, setGameInviteCancelled, setGameInviteExpired, subscribeToMatchLastGameInvite, type MatchLastGameInvite } from '@/app/functions';
 import Constants from 'expo-constants';
 import { Feather } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -12,28 +13,72 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
+import { auth } from '@/lib/firebase';
 
 const GAME_TITLES: Record<string, string> = {
   tictactoe: 'Tic-Tac-Toe',
   chess: 'Chess',
 };
 
+/** Expo Router can pass string | string[]; arrays break WebView URLs and Firestore listeners. */
+function paramStr(v: string | string[] | undefined): string {
+  if (v == null) return '';
+  return Array.isArray(v) ? String(v[0] ?? '') : String(v);
+}
+
 export default function GameWebViewScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { room, gameType = 'tictactoe', opponentName: opponentNameParam, myName: myNameParam } = useLocalSearchParams<{
-    room?: string;
-    gameType?: string;
-    opponentName?: string;
-    myName?: string;
+  const raw = useLocalSearchParams<{
+    room?: string | string[];
+    gameType?: string | string[];
+    inviteId?: string | string[];
+    opponentName?: string | string[];
+    myName?: string | string[];
   }>();
-  const [inviteDeclined, setInviteDeclined] = useState(false);
+  const room = paramStr(raw.room);
+  const gameType = paramStr(raw.gameType) || 'tictactoe';
+  const inviteId = paramStr(raw.inviteId);
+  const opponentNameParam = paramStr(raw.opponentName);
+  const myNameParam = paramStr(raw.myName);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(auth.currentUser?.uid ?? null);
+  const [lastGameInvite, setLastGameInvite] = useState<MatchLastGameInvite>(null);
 
   useEffect(() => {
-    if (!room?.trim() || !gameType) return;
-    const unsub = subscribeToMatchGameInviteStatus(room, gameType, () => setInviteDeclined(true));
+    const unsub = onAuthStateChanged(auth, (u) => setCurrentUserId(u?.uid ?? null));
     return () => unsub();
-  }, [room, gameType]);
+  }, []);
+
+  useEffect(() => {
+    if (!room?.trim() || !inviteId) return;
+    const unsub = subscribeToMatchLastGameInvite(room, setLastGameInvite);
+    return () => unsub();
+  }, [room, inviteId]);
+
+  const inviteMatchesScreen = !!inviteId && lastGameInvite?.invite_id === inviteId;
+  const iSentThisInvite = inviteMatchesScreen && !!currentUserId && lastGameInvite?.from_user_id === currentUserId;
+
+  useEffect(() => {
+    if (!room || !inviteMatchesScreen || lastGameInvite?.status !== 'pending') return;
+    const expiresAt = Date.parse(lastGameInvite.expires_at || '');
+    if (Number.isNaN(expiresAt)) return;
+    const delay = expiresAt - Date.now();
+    if (delay <= 0) {
+      void setGameInviteExpired(room, inviteId);
+      return;
+    }
+    const id = setTimeout(() => {
+      void setGameInviteExpired(room, inviteId);
+    }, delay + 250);
+    return () => clearTimeout(id);
+  }, [room, inviteId, inviteMatchesScreen, lastGameInvite]);
+
+  const handleBack = useCallback(() => {
+    if (room && inviteId) {
+      void setGameInviteCancelled(room, inviteId);
+    }
+    router.back();
+  }, [room, inviteId, router]);
 
   const gameBaseUrl =
     (Constants as any)?.expoConfig?.extra?.gameBaseUrl ||
@@ -47,9 +92,9 @@ export default function GameWebViewScreen() {
   const gameUrl = useMemo(() => {
     if (!gameBaseUrl.trim() || !room?.trim()) return null;
     const base = gameBaseUrl.replace(/\/$/, '');
-    const path = gameType === 'chess' ? '/chess' : '';
-    const sep = (base + path).includes('?') ? '&' : '?';
-    let url = `${base}${path}${sep}room=${encodeURIComponent(room)}`;
+    // Always include a real path before the query (?room= alone breaks some hosts / WebViews → "Not Found")
+    const pathPart = gameType === 'chess' ? '/chess' : '/';
+    let url = `${base}${pathPart}?room=${encodeURIComponent(room)}`;
     const socketBase = gameSocketUrl.trim() ? gameSocketUrl.replace(/\/$/, '') : base;
     url += '&socketUrl=' + encodeURIComponent(socketBase);
     if (opponentNameParam?.trim()) {
@@ -67,7 +112,7 @@ export default function GameWebViewScreen() {
     return (
       <View style={styles.container}>
         <View style={[styles.header, { paddingTop: insets.top + 6, paddingBottom: 10 }]}>
-          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+          <Pressable onPress={handleBack} style={styles.backBtn}>
             <Feather name="arrow-left" size={22} color="#0f172a" />
           </Pressable>
           <Text style={styles.headerTitle}>Play game</Text>
@@ -89,7 +134,7 @@ export default function GameWebViewScreen() {
     return (
       <View style={styles.container}>
         <View style={[styles.header, { paddingTop: insets.top + 6, paddingBottom: 10 }]}>
-          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+          <Pressable onPress={handleBack} style={styles.backBtn}>
             <Feather name="arrow-left" size={22} color="#0f172a" />
           </Pressable>
           <Text style={styles.headerTitle}>{title}</Text>
@@ -105,7 +150,7 @@ export default function GameWebViewScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + 6, paddingBottom: 10 }]}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={12}>
+        <Pressable onPress={handleBack} style={styles.backBtn} hitSlop={12}>
           <Feather name="arrow-left" size={22} color="#0f172a" />
         </Pressable>
         <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
@@ -160,7 +205,7 @@ export default function GameWebViewScreen() {
         onMessage={(e) => {
           try {
             const data = JSON.parse(e.nativeEvent.data);
-            if (data?.type === 'leave') router.back();
+            if (data?.type === 'leave') handleBack();
             if (data?.type === 'game_over' && data?.roomCode && (data?.result === 'win' || data?.result === 'loss' || data?.result === 'draw')) {
               recordGameResult(data.roomCode, data.result, data.gameType || 'tictactoe').catch(() => {});
             }
@@ -173,12 +218,16 @@ export default function GameWebViewScreen() {
           </View>
         )}
       />
-      {inviteDeclined && (
+      {inviteMatchesScreen && iSentThisInvite && (lastGameInvite?.status === 'declined' || lastGameInvite?.status === 'expired') && (
         <View style={styles.declinedOverlay}>
           <View style={styles.declinedCard}>
             <Feather name="info" size={40} color="#f59e0b" />
-            <Text style={styles.declinedTitle}>Invite declined</Text>
-            <Text style={styles.declinedText}>Your match chose "Later" and isn't joining right now.</Text>
+            <Text style={styles.declinedTitle}>{lastGameInvite?.status === 'expired' ? 'Invite expired' : 'Invite declined'}</Text>
+            <Text style={styles.declinedText}>
+              {lastGameInvite?.status === 'expired'
+                ? 'No one joined in time. Send a new request when you are ready.'
+                : "Your match declined and isn't joining right now."}
+            </Text>
             <Pressable style={styles.declinedBtn} onPress={() => router.back()}>
               <Text style={styles.declinedBtnText}>Back to match</Text>
             </Pressable>

@@ -6,12 +6,16 @@ import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View }
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { db } from '@/lib/firebase';
 
-type DmReport = {
+type ModReport = {
   id: string;
   reporter_uid: string;
   target_uid: string;
-  conversation_id: string;
+  type?: string;
+  conversation_id?: string;
+  match_id?: string;
+  session_id?: string;
   message_id?: string | null;
+  message_content?: string | null;
   reason?: string | null;
   details?: string | null;
   created_at?: string | null;
@@ -21,20 +25,44 @@ type DmReport = {
 export default function AdminReportsScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [reports, setReports] = useState<DmReport[]>([]);
+  const [reports, setReports] = useState<ModReport[]>([]);
 
   const load = async () => {
     setLoading(true);
     try {
-      const q = query(
-        collection(db, 'reports'),
-        where('type', '==', 'user_dm'),
-        where('status', '==', 'pending'),
-        orderBy('created_at', 'desc'),
-        limit(200)
-      );
-      const snap = await getDocs(q);
-      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as DmReport[];
+      const lim = 120;
+      const [dmSnap, matchSnap, sessSnap] = await Promise.all([
+        getDocs(
+          query(
+            collection(db, 'reports'),
+            where('type', '==', 'user_dm'),
+            where('status', '==', 'pending'),
+            orderBy('created_at', 'desc'),
+            limit(lim)
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, 'reports'),
+            where('type', '==', 'match_message'),
+            where('status', '==', 'pending'),
+            orderBy('created_at', 'desc'),
+            limit(lim)
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, 'reports'),
+            where('type', '==', 'therapist_session_message'),
+            where('status', '==', 'pending'),
+            orderBy('created_at', 'desc'),
+            limit(lim)
+          )
+        ),
+      ]);
+      const list = [...dmSnap.docs, ...matchSnap.docs, ...sessSnap.docs]
+        .map((d) => ({ id: d.id, ...(d.data() as any) }) as ModReport)
+        .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
       setReports(list);
     } catch (e: any) {
       console.error('Load reports error', e);
@@ -61,17 +89,31 @@ export default function AdminReportsScreen() {
     }
   };
 
-  const renderItem = ({ item }: { item: DmReport }) => {
+  const typeLabel = (t?: string) => {
+    if (t === 'match_message') return 'Match chat';
+    if (t === 'therapist_session_message') return 'Therapist session';
+    return 'DM';
+  };
+
+  const renderItem = ({ item }: { item: ModReport }) => {
     const when = item.created_at ? new Date(item.created_at).toLocaleString() : '';
+    const preview = item.message_content || item.details;
     return (
       <View style={styles.card}>
         <View style={styles.row}>
-          <Text style={styles.reason}>{String(item.reason || 'report').replace(/_/g, ' ')}</Text>
+          <Text style={styles.typePill}>{typeLabel(item.type)}</Text>
           <Text style={styles.when}>{when}</Text>
+        </View>
+        <View style={styles.row}>
+          <Text style={styles.reason}>{String(item.reason || 'report').replace(/_/g, ' ')}</Text>
         </View>
         <Text style={styles.meta}>Reporter: {item.reporter_uid}</Text>
         <Text style={styles.meta}>Target: {item.target_uid}</Text>
-        {item.details ? <Text style={styles.details}>{String(item.details)}</Text> : null}
+        {item.conversation_id ? <Text style={styles.meta}>Conversation: {item.conversation_id}</Text> : null}
+        {item.match_id ? <Text style={styles.meta}>Match: {item.match_id}</Text> : null}
+        {item.session_id ? <Text style={styles.meta}>Session: {item.session_id}</Text> : null}
+        {item.message_id ? <Text style={styles.meta}>Message id: {item.message_id}</Text> : null}
+        {preview ? <Text style={styles.details}>Message: {String(preview)}</Text> : null}
         <View style={styles.actions}>
           <Pressable
             style={styles.resolveBtn}
@@ -110,7 +152,7 @@ export default function AdminReportsScreen() {
       ) : reports.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyTitle}>No pending reports</Text>
-          <Text style={styles.emptyText}>User reports from DMs will show up here.</Text>
+          <Text style={styles.emptyText}>Reports from DMs, match chats, and therapist sessions show here.</Text>
         </View>
       ) : (
         <FlatList
@@ -152,8 +194,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e5e7eb',
   },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  reason: { fontSize: 14, fontWeight: '900', color: '#111827', textTransform: 'capitalize' },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
+  typePill: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#7c3aed',
+    backgroundColor: '#ede9fe',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  reason: { fontSize: 14, fontWeight: '900', color: '#111827', textTransform: 'capitalize', flex: 1 },
   when: { fontSize: 11, fontWeight: '800', color: '#9ca3af' },
   meta: { marginTop: 6, fontSize: 12, fontWeight: '700', color: '#374151' },
   details: { marginTop: 10, fontSize: 13, color: '#111827', lineHeight: 18 },

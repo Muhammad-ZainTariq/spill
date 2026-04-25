@@ -1,27 +1,29 @@
 import {
-  createTherapistResource,
-  deleteTherapistResource,
-  extractYoutubeId,
-  listTherapistResources,
+  isResourceAiConfigured,
+  suggestResourceAuthor,
+  suggestResourceCategory,
+  suggestResourceDescription,
+} from '@/app/admin/resourceAiFill';
+import {
+  createTherapistResource, deleteTherapistResource, extractYoutubeId,
   getResourceCategoryLabel,
   isResourceVisibleInTherapistLibrary,
   isResourceVisibleToAppUsers,
+  listTherapistResources,
+  resolvePickerCategoryId,
   RESOURCE_CATEGORIES,
   RESOURCE_CATEGORY_LABELS,
   RESOURCE_TYPES,
-  resolvePickerCategoryId,
   TherapistResource,
   updateTherapistResource,
   uploadTherapistResourceCoverPng,
   uploadTherapistResourcePdf,
   youtubeThumbnailUrl,
 } from '@/app/therapist/_marketplace';
-import {
-  isResourceAiConfigured,
-  suggestResourceAuthor,
-  suggestResourceCategory,
-  suggestResourceDescription,
-} from '@/app/admin/resourceAiFill';
+import { tokens } from '@/app/ui/tokens';
+import { BookCoverImage } from '@/components/LearningResourceWidgets';
+import { MAX_PDF_BASE64_CHARS_FOR_COVER, PdfCoverWebView } from '@/components/PdfCoverWebView';
+import { auth } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -44,10 +46,6 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { auth } from '@/lib/firebase';
-import { tokens } from '@/app/ui/tokens';
-import { BookCoverImage } from '@/components/LearningResourceWidgets';
-import { MAX_PDF_BASE64_CHARS_FOR_COVER, PdfCoverWebView } from '@/components/PdfCoverWebView';
 
 const TYPE_LABELS: Record<string, string> = {
   video: 'YouTube video',

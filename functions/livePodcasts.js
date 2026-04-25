@@ -217,6 +217,29 @@ function generateInviteCode() {
   return randomBytes(4).toString('hex').toUpperCase();
 }
 
+/** Create a row in live_podcast_invite_codes (shared by createRoom + manual host action). */
+async function createInviteRecord({ roomId, hostUid, role, expiresInMinutes, maxUses }) {
+  const rid = String(roomId || '').trim();
+  const uid = String(hostUid || '').trim();
+  const r = String(role || 'co_host').trim();
+  const expM = Math.max(10, Math.min(24 * 60, Number(expiresInMinutes || 120)));
+  const maxU = Math.max(1, Math.min(25, Number(maxUses || 1)));
+  const inviteRef = db.collection(COLLECTIONS.invites).doc();
+  const code = generateInviteCode();
+  await inviteRef.set({
+    room_id: rid,
+    code,
+    role: r,
+    created_by_uid: uid,
+    is_active: true,
+    max_uses: maxU,
+    uses_count: 0,
+    expires_at: new Date(Date.now() + expM * 60 * 1000).toISOString(),
+    created_at: nowIso(),
+  });
+  return { code, role: r, expiresInMinutes: expM, maxUses: maxU };
+}
+
 function sanitizeRoom(data, id) {
   return {
     id,
@@ -544,7 +567,22 @@ exports.createLivePodcastRoom = functions.region('us-central1').https.onCall(asy
       );
   }
   await logAudit(ref.id, uid, 'room_created', null, { status: room.status });
-  return { room: sanitizeRoom(room, ref.id) };
+
+  let coHostInvite = null;
+  try {
+    coHostInvite = await createInviteRecord({
+      roomId: ref.id,
+      hostUid: uid,
+      role: 'co_host',
+      expiresInMinutes: 24 * 60,
+      maxUses: 5,
+    });
+    await logAudit(ref.id, uid, 'invite_created', null, { role: 'co_host', source: 'room_create' });
+  } catch (err) {
+    console.error('createLivePodcastRoom: co-host invite failed', err);
+  }
+
+  return { room: sanitizeRoom(room, ref.id), coHostInvite };
 });
 
 exports.tickLivePodcastScheduledReminders = functions
@@ -699,22 +737,15 @@ exports.createLivePodcastInviteCode = functions.region('us-central1').https.onCa
   const room = roomSnap.data() || {};
   if (room.host_uid !== uid) throw new functions.https.HttpsError('permission-denied', 'Only host can create invite codes.');
 
-  const inviteRef = db.collection(COLLECTIONS.invites).doc();
-  const code = generateInviteCode();
-  const expiresInMinutes = Math.max(10, Math.min(24 * 60, Number(data?.expiresInMinutes || 120)));
-  await inviteRef.set({
-    room_id: roomId,
-    code,
+  const created = await createInviteRecord({
+    roomId,
+    hostUid: uid,
     role,
-    created_by_uid: uid,
-    is_active: true,
-    max_uses: Math.max(1, Math.min(25, Number(data?.maxUses || 1))),
-    uses_count: 0,
-    expires_at: new Date(Date.now() + expiresInMinutes * 60 * 1000).toISOString(),
-    created_at: nowIso(),
+    expiresInMinutes: data?.expiresInMinutes,
+    maxUses: data?.maxUses,
   });
-  await logAudit(roomId, uid, 'invite_created', null, { role });
-  return { code, role, expiresInMinutes };
+  await logAudit(roomId, uid, 'invite_created', null, { role: created.role });
+  return { code: created.code, role: created.role, expiresInMinutes: created.expiresInMinutes };
 });
 
 exports.joinLivePodcastRoom = functions.region('us-central1').https.onCall(async (data, context) => {

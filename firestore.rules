@@ -64,13 +64,29 @@ service cloud.firestore {
       allow update, delete: if request.auth != null && resource.data.user_uid == request.auth.uid;
     }
 
-    // Match requests: only sender or receiver can read/write
+    // Match requests: only sender or receiver can read/write.
+    // Explicit get + list (same condition) avoids ambiguous read evaluation with collection queries.
+    // Updates must not retarget a request to different users (immutable sender_id / receiver_id).
     match /match_requests/{requestId} {
+      function matchRequestParticipant() {
+        return request.auth != null
+          && (
+            resource.data.sender_id == request.auth.uid
+            || resource.data.receiver_id == request.auth.uid
+          );
+      }
+
       allow create: if request.auth != null
         && request.resource.data.sender_id == request.auth.uid;
-      allow read, update, delete: if request.auth != null
-        && (resource.data.sender_id == request.auth.uid
-            || resource.data.receiver_id == request.auth.uid);
+
+      allow get: if matchRequestParticipant();
+      allow list: if matchRequestParticipant();
+
+      allow update: if matchRequestParticipant()
+        && request.resource.data.sender_id == resource.data.sender_id
+        && request.resource.data.receiver_id == resource.data.receiver_id;
+
+      allow delete: if matchRequestParticipant();
     }
 
     // Anonymous matches: only participants can read/write

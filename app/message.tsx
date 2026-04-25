@@ -1,4 +1,5 @@
 import { auth, db } from '@/lib/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { Feather } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -8,6 +9,7 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -30,6 +32,7 @@ import {
   formatTimeAgo,
   getConversations,
   getOrCreateConversation,
+  reportDmUser,
   sendMessage,
 } from './functions';
 
@@ -75,10 +78,13 @@ export default function MessagesTab() {
   }, [selectedConversation, navigation]);
 
   useEffect(() => {
-    setCurrentUserId(auth.currentUser?.uid || null);
+    const unsubAuth = onAuthStateChanged(auth, (u) => setCurrentUserId(u?.uid ?? null));
     loadConversations(true);
     const interval = setInterval(() => loadConversations(false), 10000);
-    return () => clearInterval(interval);
+    return () => {
+      unsubAuth();
+      clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -258,21 +264,6 @@ export default function MessagesTab() {
     );
   };
 
-  // FIXED: Inverted messages + proper alignment
-  const renderMessage = ({ item }: { item: Message }) => {
-    const isMe = item.sender_id === currentUserId;
-    return (
-      <View style={[styles.messageRow, isMe ? styles.messageRowMe : styles.messageRowOther]}>
-        <View style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleOther]}>
-          <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{item.content}</Text>
-          <Text style={[styles.messageTime, isMe && styles.messageTimeMe]}>
-            {formatTimeAgo(item.created_at)}
-          </Text>
-        </View>
-      </View>
-    );
-  };
-
   const renderConversationItem = ({ item }: { item: any }) => {
     const lastMsg = item.last_message && Array.isArray(item.last_message) && item.last_message.length > 0 ? item.last_message[0] : null;
     const displayName = item.otherUser?.display_name || item.otherUser?.anonymous_username || 'Anonymous';
@@ -332,6 +323,68 @@ export default function MessagesTab() {
   // FIXED CHAT VIEW — THIS IS THE ONLY PART THAT CHANGED
   if (selectedConversation) {
     const displayName = selectedConversation.otherUser?.display_name || selectedConversation.otherUser?.anonymous_username || 'Anonymous';
+    const otherUserId = selectedConversation.otherUser?.id as string | undefined;
+
+    const renderMessage = ({ item }: { item: Message }) => {
+      const uid = currentUserId;
+      const sid = item.sender_id != null ? String(item.sender_id) : '';
+      const oid = otherUserId != null ? String(otherUserId) : '';
+      const isMe = !!uid && sid === String(uid);
+      const bubble = (
+        <View style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleOther]}>
+          <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{item.content}</Text>
+          <Text style={[styles.messageTime, isMe && styles.messageTimeMe]}>
+            {formatTimeAgo(item.created_at)}
+          </Text>
+        </View>
+      );
+      const fromPeer = !oid || sid === oid;
+      const canReport =
+        !isMe &&
+        !!uid &&
+        !!sid &&
+        fromPeer &&
+        !!selectedConversation.id &&
+        !!item.id;
+      return (
+        <View style={[styles.messageRow, isMe ? styles.messageRowMe : styles.messageRowOther]}>
+          {canReport ? (
+            <Pressable
+              onLongPress={() => {
+                const submit = (reason: string) => {
+                  void (async () => {
+                    try {
+                      await reportDmUser({
+                        targetUid: String(item.sender_id),
+                        conversationId: selectedConversation.id,
+                        reason,
+                        messageId: item.id,
+                        details: String(item.content || '').slice(0, 2000),
+                      });
+                      Alert.alert('Reported', 'Thanks — our team will review this message.');
+                    } catch (e: any) {
+                      Alert.alert('Could not report', e?.message || 'Try again.');
+                    }
+                  })();
+                };
+                Alert.alert('Report message', 'Moderators can see this message. What’s the issue?', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Harassment', style: 'destructive', onPress: () => submit('harassment') },
+                  { text: 'Self-harm / crisis', style: 'destructive', onPress: () => submit('self_harm') },
+                  { text: 'Spam or scam', style: 'destructive', onPress: () => submit('spam') },
+                  { text: 'Other', onPress: () => submit('other') },
+                ]);
+              }}
+              delayLongPress={380}
+            >
+              {bubble}
+            </Pressable>
+          ) : (
+            bubble
+          )}
+        </View>
+      );
+    };
 
     return (
       <KeyboardAvoidingView
@@ -366,14 +419,14 @@ export default function MessagesTab() {
           {/* Messages — INVERTED + AUTO-SCROLL FIXED */}
           <FlatList
             ref={flatListRef}
-            data={messages}
+            style={{ flex: 1 }}
+            // Inverted: index 0 is rendered at the bottom; fetchMessages is oldest→newest, so reverse to put newest by the input.
+            data={[...messages].slice().reverse()}
             renderItem={renderMessage}
             keyExtractor={(item) => item.id}
             inverted
-            maintainVisibleContentPosition={{
-              minIndexForVisible: 0,
-              autoscrollToTopThreshold: 10,
-            }}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
             contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 20 }}
             onContentSizeChange={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })}
             onLayout={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: false })}

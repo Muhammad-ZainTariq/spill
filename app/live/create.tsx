@@ -20,6 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLivePodcast } from '@/components/live/LivePodcastProvider';
 import { tokens } from '@/app/ui/tokens';
 import {
+  createLivePodcastInviteCode,
   createLivePodcastRoom,
   joinLivePodcastRoom,
   startLivePodcastRoom,
@@ -99,7 +100,7 @@ export default function CreateLivePodcastScreen() {
         setUploadingCover(true);
         uploadedCoverUrl = await uploadLivePodcastCoverFromUri(coverAsset.uri, coverAsset.mimeType);
       }
-      const { room } = await createLivePodcastRoom({
+      const created = await createLivePodcastRoom({
         title: title.trim(),
         topic: topic.trim(),
         description: description.trim(),
@@ -110,6 +111,14 @@ export default function CreateLivePodcastScreen() {
         allow_raise_hand: true,
         allow_listener_speaking: true,
       });
+      const { room } = created;
+      if (!created.coHostInvite?.code) {
+        try {
+          await createLivePodcastInviteCode(room.id, 'co_host');
+        } catch {
+          /* room screen will prompt host to create a code */
+        }
+      }
 
       if (scheduleMode === 'now') {
         await startLivePodcastRoom(room.id);

@@ -17,6 +17,11 @@ import {
 } from 'firebase/firestore';
 import { auth, db, functions, getDownloadURL, ref, storage } from '@/lib/firebase';
 
+function isBenignFirestoreAuthTransitionError(err: unknown): boolean {
+  const code = (err as { code?: string })?.code;
+  return code === 'permission-denied' || code === 'unauthenticated';
+}
+
 export type LivePodcastRoomStatus = 'scheduled' | 'live' | 'ended' | 'cancelled';
 export type LivePodcastRecordMode = 'none' | 'draft' | 'publish';
 export type LivePodcastRole = 'host' | 'co_host' | 'speaker' | 'listener';
@@ -71,6 +76,14 @@ export type LivePodcastSession = {
   serverUrl: string;
   usedFreeAccess?: boolean;
   premiumUnlocked?: boolean;
+};
+
+/** Co-host / speaker invite created with the room or from the host controls. */
+export type LivePodcastCoHostInvite = {
+  code: string;
+  role: string;
+  expiresInMinutes: number;
+  maxUses?: number;
 };
 
 export type LivePodcastTranscriptSegment = {
@@ -143,6 +156,7 @@ export function subscribeLivePodcastRooms(cb: (rooms: LivePodcastRoom[]) => void
         cb(rooms);
       },
       (error) => {
+        if (isBenignFirestoreAuthTransitionError(error)) return;
         if (typeof __DEV__ !== 'undefined' && __DEV__) {
           console.warn('[subscribeLivePodcastRooms]', error);
         }
@@ -175,6 +189,7 @@ export function subscribeLivePodcastRoom(roomId: string, cb: (room: LivePodcastR
         cb(snap.exists() ? normalizeLivePodcastRoom({ id: snap.id, ...(snap.data() as any) } as LivePodcastRoom) : null);
       },
       (error) => {
+        if (isBenignFirestoreAuthTransitionError(error)) return;
         if (typeof __DEV__ !== 'undefined' && __DEV__) {
           console.warn('[subscribeLivePodcastRoom]', error);
         }
@@ -210,6 +225,7 @@ export function subscribeSpeakerRequests(roomId: string, cb: (items: SpeakerRequ
         cb(items);
       },
       (error) => {
+        if (isBenignFirestoreAuthTransitionError(error)) return;
         if (typeof __DEV__ !== 'undefined' && __DEV__) {
           console.warn('[subscribeSpeakerRequests]', error);
         }
@@ -253,6 +269,7 @@ export function subscribeLivePodcastTranscriptSegments(
         cb(items);
       },
       (error) => {
+        if (isBenignFirestoreAuthTransitionError(error)) return;
         if (typeof __DEV__ !== 'undefined' && __DEV__) {
           console.warn('[subscribeLivePodcastTranscriptSegments]', error);
         }
@@ -299,7 +316,7 @@ export async function createLivePodcastRoom(input: {
 }) {
   const fn = httpsCallable(functions, 'createLivePodcastRoom', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
   const { data } = await fn(input as any);
-  return data as { room: LivePodcastRoom };
+  return data as { room: LivePodcastRoom; coHostInvite?: LivePodcastCoHostInvite | null };
 }
 
 async function ensureReadableFileUri(uri: string): Promise<string> {
@@ -454,6 +471,58 @@ export async function createLivePodcastInviteCode(roomId: string, role: 'co_host
   const fn = httpsCallable(functions, 'createLivePodcastInviteCode');
   const { data } = await fn({ roomId, role });
   return data as { code: string; role: string; expiresInMinutes: number };
+}
+
+const LIVE_PODCAST_INVITES_COLLECTION = 'live_podcast_invite_codes';
+
+export type LivePodcastInviteDoc = {
+  id: string;
+  room_id?: string;
+  code?: string;
+  role?: string;
+  is_active?: boolean;
+  max_uses?: number;
+  uses_count?: number;
+  expires_at?: string | null;
+  created_at?: string | null;
+};
+
+function isUsableCoHostInvite(row: LivePodcastInviteDoc): boolean {
+  if (row.is_active === false) return false;
+  if (String(row.role || 'co_host') !== 'co_host') return false;
+  const uses = Number(row.uses_count || 0);
+  const max = Number(row.max_uses || 1);
+  if (uses >= max) return false;
+  const exp = row.expires_at ? Date.parse(String(row.expires_at)) : NaN;
+  if (!Number.isNaN(exp) && exp < Date.now()) return false;
+  return true;
+}
+
+/** Real-time list of active co-host invite codes for a room (newest first). Host UI only. */
+export function subscribeRoomCoHostInvites(
+  roomId: string,
+  onUpdate: (invites: LivePodcastInviteDoc[]) => void
+): () => void {
+  if (!roomId) return () => {};
+  const qRef = query(
+    collection(db, LIVE_PODCAST_INVITES_COLLECTION),
+    where('room_id', '==', roomId),
+    limit(40)
+  );
+  return onSnapshot(
+    qRef,
+    (snap) => {
+      const rows = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) } as LivePodcastInviteDoc))
+        .filter(isUsableCoHostInvite)
+        .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      onUpdate(rows);
+    },
+    (err) => {
+      if (isBenignFirestoreAuthTransitionError(err)) return;
+      console.error('subscribeRoomCoHostInvites', err);
+    }
+  );
 }
 
 export async function requestLivePodcastSpeaker(roomId: string, note?: string) {

@@ -1,38 +1,13 @@
+import { StoryCheckinModal } from '@/components/StoryCheckinModal';
+import { StoryTreeTimeline } from '@/components/StoryTreeTimeline';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { Accelerometer } from 'expo-sensors';
 import { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { StoryCheckinModal } from '@/components/StoryCheckinModal';
-import { StoryTreeTimeline } from '@/components/StoryTreeTimeline';
-import {
-  addGratitude,
-  checkPremiumStatus,
-  deleteGratitude,
-  generateAIGratitude,
-  getAverageMood,
-  getGratitudeCount,
-  getGratitudeEntries,
-  getMoodEntries,
-  getRandomGratitude,
-  GratitudeEntry,
-  MoodEntry,
-} from '../functions';
+import { addGratitude, checkPremiumStatus, deleteGratitude, generateAIGratitude, getAverageMood, getGratitudeCount, getGratitudeEntries, getMoodEntries, getRandomGratitude, GratitudeEntry, MoodEntry, } from '../functions';
 
 export default function MoodGratitudeScreen() {
   const router = useRouter();

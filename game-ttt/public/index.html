@@ -38,6 +38,8 @@
     }
     .btn-replay { background: linear-gradient(180deg, #34d399 0%, #10b981 100%); color: #052e16; }
     .btn-leave { background: rgba(148,163,184,0.12); color: #e5e7eb; border: 1px solid rgba(148,163,184,0.18); }
+    .opponent-left-actions { display: flex; justify-content: center; margin-top: 14px; }
+    .opponent-left-actions.hidden { display: none !important; }
 
     /* iOS-like endgame alert */
     .modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 18px; background: rgba(2,6,23,0.55); backdrop-filter: blur(6px); }
@@ -81,6 +83,9 @@
       <button type="button" class="btn-game-over btn-replay">Replay</button>
       <button type="button" class="btn-game-over btn-leave">Leave</button>
     </div>
+    <div id="opponentLeftActions" class="opponent-left-actions hidden">
+      <button type="button" class="btn-game-over btn-leave">Back to match</button>
+    </div>
     <div id="board" class="board hidden">
       <button type="button" class="cell" data-i="0"></button>
       <button type="button" class="cell" data-i="1"></button>
@@ -100,12 +105,15 @@
     const socketUrlParam = params.get('socketUrl') || params.get('socket') || '';
     const opponentFromUrl = (params.get('opponent') || params.get('opponentName') || '').trim().slice(0, 30);
     const myNameFromUrl = (params.get('name') || params.get('player') || '').trim().slice(0, 30);
+    // Polling first: many mobile WebViews / carriers block or flake on immediate WebSocket upgrade
+    var socketOpts = { path: '/socket.io', transports: ['polling', 'websocket'], upgrade: true, reconnectionAttempts: 8, reconnectionDelay: 500 };
     const socket = socketUrlParam.trim()
-      ? io(socketUrlParam.trim(), { path: '/socket.io', transports: ['websocket', 'polling'] })
-      : io({ transports: ['websocket', 'polling'] });
+      ? io(socketUrlParam.trim(), socketOpts)
+      : io(socketOpts);
     const statusEl = document.getElementById('status');
     const boardEl = document.getElementById('board');
     const gameOverActionsEl = document.getElementById('gameOverActions');
+    const opponentLeftActionsEl = document.getElementById('opponentLeftActions');
     const roomPill = document.getElementById('roomPill');
     let myRole = null;
     let myName = myNameFromUrl || 'You';
@@ -135,6 +143,7 @@
         openEndModal('Game over', youWon ? (myName + ' wins!') : (opponentName + ' wins.'));
       } else {
         gameOverActionsEl.classList.add('hidden');
+        opponentLeftActionsEl.classList.add('hidden');
         setStatus(state.turn === myRole ? 'Your turn' : (opponentName + "'s turn"));
       }
     }
@@ -157,9 +166,14 @@
         setStatus('Open this page with ?room=YOUR_ROOM_ID (e.g. from the Spill app).');
       }
     });
+    socket.on('connect_error', function (err) {
+      setStatus('Can\'t reach game server. Check connection or try again.', 'waiting');
+      console.warn('socket connect_error', err && err.message);
+    });
 
     socket.on('waiting', () => {
       boardEl.classList.add('hidden');
+      opponentLeftActionsEl.classList.add('hidden');
       setStatus('Waiting for opponent... Share the same link with your match.', 'waiting');
     });
 
@@ -174,6 +188,7 @@
       setStatus(state.turn === myRole ? 'Your turn' : (opponentName + "'s turn"));
       endModal.classList.add('hidden');
       if (replayPromptModal) replayPromptModal.classList.add('hidden');
+      opponentLeftActionsEl.classList.add('hidden');
     });
 
     socket.on('state', (data) => {
@@ -182,7 +197,14 @@
     });
 
     socket.on('roomFull', () => setStatus('This room is full.'));
-    socket.on('opponentLeft', () => setStatus('Opponent left.', 'draw'));
+    socket.on('opponentLeft', () => {
+      if (endModal) endModal.classList.add('hidden');
+      if (replayPromptModal) replayPromptModal.classList.add('hidden');
+      boardEl.classList.add('hidden');
+      gameOverActionsEl.classList.add('hidden');
+      opponentLeftActionsEl.classList.remove('hidden');
+      setStatus((opponentName || 'Opponent') + ' left the game.', 'draw');
+    });
 
     socket.on('replayRequested', () => {
       openReplayPromptModal();
@@ -286,6 +308,13 @@
         } else {
           window.close();
         }
+      }
+    });
+    opponentLeftActionsEl.addEventListener('click', () => {
+      if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'leave' }));
+      } else {
+        window.close();
       }
     });
   </script>

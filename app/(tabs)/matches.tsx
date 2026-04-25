@@ -1,37 +1,13 @@
-import {
-    acceptMatchRequest,
-    checkPremiumStatus,
-    declineMatchRequest,
-    generateAITherapyPrompt,
-    getActiveMatch,
-    getAvailableUsers,
-    getPartnerProfile,
-    getPendingMatchRequests,
-    getWeeklySummary,
-    sendMatchRequest,
-    subscribeToActiveMatch,
-    subscribeToMatchRequests,
-} from '@/app/functions';
+import { acceptMatchRequest, checkPremiumStatus, declineMatchRequest, generateAITherapyPrompt, getActiveMatch, getAvailableUsers, getPartnerProfile, getPendingMatchRequests, getWeeklySummary, sendMatchRequest, subscribeToActiveMatch, subscribeToMatchRequests, } from '@/app/functions';
 import { auth } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import { onAuthStateChanged } from 'firebase/auth';
 import { useFocusEffect } from '@react-navigation/native';
+import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { onAuthStateChanged } from 'firebase/auth';
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-    ActivityIndicator,
-    Alert,
-    Dimensions,
-    FlatList,
-    Image,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View
-} from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: screenWidth } = Dimensions.get('window');
@@ -87,6 +63,54 @@ export default function MatchesScreen() {
   const [partnerProfile, setPartnerProfile] = useState<{ display_name?: string; anonymous_username?: string } | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(auth.currentUser?.uid ?? null);
 
+  const loadPremiumStatus = async () => {
+    try {
+      const premium = await checkPremiumStatus();
+      setIsPremium(premium);
+    } finally {
+      setPremiumChecked(true);
+    }
+  };
+
+  const loadAvailableUsers = useCallback(async () => {
+    setLoadingUsers(true);
+    try {
+      const users = await getAvailableUsers(selectedCategory === 'All' ? undefined : selectedCategory);
+      setAvailableUsers(users);
+    } catch (error) {
+      console.error('Error loading users:', error);
+      Alert.alert('Error', 'Failed to load available users. Please try again.');
+    } finally {
+      setLoadingUsers(false);
+    }
+  }, [selectedCategory]);
+
+  const loadPendingRequests = async () => {
+    const uid = currentUserId ?? auth.currentUser?.uid ?? null;
+    if (!uid) {
+      setPendingRequests([]);
+      return;
+    }
+    setLoadingRequests(true);
+    try {
+      const requests = await getPendingMatchRequests(uid);
+      setPendingRequests(requests);
+    } catch (error) {
+      console.error('Error loading requests:', error);
+    } finally {
+      setLoadingRequests(false);
+    }
+  };
+
+  const loadActiveMatch = async () => {
+    try {
+      const match = await getActiveMatch();
+      setActiveMatch(match);
+    } catch (error) {
+      console.error('Error loading active match:', error);
+    }
+  };
+
   useEffect(() => {
     loadPremiumStatus();
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -109,20 +133,23 @@ export default function MatchesScreen() {
   useFocusEffect(
     useCallback(() => {
       loadPremiumStatus();
-    }, [])
+      if (activeTab === 'find_match' && isPremium) {
+        loadAvailableUsers();
+      }
+    }, [activeTab, isPremium, loadAvailableUsers])
   );
 
   useEffect(() => {
     if (activeTab === 'your_match' || activeTab === 'find_match') {
       loadPendingRequests();
     }
-  }, [activeTab]);
+  }, [activeTab, currentUserId]);
 
   useEffect(() => {
     if (activeTab === 'find_match' && isPremium) {
       loadAvailableUsers();
     }
-  }, [activeTab, selectedCategory, isPremium]);
+  }, [activeTab, selectedCategory, isPremium, loadAvailableUsers]);
 
   /** If premium lapses while on Find match, leave the tab and open upgrade. */
   useEffect(() => {
@@ -138,7 +165,7 @@ export default function MatchesScreen() {
       setPendingRequests([]);
       return;
     }
-    const unsub = subscribeToMatchRequests((requests) => {
+    const unsub = subscribeToMatchRequests(currentUserId, (requests) => {
       setPendingRequests(requests);
     });
     return () => unsub();
@@ -168,16 +195,6 @@ export default function MatchesScreen() {
     return () => { cancelled = true; };
   }, [activeMatch?.partnerId]);
 
-
-  const loadPremiumStatus = async () => {
-    try {
-      const premium = await checkPremiumStatus();
-      setIsPremium(premium);
-    } finally {
-      setPremiumChecked(true);
-    }
-  };
-
   const goToFindMatchOrPremium = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     let premium = isPremium;
@@ -191,38 +208,6 @@ export default function MatchesScreen() {
       return;
     }
     setActiveTab('find_match');
-  };
-
-  const loadAvailableUsers = async () => {
-    setLoadingUsers(true);
-    try {
-      console.log('Loading available users, category:', selectedCategory);
-      const users = await getAvailableUsers(selectedCategory === 'All' ? undefined : selectedCategory);
-      console.log('Loaded users:', users.length);
-      setAvailableUsers(users);
-    } catch (error) {
-      console.error('Error loading users:', error);
-      Alert.alert('Error', 'Failed to load available users. Please try again.');
-    } finally {
-      setLoadingUsers(false);
-    }
-  };
-
-  const loadPendingRequests = async () => {
-    setLoadingRequests(true);
-    try {
-      const requests = await getPendingMatchRequests();
-      setPendingRequests(requests);
-    } catch (error) {
-      console.error('Error loading requests:', error);
-    } finally {
-      setLoadingRequests(false);
-    }
-  };
-
-  const loadActiveMatch = async () => {
-    const match = await getActiveMatch();
-    setActiveMatch(match);
   };
 
   // AI Therapy Prompts handlers
@@ -267,7 +252,7 @@ export default function MatchesScreen() {
     if (!isPremium) {
       Alert.alert(
         'Premium Feature',
-        'Sending match requests is available for premium members. Upgrade to connect with others!',
+        'Sending friend requests is available for premium members. Upgrade to connect with others!',
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Go Premium', onPress: () => router.push('/premium' as any) },
@@ -281,7 +266,7 @@ export default function MatchesScreen() {
       const requestId = await sendMatchRequest(userId);
       if (requestId) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        Alert.alert('Request Sent', 'Your match request has been sent!');
+        Alert.alert('Request Sent', 'Your friend request has been sent!');
         loadAvailableUsers(); // Refresh list
       } else {
         Alert.alert('Error', 'Request already sent or failed.');
@@ -300,7 +285,7 @@ export default function MatchesScreen() {
       const success = await acceptMatchRequest(requestId);
       if (success) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        Alert.alert('Match Accepted!', 'You\'ve been matched. Your conversation expires in 30 minutes.');
+        Alert.alert('You\'re connected!', 'You can chat from Your friends.');
         await loadActiveMatch();
         await loadPendingRequests();
       } else {
@@ -331,6 +316,49 @@ export default function MatchesScreen() {
       setLoading(false);
     }
   };
+
+  const renderPendingRequestsSection = (title: string) =>
+    pendingRequests.length === 0 ? null : (
+      <View style={styles.requestsSection}>
+        <Text style={styles.requestsTitle}>{title}</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.requestsScroll}>
+          {pendingRequests.map((request) => {
+            const sender = request.profiles;
+            const senderName = sender?.display_name || sender?.anonymous_username || 'Someone';
+            return (
+              <View key={request.id} style={styles.requestCard}>
+                {sender?.avatar_url ? (
+                  <Image source={{ uri: sender.avatar_url }} style={styles.requestAvatar} />
+                ) : (
+                  <View style={styles.requestAvatarPlaceholder}>
+                    <Text style={styles.requestAvatarText}>
+                      {senderName.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+                <Text style={styles.requestName}>{senderName}</Text>
+                <View style={styles.requestActions}>
+                  <Pressable
+                    style={[styles.requestButton, styles.acceptButton]}
+                    onPress={() => handleAcceptRequest(request.id)}
+                  >
+                    <Feather name="check" size={16} color="#fff" />
+                    <Text style={styles.requestButtonText}>Accept</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.requestButton, styles.declineButton]}
+                    onPress={() => handleDeclineRequest(request.id)}
+                  >
+                    <Feather name="x" size={16} color="#fff" />
+                    <Text style={styles.requestButtonText}>Decline</Text>
+                  </Pressable>
+                </View>
+              </View>
+            );
+          })}
+        </ScrollView>
+      </View>
+    );
 
   const renderUserCard = ({ item }: { item: any }) => {
     const struggles = item.match_struggles || [];
@@ -377,7 +405,7 @@ export default function MatchesScreen() {
           ) : (
             <>
               <Feather name="send" size={16} color="#fff" />
-              <Text style={styles.sendRequestButtonText}>Send Request</Text>
+              <Text style={styles.sendRequestButtonText}>Send friend request</Text>
             </>
           )}
         </Pressable>
@@ -392,9 +420,9 @@ export default function MatchesScreen() {
         <View style={styles.container}>
           <View style={styles.topChrome}>
             <View style={styles.header}>
-              <Text style={styles.headerKicker}>Reflection · Matching</Text>
+              <Text style={styles.headerKicker}>Reflection · Friends</Text>
               <Text style={styles.headerTitle}>
-                Matches <Text style={styles.headerTitleAccent}>&</Text> Therapy
+                Friends <Text style={styles.headerTitleAccent}>&</Text> Therapy
               </Text>
             </View>
             <View style={styles.tabContainer}>
@@ -417,7 +445,7 @@ export default function MatchesScreen() {
             }}
           >
             <Text style={[styles.tabText, activeTab === 'your_match' && styles.tabTextActive]} numberOfLines={1}>
-              Your match
+              Your friends
             </Text>
           </Pressable>
           <Pressable
@@ -427,7 +455,7 @@ export default function MatchesScreen() {
             }}
           >
             <Text style={[styles.tabText, activeTab === 'find_match' && styles.tabTextActive]} numberOfLines={1}>
-              Find match
+              Find friends
             </Text>
           </Pressable>
             </View>
@@ -442,6 +470,24 @@ export default function MatchesScreen() {
           keyboardShouldPersistTaps="handled"
           key="therapy"
         >
+          {pendingRequests.length > 0 && (
+            <Pressable
+              style={styles.matchRequestsBanner}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setActiveTab('your_match');
+              }}
+            >
+              <Feather name="inbox" size={22} color="#ec4899" />
+              <View style={styles.matchRequestsBannerTextWrap}>
+                <Text style={styles.matchRequestsBannerTitle}>Friend requests</Text>
+                <Text style={styles.matchRequestsBannerSub}>
+                  {pendingRequests.length} pending — tap to accept or decline
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={20} color="#9ca3af" />
+            </Pressable>
+          )}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>AI Therapy Prompts</Text>
             <Text style={styles.sectionSubtitle}>
@@ -525,48 +571,7 @@ export default function MatchesScreen() {
         </ScrollView>
       ) : activeTab === 'find_match' ? (
         <View style={styles.matchingContainer}>
-          {/* Pending Requests Section */}
-          {pendingRequests.length > 0 && (
-            <View style={styles.requestsSection}>
-              <Text style={styles.requestsTitle}>Pending Requests ({pendingRequests.length})</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.requestsScroll}>
-                {pendingRequests.map((request) => {
-                  const sender = request.profiles;
-                  const senderName = sender?.display_name || sender?.anonymous_username || 'Someone';
-                  return (
-                    <View key={request.id} style={styles.requestCard}>
-                      {sender?.avatar_url ? (
-                        <Image source={{ uri: sender.avatar_url }} style={styles.requestAvatar} />
-                      ) : (
-                        <View style={styles.requestAvatarPlaceholder}>
-                          <Text style={styles.requestAvatarText}>
-                            {senderName.charAt(0).toUpperCase()}
-                          </Text>
-                        </View>
-                      )}
-                      <Text style={styles.requestName}>{senderName}</Text>
-                      <View style={styles.requestActions}>
-                        <Pressable
-                          style={[styles.requestButton, styles.acceptButton]}
-                          onPress={() => handleAcceptRequest(request.id)}
-                        >
-                          <Feather name="check" size={16} color="#fff" />
-                          <Text style={styles.requestButtonText}>Accept</Text>
-                        </Pressable>
-                        <Pressable
-                          style={[styles.requestButton, styles.declineButton]}
-                          onPress={() => handleDeclineRequest(request.id)}
-                        >
-                          <Feather name="x" size={16} color="#fff" />
-                          <Text style={styles.requestButtonText}>Decline</Text>
-                        </Pressable>
-                      </View>
-                    </View>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          )}
+          {renderPendingRequestsSection(`Pending requests (${pendingRequests.length})`)}
 
           {/* Category Filter */}
           <View style={styles.categoryContainer}>
@@ -608,7 +613,7 @@ export default function MatchesScreen() {
               <Text style={styles.emptySubtext}>
                 {selectedCategory !== 'All'
                   ? `No users found in "${selectedCategory}" category`
-                  : 'No users have opted in for matches yet. Make sure users have enabled "Be Available for Matches" in Settings.'}
+                  : 'No users are available for friends yet. In Settings, turn on “Be Available for Matches” so others can find you.'}
               </Text>
               <Pressable
                 style={styles.refreshButton}
@@ -638,65 +643,26 @@ export default function MatchesScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {pendingRequests.length > 0 && (
-              <View style={styles.requestsSection}>
-                <Text style={styles.requestsTitle}>Pending requests ({pendingRequests.length})</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.requestsScroll}>
-                  {pendingRequests.map((request) => {
-                    const sender = request.profiles;
-                    const senderName = sender?.display_name || sender?.anonymous_username || 'Someone';
-                    return (
-                      <View key={request.id} style={styles.requestCard}>
-                        {sender?.avatar_url ? (
-                          <Image source={{ uri: sender.avatar_url }} style={styles.requestAvatar} />
-                        ) : (
-                          <View style={styles.requestAvatarPlaceholder}>
-                            <Text style={styles.requestAvatarText}>
-                              {senderName.charAt(0).toUpperCase()}
-                            </Text>
-                          </View>
-                        )}
-                        <Text style={styles.requestName}>{senderName}</Text>
-                        <View style={styles.requestActions}>
-                          <Pressable
-                            style={[styles.requestButton, styles.acceptButton]}
-                            onPress={() => handleAcceptRequest(request.id)}
-                          >
-                            <Feather name="check" size={16} color="#fff" />
-                            <Text style={styles.requestButtonText}>Accept</Text>
-                          </Pressable>
-                          <Pressable
-                            style={[styles.requestButton, styles.declineButton]}
-                            onPress={() => handleDeclineRequest(request.id)}
-                          >
-                            <Feather name="x" size={16} color="#fff" />
-                            <Text style={styles.requestButtonText}>Decline</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            )}
+            {renderPendingRequestsSection(`Pending requests (${pendingRequests.length})`)}
             <View style={[styles.emptyContainer, { flex: 1, justifyContent: 'center', minHeight: 280 }]}>
               <Feather name="heart" size={48} color="#d1d5db" />
-              <Text style={styles.emptyText}>No matches yet</Text>
+              <Text style={styles.emptyText}>No friends yet</Text>
               <Text style={styles.emptySubtext}>
                 {isPremium
-                  ? 'Go to Find Match to get matched with someone.'
-                  : 'Upgrade to Premium to browse people and send match requests.'}
+                  ? 'Go to Find friends to connect with someone.'
+                  : 'Upgrade to Premium to browse people and send friend requests.'}
               </Text>
               <Pressable style={styles.refreshButton} onPress={() => void goToFindMatchOrPremium()}>
                 <Feather name="users" size={16} color="#ec4899" />
-                <Text style={styles.refreshButtonText}>{isPremium ? 'Find Match' : 'Go Premium'}</Text>
+                <Text style={styles.refreshButtonText}>{isPremium ? 'Find friends' : 'Go Premium'}</Text>
               </Pressable>
             </View>
           </ScrollView>
         ) : (
           // List of people you're matched with — tap to open chat (full screen, no tab bar)
           <View style={styles.matchListContainer}>
-            <Text style={styles.matchListTitle}>Your matches</Text>
+            {renderPendingRequestsSection(`New requests (${pendingRequests.length})`)}
+            <Text style={styles.matchListTitle}>Your friends</Text>
             <Text style={styles.matchListSubtitle}>Tap to chat or play games</Text>
             <Pressable
               style={styles.matchListCard}
@@ -804,6 +770,32 @@ const styles = StyleSheet.create({
   },
   therapyScrollContent: {
     flexGrow: 1,
+  },
+  matchRequestsBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 20,
+    marginTop: 8,
+    marginBottom: 12,
+    padding: 14,
+    backgroundColor: '#fdf2f8',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#fbcfe8',
+    gap: 12,
+  },
+  matchRequestsBannerTextWrap: {
+    flex: 1,
+  },
+  matchRequestsBannerTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  matchRequestsBannerSub: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginTop: 2,
   },
   section: {
     padding: 20,

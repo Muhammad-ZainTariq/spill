@@ -22,10 +22,10 @@ async function getNotificationsModule(): Promise<typeof import('expo-notificatio
         if (!notificationHandlerInitialized) {
           module.setNotificationHandler({
             handleNotification: async () => ({
-              shouldShowAlert: true,
               shouldPlaySound: true,
               shouldSetBadge: true,
               shouldShowBanner: true,
+              shouldShowList: true,
             }),
           });
           notificationHandlerInitialized = true;
@@ -117,4 +117,15 @@ export async function setNotificationBadgeCount(count: number): Promise<void> {
   try {
     await Notifications.setBadgeCountAsync(count);
   } catch {}
+}
+
+/** Clears banners / tray entries from this app (e.g. after acting on a game invite). */
+export async function dismissAllAppNotifications(): Promise<void> {
+  try {
+    const Notifications = await getNotificationsModule();
+    if (!Notifications) return;
+    await Notifications.dismissAllNotificationsAsync();
+  } catch {
+    /* Expo Go / web / unsupported presenter */
+  }
 }
