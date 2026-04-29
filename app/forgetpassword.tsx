@@ -4,6 +4,7 @@ import { sendPasswordResetEmail } from 'firebase/auth';
 import { useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, StatusBar, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { tokens } from '@/app/ui/tokens';
 import { auth } from '../lib/firebase';
 
 export default function ForgetPassword() {
@@ -43,12 +44,12 @@ export default function ForgetPassword() {
           <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 16 }}>
             <Text style={{ color: 'white', fontSize: 24, fontWeight: '800', marginBottom: 16 }}>Forgot password</Text>
             <View style={{ backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 16, padding: 16 }}>
-              <Text style={{ color: '#374151', fontSize: 14, fontWeight: '700', marginBottom: 8, marginLeft: 4 }}>Email Address</Text>
-              <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 2, borderColor: '#E5E7EB', overflow: 'hidden', marginBottom: 12 }}>
+              <Text style={{ color: tokens.colors.textSecondary, fontSize: 14, fontWeight: '700', marginBottom: 8, marginLeft: 4 }}>Email Address</Text>
+              <View style={{ backgroundColor: tokens.colors.surfaceOverlay, borderRadius: 12, borderWidth: 1, borderColor: tokens.colors.border, overflow: 'hidden', marginBottom: 12 }}>
                 <TextInput
-                  style={{ color: '#111827', paddingHorizontal: 14, paddingVertical: 12, fontSize: 16 }}
-                  placeholder="your.email@example.com"
-                  placeholderTextColor="#9CA3AF"
+                  style={{ color: tokens.colors.text, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontWeight: '400' }}
+                  placeholder="you@example.com"
+                  placeholderTextColor={tokens.colors.textMuted}
                   value={email}
                   onChangeText={setEmail}
                   keyboardType="email-address"

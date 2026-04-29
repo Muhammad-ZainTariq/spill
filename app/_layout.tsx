@@ -11,6 +11,7 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import 'react-native-reanimated';
 
 import { GameInviteProvider } from '@/components/GameInviteProvider';
+import AccountSuspensionGuard from '@/components/AccountSuspensionGuard';
 import { LivePodcastProvider } from '@/components/live/LivePodcastProvider';
 
 export default function RootLayout() {
@@ -22,6 +23,7 @@ export default function RootLayout() {
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <LivePodcastProvider>
           <GameInviteProvider>
+          <AccountSuspensionGuard />
           <Stack>
         <Stack.Screen 
           name="index" 

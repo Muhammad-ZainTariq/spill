@@ -77,15 +77,6 @@ export default function AdminTherapistRequestScreen() {
   const [missingIds, setMissingIds] = useState<string[]>([]);
   const [reviews, setReviews] = useState<TherapistReview[]>([]);
 
-  const docs = useMemo(() => {
-    const list: string[] = [];
-    if (req?.document_url) list.push(String(req.document_url));
-    if (Array.isArray(req?.document_urls)) {
-      for (const u of req.document_urls) if (u && typeof u === 'string') list.push(u);
-    }
-    return [...new Set(list.filter(Boolean))];
-  }, [req]);
-
   const uploadsMap = useMemo(() => {
     const m = (req as any)?.document_uploads;
     return m && typeof m === 'object' ? (m as Record<string, any>) : {};
@@ -395,7 +386,7 @@ export default function AdminTherapistRequestScreen() {
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator size="small" color="#ffffff" />
+          <ActivityIndicator size="small" color={tokens.colors.pink} />
           <Text style={styles.mutedText}>Loading…</Text>
         </View>
       ) : !req ? (
@@ -406,13 +397,19 @@ export default function AdminTherapistRequestScreen() {
       ) : (
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.hero}>
-            <Text style={styles.heroName}>{req.name || 'Therapist'}</Text>
-            <Text style={styles.heroMeta}>
-              {req.email}
-              {req.specialization ? ` • ${req.specialization}` : ''}
-            </Text>
-            <View style={styles.statusPill}>
-              <Text style={styles.statusPillText}>{status.replace(/_/g, ' ')}</Text>
+            <View style={styles.heroIcon}>
+              <Feather name="user-check" size={22} color="#92400E" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.heroLabel}>Review request</Text>
+              <Text style={styles.heroName}>{req.name || 'Therapist'}</Text>
+              <Text style={styles.heroMeta}>
+                {req.email}
+                {req.specialization ? ` • ${req.specialization}` : ''}
+              </Text>
+              <View style={styles.statusPill}>
+                <Text style={styles.statusPillText}>{status.replace(/_/g, ' ')}</Text>
+              </View>
             </View>
           </View>
 
@@ -474,23 +471,6 @@ export default function AdminTherapistRequestScreen() {
                 );
               })}
             </View>
-
-            {docs.length > 0 ? (
-              <View style={{ marginTop: 14 }}>
-                <Text style={[styles.sectionTitle, { marginBottom: 8 }]}>Other uploaded files</Text>
-                <View style={{ gap: 8 }}>
-                  {docs.slice(0, 8).map((u) => (
-                    <Pressable key={u} style={styles.otherDocRow} onPress={() => openDoc(u)}>
-                      <Feather name="file" size={16} color="#111827" />
-                      <Text style={styles.otherDocText} numberOfLines={1}>
-                        {u}
-                      </Text>
-                      <Text style={styles.otherDocOpen}>Open</Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-            ) : null}
           </View>
 
           {reviews.length ? (
@@ -622,7 +602,7 @@ export default function AdminTherapistRequestScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: tokens.colors.pink },
+  safe: { flex: 1, backgroundColor: tokens.colors.bgSecondary },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -630,51 +610,78 @@ const styles = StyleSheet.create({
     paddingHorizontal: tokens.spacing.screenHorizontal,
     paddingTop: 8,
     paddingBottom: 12,
-    backgroundColor: 'transparent',
+    backgroundColor: tokens.colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: tokens.colors.border,
   },
   backButton: {
     width: 40,
     height: 40,
-    borderRadius: tokens.radius.sm,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: tokens.colors.surface,
+    backgroundColor: tokens.colors.surfaceElevated,
   },
-  title: { fontSize: 22, fontWeight: '900', color: '#ffffff' },
-  subtitle: { fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.9)', marginTop: 2 },
+  title: { fontSize: 22, fontWeight: '900', color: tokens.colors.text },
+  subtitle: { fontSize: 12, fontWeight: '700', color: tokens.colors.textMuted, marginTop: 2 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 18 },
-  emptyTitle: { fontSize: 16, fontWeight: '900', color: '#ffffff' },
-  mutedText: { color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: '700' },
+  emptyTitle: { fontSize: 16, fontWeight: '900', color: tokens.colors.text },
+  mutedText: { color: tokens.colors.textMuted, fontSize: 13, fontWeight: '700' },
   content: { padding: tokens.spacing.screenHorizontal, paddingBottom: 24, gap: 12 },
 
   hero: {
-    backgroundColor: tokens.colors.surface,
-    borderRadius: tokens.radius.lg,
-    padding: 14,
+    flexDirection: 'row',
+    gap: 12,
+    backgroundColor: '#FEF3C7',
+    borderRadius: 28,
+    padding: 18,
     borderWidth: 1,
-    borderColor: tokens.colors.border,
+    borderColor: '#FBBF24',
+    shadowColor: '#92400E',
+    shadowOpacity: 0.11,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 3,
   },
-  heroName: { fontSize: 18, fontWeight: '900', color: tokens.colors.text },
-  heroMeta: { marginTop: 4, fontSize: 13, fontWeight: '700', color: tokens.colors.textSecondary },
+  heroIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 19,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: 'rgba(180,83,9,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroLabel: { fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.8, color: '#B45309' },
+  heroName: { marginTop: 4, fontSize: 23, lineHeight: 28, fontWeight: '900', color: tokens.colors.text },
+  heroMeta: { marginTop: 4, fontSize: 13, lineHeight: 18, fontWeight: '800', color: '#92400E' },
   statusPill: {
     alignSelf: 'flex-start',
     marginTop: 10,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.65)',
+    backgroundColor: '#FCE7F3',
+    borderWidth: 1,
+    borderColor: '#F9A8D4',
   },
-  statusPillText: { fontSize: 11, fontWeight: '900', color: tokens.colors.text, textTransform: 'capitalize' },
+  statusPillText: { fontSize: 11, fontWeight: '900', color: '#BE185D', textTransform: 'capitalize' },
 
   sectionCard: {
-    backgroundColor: tokens.colors.surface,
-    borderRadius: tokens.radius.md,
+    backgroundColor: '#fff',
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: tokens.colors.border,
-    padding: 12,
+    borderColor: '#FDE68A',
+    padding: 15,
+    shadowColor: '#92400E',
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
   },
-  sectionTitle: { fontSize: 13, fontWeight: '900', color: tokens.colors.text },
-  helpText: { marginTop: 6, color: tokens.colors.textSecondary, fontSize: 12, lineHeight: 16, fontWeight: '700' },
+  sectionTitle: { fontSize: 15, fontWeight: '900', color: tokens.colors.text },
+  helpText: { marginTop: 6, color: tokens.colors.textSecondary, fontSize: 13, lineHeight: 18, fontWeight: '700' },
   noteText: { marginTop: 10, fontSize: 13, color: tokens.colors.textSecondary, lineHeight: 18, fontWeight: '600' },
 
   docHero: {
@@ -719,10 +726,10 @@ const styles = StyleSheet.create({
 
   messageBox: {
     marginTop: 10,
-    backgroundColor: tokens.colors.surfaceOverlay,
-    borderRadius: tokens.radius.sm,
+    backgroundColor: '#FFFBEB',
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: tokens.colors.border,
+    borderColor: '#FDE68A',
   },
   messageInput: {
     paddingHorizontal: 12,
@@ -736,36 +743,36 @@ const styles = StyleSheet.create({
   checkRow: {
     flexDirection: 'row',
     gap: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: tokens.radius.sm,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: tokens.colors.border,
+    borderColor: '#FDE68A',
     backgroundColor: tokens.colors.surface,
     alignItems: 'flex-start',
   },
-  checkRowSelected: { borderColor: 'rgba(244,114,182,0.35)', backgroundColor: 'rgba(244,114,182,0.08)' },
+  checkRowSelected: { borderColor: '#F9A8D4', backgroundColor: '#FCE7F3' },
   checkTitle: { fontSize: 13, fontWeight: '900', color: tokens.colors.text },
   checkText: { marginTop: 2, fontSize: 12, fontWeight: '600', color: tokens.colors.textSecondary, lineHeight: 16 },
 
   checklistRow: {
     flexDirection: 'row',
     gap: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: tokens.radius.sm,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: tokens.colors.border,
+    borderColor: '#FDE68A',
     backgroundColor: tokens.colors.surface,
     alignItems: 'flex-start',
   },
-  checklistTitle: { fontSize: 13, fontWeight: '900', color: tokens.colors.text },
-  checklistText: { marginTop: 2, fontSize: 12, fontWeight: '600', color: tokens.colors.textSecondary, lineHeight: 16 },
+  checklistTitle: { fontSize: 14, lineHeight: 18, fontWeight: '900', color: tokens.colors.text },
+  checklistText: { marginTop: 3, fontSize: 12, fontWeight: '700', color: tokens.colors.textSecondary, lineHeight: 16 },
   openChip: {
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: 'rgba(244,114,182,0.16)',
+    backgroundColor: '#FCE7F3',
     color: tokens.colors.pink,
     fontSize: 11,
     fontWeight: '900',
@@ -775,31 +782,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: tokens.colors.surfaceOverlay,
-    color: tokens.colors.textSecondary,
+    backgroundColor: '#F1F5F9',
+    color: '#64748B',
     fontSize: 11,
     fontWeight: '900',
     overflow: 'hidden',
   },
-  otherDocRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: tokens.radius.sm,
-    borderWidth: 1,
-    borderColor: tokens.colors.border,
-    backgroundColor: tokens.colors.surface,
-  },
-  otherDocText: { flex: 1, fontSize: 12, fontWeight: '700', color: tokens.colors.text },
-  otherDocOpen: { fontSize: 12, fontWeight: '900', color: tokens.colors.pink },
 
   reviewRow: {
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 14,
-    backgroundColor: tokens.colors.surfaceOverlay,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
   },
   reviewStars: { fontSize: 12, fontWeight: '900', color: tokens.colors.pink },
   reviewDate: { fontSize: 11, fontWeight: '800', color: tokens.colors.textMuted },

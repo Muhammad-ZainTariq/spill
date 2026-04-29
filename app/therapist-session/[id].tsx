@@ -10,7 +10,7 @@ import {
   query,
   setDoc,
 } from 'firebase/firestore';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth, db } from '@/lib/firebase';
@@ -126,6 +126,7 @@ export default function TherapistSessionScreen() {
   const [submittingReview, setSubmittingReview] = useState(false);
   const [didReview, setDidReview] = useState(false);
   const [otherUserName, setOtherUserName] = useState<string | null>(null);
+  const promptedReviewRef = useRef(false);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -133,6 +134,11 @@ export default function TherapistSessionScreen() {
     let unsubSession: (() => void) | null = null;
     let unsubCrisis: (() => void) | null = null;
     setLoading(true);
+    promptedReviewRef.current = false;
+    setDidReview(false);
+    setShowReview(false);
+    setReviewText('');
+    setReviewRating(5);
 
     unsubSession = onSnapshot(
       doc(db, 'therapist_sessions', sessionId),
@@ -358,6 +364,19 @@ export default function TherapistSessionScreen() {
       setSubmittingReview(false);
     }
   };
+
+  useEffect(() => {
+    if (!hasEnded || !isPatient || didReview || promptedReviewRef.current) return;
+    promptedReviewRef.current = true;
+    setShowReview(true);
+    const t = setTimeout(() => {
+      Alert.alert('Session ended', 'How was your therapist session? Your private feedback helps us improve care.', [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Leave review', onPress: () => setShowReview(true) },
+      ]);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [didReview, hasEnded, isPatient]);
 
   if (loading) {
     return (

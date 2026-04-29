@@ -54,9 +54,23 @@ function formatCoHostInviteMeta(inv: LivePodcastInviteDoc): string {
   return `${left} use${left === 1 ? '' : 's'} left${expLabel}`;
 }
 
+function formatRoleLabel(role: string | null) {
+  if (role === 'co_host') return 'Co-host';
+  if (role === 'host') return 'Host';
+  if (role === 'speaker') return 'Speaker';
+  return 'Listener';
+}
+
 export default function LivePodcastRoomScreen() {
-  const params = useLocalSearchParams<{ id?: string }>();
+  const params = useLocalSearchParams<{ id?: string; invite?: string | string[] }>();
   const roomId = String(params.id || '');
+  const inviteFromLink = useMemo(() => {
+    const raw = params.invite;
+    const v = Array.isArray(raw) ? raw[0] : raw;
+    if (!v || typeof v !== 'string') return '';
+    const t = v.trim().toUpperCase();
+    return t.length >= 4 ? t : '';
+  }, [params.invite]);
   const router = useRouter();
   const {
     activeSession,
@@ -82,10 +96,17 @@ export default function LivePodcastRoomScreen() {
   const therapistHomePath = auth.currentUser?.uid ? `/therapist/${auth.currentUser.uid}` : '/live';
 
   const sessionForThisRoom = !!activeSession && activeSession.room.id === roomId;
-  const activeRole = sessionForThisRoom ? activeSession?.role : null;
+  const currentUid = auth.currentUser?.uid || null;
+  const activeRole = useMemo(() => {
+    if (!sessionForThisRoom || !room || !currentUid) return null;
+    if (currentUid === room.host_uid) return 'host';
+    if (Array.isArray(room.co_host_ids) && room.co_host_ids.includes(currentUid)) return 'co_host';
+    if (Array.isArray(room.approved_speaker_uids) && room.approved_speaker_uids.includes(currentUid)) return 'speaker';
+    return activeSession?.role || 'listener';
+  }, [activeSession?.role, currentUid, room, sessionForThisRoom]);
   const isRoomHost = !!room?.host_uid && room.host_uid === auth.currentUser?.uid;
   const canModerate = isRoomHost || activeRole === 'host' || activeRole === 'co_host';
-  const activeRoleLabel = activeRole ? activeRole.replace('_', ' ') : isRoomHost ? 'host' : 'listener';
+  const activeRoleLabel = formatRoleLabel(activeRole || (isRoomHost ? 'host' : 'listener'));
 
   useEffect(() => {
     if (!roomId) return;
@@ -163,7 +184,7 @@ export default function LivePodcastRoomScreen() {
     }
     setBusy(true);
     try {
-      const session = await joinLivePodcastRoom(roomId);
+      const session = await joinLivePodcastRoom(roomId, inviteFromLink || undefined);
       connectToRoom({
         room: session.room,
         role: session.role,
@@ -475,11 +496,15 @@ export default function LivePodcastRoomScreen() {
                 {visibleParticipants.map((item) => {
                   const canOpenMenu =
                     canModerate && !item.isLocal && item.identity !== room?.host_uid;
+                  const isCoHost =
+                    (Array.isArray(room?.co_host_ids) && room.co_host_ids.includes(item.identity)) ||
+                    item.role === 'co_host' ||
+                    (item.isLocal && activeRole === 'co_host');
                   const Chip = canOpenMenu ? Pressable : View;
                   return (
                     <Chip
                       key={item.identity}
-                      style={styles.personChip}
+                      style={[styles.personChip, isCoHost && styles.coHostPersonChip]}
                       onPress={
                         canOpenMenu
                           ? () => setParticipantMenuTarget({ identity: item.identity, name: item.name || 'Participant' })
@@ -489,11 +514,17 @@ export default function LivePodcastRoomScreen() {
                       {item.isSpeaking ? (
                         <SpeakingWave active compact color={tokens.colors.pink} />
                       ) : (
-                        <View style={styles.personDot} />
+                        <View style={[styles.personDot, isCoHost && styles.coHostPersonDot]} />
                       )}
                       <Text style={styles.personText} numberOfLines={1}>
                         {item.name}
                       </Text>
+                      {isCoHost ? (
+                        <View style={styles.coHostMiniBadge}>
+                          <Feather name="star" size={10} color="#92400e" />
+                          <Text style={styles.coHostMiniBadgeText}>Co-host</Text>
+                        </View>
+                      ) : null}
                       {item.isLocal ? <Text style={styles.meTag}>You</Text> : null}
                     </Chip>
                   );
@@ -986,9 +1017,34 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: tokens.colors.surfaceOverlay,
   },
+  coHostPersonChip: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FBBF24',
+    shadowColor: '#92400e',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
   personDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: tokens.colors.textMuted },
+  coHostPersonDot: { backgroundColor: '#F59E0B' },
   personDotLive: { backgroundColor: tokens.colors.pink },
   personText: { maxWidth: 140, fontSize: 12, fontWeight: '800', color: tokens.colors.text },
+  coHostMiniBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(245,158,11,0.16)',
+  },
+  coHostMiniBadgeText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#92400e',
+  },
   meTag: { fontSize: 11, fontWeight: '900', color: tokens.colors.pink },
   waveInfoRow: {
     marginTop: 4,

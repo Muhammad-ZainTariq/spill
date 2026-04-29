@@ -1,6 +1,12 @@
 import { MAX_PDF_BASE64_CHARS_FOR_COVER, PdfCoverWebView } from '@/components/PdfCoverWebView';
 import { BookCoverImage } from '@/components/LearningResourceWidgets';
 import {
+  isResourceAiConfigured,
+  suggestResourceAuthor,
+  suggestResourceCategory,
+  suggestResourceDescription,
+} from '@/app/admin/resourceAiFill';
+import {
   createTherapistResource,
   deleteTherapistResource,
   extractYoutubeId,
@@ -75,6 +81,7 @@ export default function TherapistResourceEditScreen() {
   const [visibleToAppUsers, setVisibleToAppUsers] = useState(true);
   const [visibleInTherapistLibrary, setVisibleInTherapistLibrary] = useState(true);
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
+  const [aiField, setAiField] = useState<null | 'description' | 'author' | 'category'>(null);
   const [pendingCoverPdf, setPendingCoverPdf] = useState<string | null>(null);
   const [coverJobKey, setCoverJobKey] = useState(0);
   const coverResolveRef = useRef<((png: string | null) => void) | null>(null);
@@ -101,10 +108,22 @@ export default function TherapistResourceEditScreen() {
         }
         const r = { id: snap.id, ...(snap.data() as any) } as TherapistResource;
         const uid = auth.currentUser?.uid;
+        if (!uid) {
+          Alert.alert('Sign in required', 'Log in to edit resources.');
+          router.back();
+          return;
+        }
+        const [userSnap, therapistSnap] = await Promise.all([
+          getDoc(doc(db, 'users', uid)),
+          getDoc(doc(db, 'therapist_profiles', uid)),
+        ]);
+        const uData = userSnap.data();
+        const isStaffAdmin = !!(uData?.is_admin || uData?.is_staff);
+        const isTherapistAccount = therapistSnap.exists();
         const isOwnTherapistItem =
-          r.created_by_role === 'therapist' && !!uid && r.created_by_uid === uid;
-        if (!isOwnTherapistItem) {
-          Alert.alert('Cannot edit', 'You can only edit learning resources you created.');
+          r.created_by_role === 'therapist' && r.created_by_uid === uid;
+        if (!isStaffAdmin && !isTherapistAccount && !isOwnTherapistItem) {
+          Alert.alert('Cannot edit', 'You can only edit resources from the therapist library when your account is set up as a therapist.');
           router.back();
           return;
         }
@@ -187,6 +206,96 @@ export default function TherapistResourceEditScreen() {
     }
   };
 
+  const pdfKind = type === 'article' ? 'article' : 'book';
+
+  const handleAiDescription = async () => {
+    if (!title.trim()) {
+      Alert.alert('Add a title first', 'Enter the book or article title, then use AI to fill the description.');
+      return;
+    }
+    if (!isResourceAiConfigured()) {
+      Alert.alert(
+        'AI not configured',
+        'Add openaiApiKey to app.json extra (same as other AI features in this app).'
+      );
+      return;
+    }
+    setAiField('description');
+    try {
+      const text = await suggestResourceDescription(title.trim(), pdfKind);
+      if (text) {
+        setDescription(text);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        Alert.alert('Could not generate', 'Try again or write the description yourself.');
+      }
+    } catch (e: any) {
+      Alert.alert('AI failed', e?.message || 'Something went wrong.');
+    } finally {
+      setAiField(null);
+    }
+  };
+
+  const handleAiAuthor = async () => {
+    if (!title.trim()) {
+      Alert.alert('Add a title first', 'Enter the title, then use AI to suggest the author.');
+      return;
+    }
+    if (!isResourceAiConfigured()) {
+      Alert.alert(
+        'AI not configured',
+        'Add openaiApiKey to app.json extra (same as other AI features in this app).'
+      );
+      return;
+    }
+    setAiField('author');
+    try {
+      const text = await suggestResourceAuthor(title.trim(), pdfKind);
+      if (text) {
+        setAuthor(text);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        Alert.alert('Could not guess author', 'Enter the author manually if you know it.');
+      }
+    } catch (e: any) {
+      Alert.alert('AI failed', e?.message || 'Something went wrong.');
+    } finally {
+      setAiField(null);
+    }
+  };
+
+  const handleAiCategory = async () => {
+    if (!title.trim() && !description.trim()) {
+      Alert.alert('Add a title or description', 'AI needs something to read to pick a category.');
+      return;
+    }
+    if (!isResourceAiConfigured()) {
+      Alert.alert(
+        'AI not configured',
+        'Add openaiApiKey to app.json extra (same as other AI features in this app).'
+      );
+      return;
+    }
+    setAiField('category');
+    try {
+      const id = await suggestResourceCategory({
+        title: title.trim() || 'Untitled',
+        description: description.trim() || null,
+        resourceType: type,
+      });
+      if (id && RESOURCE_CATEGORIES.includes(id)) {
+        setCategory(id);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        Alert.alert('Could not categorize', 'Pick a category from the list yourself.');
+      }
+    } catch (e: any) {
+      Alert.alert('AI failed', e?.message || 'Something went wrong.');
+    } finally {
+      setAiField(null);
+    }
+  };
+
   const handleSave = async () => {
     const uid = auth.currentUser?.uid;
     if (!uid) {
@@ -243,7 +352,10 @@ export default function TherapistResourceEditScreen() {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         Alert.alert('Added', 'Your resource was saved.');
       }
-      router.back();
+      router.replace({
+        pathname: '/therapist/resources',
+        params: { section: type },
+      });
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'Could not save.');
     } finally {
@@ -261,7 +373,10 @@ export default function TherapistResourceEditScreen() {
         onPress: async () => {
           try {
             await deleteTherapistResource(editId);
-            router.back();
+            router.replace({
+              pathname: '/therapist/resources',
+              params: { section: type },
+            });
           } catch (e: any) {
             Alert.alert('Error', e?.message || 'Could not delete.');
           }
@@ -324,12 +439,26 @@ export default function TherapistResourceEditScreen() {
           placeholder="e.g. Introduction to CBT"
           placeholderTextColor={tokens.colors.textMuted}
         />
-        <Text style={styles.label}>Description</Text>
+        <View style={styles.labelRow}>
+          <Text style={styles.labelInline}>Description</Text>
+          {(type === 'book' || type === 'article') && (
+            <Pressable
+              onPress={handleAiDescription}
+              disabled={saving || aiField !== null}
+              style={[styles.aiPill, aiField === 'description' && styles.aiPillLoading]}
+            >
+              {aiField === 'description' ? (
+                <ActivityIndicator size="small" color="#ec4899" style={{ marginRight: 4 }} />
+              ) : null}
+              <Text style={styles.aiPillText}>AI</Text>
+            </Pressable>
+          )}
+        </View>
         <TextInput
           style={[styles.input, styles.inputArea]}
           value={description}
           onChangeText={setDescription}
-          placeholder="Brief summary"
+          placeholder="Brief summary (fill title first, then tap AI for books/articles)"
           placeholderTextColor={tokens.colors.textMuted}
           multiline
         />
@@ -383,7 +512,19 @@ export default function TherapistResourceEditScreen() {
             ) : null}
           </>
         )}
-        <Text style={styles.label}>Category</Text>
+        <View style={styles.labelRow}>
+          <Text style={styles.labelInline}>Category</Text>
+          <Pressable
+            onPress={handleAiCategory}
+            disabled={saving || aiField !== null}
+            style={[styles.aiPill, aiField === 'category' && styles.aiPillLoading]}
+          >
+            {aiField === 'category' ? (
+              <ActivityIndicator size="small" color="#ec4899" style={{ marginRight: 4 }} />
+            ) : null}
+            <Text style={styles.aiPillText}>AI</Text>
+          </Pressable>
+        </View>
         <Pressable
           style={[styles.dropdown, saving && { opacity: 0.6 }]}
           onPress={() => !saving && setCategoryPickerOpen(true)}
@@ -394,7 +535,21 @@ export default function TherapistResourceEditScreen() {
           </Text>
           <Feather name="chevron-down" size={20} color={tokens.colors.textSecondary} />
         </Pressable>
-        <Text style={styles.label}>Author (optional)</Text>
+        <View style={styles.labelRow}>
+          <Text style={styles.labelInline}>Author (optional)</Text>
+          {(type === 'book' || type === 'article') && (
+            <Pressable
+              onPress={handleAiAuthor}
+              disabled={saving || aiField !== null}
+              style={[styles.aiPill, aiField === 'author' && styles.aiPillLoading]}
+            >
+              {aiField === 'author' ? (
+                <ActivityIndicator size="small" color="#ec4899" style={{ marginRight: 4 }} />
+              ) : null}
+              <Text style={styles.aiPillText}>AI</Text>
+            </Pressable>
+          )}
+        </View>
         <TextInput
           style={styles.input}
           value={author}
@@ -500,6 +655,26 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 48 },
   label: { fontSize: 13, fontWeight: '700', color: tokens.colors.textSecondary, marginBottom: 8, marginTop: 12 },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  labelInline: { fontSize: 13, fontWeight: '700', color: tokens.colors.textSecondary },
+  aiPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: '#f3f4f6',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  aiPillLoading: { opacity: 0.8 },
+  aiPillText: { color: '#ec4899', fontSize: 12, fontWeight: '700' },
   hintMuted: { fontSize: 12, color: tokens.colors.textMuted, marginBottom: 8, marginTop: -4 },
   input: {
     borderWidth: 1,

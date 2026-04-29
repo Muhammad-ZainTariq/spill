@@ -56,7 +56,7 @@ export function LivePodcastOverlay({
   activeSession: { room: LivePodcastRoom; role: LivePodcastRole } | null;
   connectToRoom: (session: { room: LivePodcastRoom; role: LivePodcastRole; token: string; serverUrl: string }) => void;
   leaveRoom: () => void;
-  participants: { identity: string; name: string; isLocal: boolean; isSpeaking: boolean; audioLevel: number }[];
+  participants: { identity: string; name: string; role?: LivePodcastRole | null; isLocal: boolean; isSpeaking: boolean; audioLevel: number }[];
   connectionState: string;
   micEnabled: boolean;
   playbackMuted: boolean;
@@ -75,7 +75,14 @@ export function LivePodcastOverlay({
   const [participantMenuTarget, setParticipantMenuTarget] = useState<{ identity: string; name: string } | null>(null);
 
   const sessionForThisRoom = !!activeSession && !!roomId && activeSession.room.id === roomId;
-  const activeRole = sessionForThisRoom ? activeSession?.role : null;
+  const currentUid = auth.currentUser?.uid || null;
+  const activeRole = useMemo(() => {
+    if (!sessionForThisRoom || !room || !currentUid) return null;
+    if (currentUid === room.host_uid) return 'host';
+    if (Array.isArray(room.co_host_ids) && room.co_host_ids.includes(currentUid)) return 'co_host';
+    if (Array.isArray(room.approved_speaker_uids) && room.approved_speaker_uids.includes(currentUid)) return 'speaker';
+    return activeSession?.role || 'listener';
+  }, [activeSession?.role, currentUid, room, sessionForThisRoom]);
   const isRoomHost = !!room?.host_uid && room.host_uid === auth.currentUser?.uid;
   const canModerate = isRoomHost || activeRole === 'host' || activeRole === 'co_host';
   const pendingRequests = useMemo(
@@ -290,11 +297,15 @@ export function LivePodcastOverlay({
                     canModerate &&
                     !participant.isLocal &&
                     participant.identity !== room?.host_uid;
+                  const isCoHost =
+                    (Array.isArray(room?.co_host_ids) && room.co_host_ids.includes(participant.identity)) ||
+                    participant.role === 'co_host' ||
+                    (participant.isLocal && activeRole === 'co_host');
                   const CardWrap = canOpenMenu ? Pressable : View;
                   return (
                     <CardWrap
                       key={participant.identity}
-                      style={styles.personCard}
+                      style={[styles.personCard, isCoHost && styles.coHostPersonCard]}
                       onPress={
                         canOpenMenu
                           ? () =>
@@ -318,17 +329,26 @@ export function LivePodcastOverlay({
                         active={participant.isSpeaking && !playbackMuted}
                         level={participant.audioLevel}
                         compact
-                        color={tokens.colors.pink}
+                        color={isCoHost ? '#F59E0B' : tokens.colors.pink}
                       />
-                      <Text style={styles.personRole}>
+                      <Text style={[styles.personRole, isCoHost && styles.coHostPersonRole]}>
                         {participant.isLocal
-                          ? 'You'
+                          ? isCoHost
+                            ? 'You · Co-host'
+                            : 'You'
                           : participant.identity === room?.host_uid
                             ? 'Host'
-                            : room?.approved_speaker_uids?.includes(participant.identity)
+                            : isCoHost
+                              ? 'Co-host'
+                              : room?.approved_speaker_uids?.includes(participant.identity)
                               ? 'Speaker'
                               : 'Listener'}
                       </Text>
+                      {isCoHost ? (
+                        <View style={styles.coHostCrown}>
+                          <Feather name="star" size={9} color="#92400e" />
+                        </View>
+                      ) : null}
                     </View>
                     </CardWrap>
                   );
@@ -812,6 +832,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
+  coHostPersonCard: {
+    paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FBBF24',
+    shadowColor: '#92400e',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
   personAvatar: {
     width: 68,
     height: 68,
@@ -845,6 +877,18 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#64748b',
+  },
+  coHostPersonRole: {
+    fontWeight: '900',
+    color: '#92400e',
+  },
+  coHostCrown: {
+    width: 17,
+    height: 17,
+    borderRadius: 9,
+    backgroundColor: 'rgba(245,158,11,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   previewCard: {
     alignItems: 'center',

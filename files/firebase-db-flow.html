@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spill Firebase Collections Flow</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <style>
+    :root {
+      --pink: #ec4899;
+      --pink-soft: #fce7f3;
+      --yellow: #fef3c7;
+      --yellow-strong: #fbbf24;
+      --amber: #92400e;
+      --ink: #111827;
+      --muted: #64748b;
+      --blue: #38bdf8;
+      --green: #10b981;
+      --surface: #ffffff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      padding: 24px 16px 32px;
+      font-family: "Times New Roman", Times, serif;
+      font-size: 13pt;
+      line-height: 1.55;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(236, 72, 153, 0.18), transparent 30rem),
+        radial-gradient(circle at bottom right, rgba(251, 191, 36, 0.32), transparent 32rem),
+        linear-gradient(135deg, #fff7ed 0%, #fff1f7 48%, #fffbeb 100%);
+    }
+
+    .topbar,
+    .page {
+      width: min(1560px, 98vw);
+      margin: 0 auto;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+      padding: 12px 14px;
+      border: 1px solid rgba(249, 168, 212, 0.75);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.74);
+      box-shadow: 0 12px 28px rgba(190, 24, 93, 0.08);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      font-size: 13pt;
+      color: var(--ink);
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--pink), #f9a8d4);
+      color: #fff;
+      box-shadow: 0 10px 20px rgba(236, 72, 153, 0.22);
+      font-weight: 700;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13pt;
+    }
+
+    .download-btn {
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: var(--pink);
+      color: #fff;
+      font-size: 12pt;
+      font-weight: 700;
+      box-shadow: 0 10px 22px rgba(236, 72, 153, 0.24);
+    }
+
+    .download-btn:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    .hint-chip {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 13px;
+      border-radius: 999px;
+      border: 1px solid #fde68a;
+      background: #fffbeb;
+      color: var(--amber);
+      font-size: 11pt;
+      font-weight: 700;
+    }
+
+    .hero {
+      max-width: 56em;
+      margin: 0 auto 12px;
+      text-align: center;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      padding: 6px 10px;
+      border: 1px solid #f9a8d4;
+      border-radius: 999px;
+      background: var(--pink-soft);
+      color: #be185d;
+      font-size: 11pt;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 10px 0 6px;
+      font-size: clamp(20pt, 3.4vw, 26pt);
+      line-height: 1.15;
+      letter-spacing: -0.03em;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .subtitle {
+      max-width: 56em;
+      margin: 0 auto;
+      color: var(--amber);
+      font-size: 12pt;
+      line-height: 1.4;
+      font-weight: 600;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .summary-card {
+      padding: 12px;
+      border-radius: 24px;
+      border: 1px solid rgba(251, 191, 36, 0.55);
+      background: rgba(255, 255, 255, 0.78);
+      box-shadow: 0 12px 26px rgba(146, 64, 14, 0.08);
+    }
+
+    .summary-value {
+      font-size: 24pt;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .summary-label {
+      margin-top: 4px;
+      color: var(--amber);
+      font-size: 10pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    /* Flat surface for PNG export — avoids html2canvas glitches with gradients/blur */
+    .export-surface {
+      background: #fffdf8;
+      border: 1px solid #fde68a;
+      border-radius: 28px;
+      padding: 14px 18px;
+      margin-bottom: 14px;
+      box-shadow: 0 8px 28px rgba(146, 64, 14, 0.08);
+    }
+
+    .export-title {
+      margin: 0 0 4px;
+      font-size: clamp(17pt, 2.4vw, 21pt);
+      font-weight: 700;
+      color: var(--ink);
+      text-align: center;
+    }
+
+    .export-sub {
+      margin: 0 0 12px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 11pt;
+      font-weight: 600;
+      line-height: 1.4;
+      max-width: 58em;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .diagram-card,
+    .details-card {
+      position: relative;
+      padding: 14px;
+      border: 1px solid #fde68a;
+      border-radius: 24px;
+      background: #ffffff;
+      overflow: hidden;
+    }
+
+    .diagram-card--export {
+      border: 1px solid #f9a8d4;
+      background: #fffefb;
+    }
+
+    .export-surface--details .details-card {
+      margin-top: 0;
+    }
+
+    .section-header {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+      padding: 4px 6px 10px;
+    }
+
+    .section-title {
+      margin: 0;
+      font-size: 18pt;
+      font-weight: 700;
+    }
+
+    .section-copy {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 11pt;
+      line-height: 1.4;
+      font-weight: 600;
+    }
+
+    .section-pill {
+      flex: 0 0 auto;
+      padding: 7px 10px;
+      border-radius: 999px;
+      border: 1px solid #f9a8d4;
+      background: var(--pink-soft);
+      color: #be185d;
+      font-size: 11pt;
+      font-weight: 700;
+    }
+
+    .mermaid {
+      position: relative;
+      z-index: 1;
+      min-width: 1100px;
+      min-height: 480px;
+      padding: 14px;
+      border: 1px solid #fde68a;
+      border-radius: 20px;
+      background: #ffffff;
+      overflow-x: auto;
+    }
+
+    .mermaid svg .node rect,
+    .mermaid svg .cluster rect {
+      rx: 18px !important;
+      ry: 18px !important;
+    }
+
+    .mermaid svg .nodeLabel,
+    .mermaid svg .edgeLabel {
+      font-weight: 700;
+    }
+
+    .details-card {
+      margin-top: 14px;
+    }
+
+    .collection-grid {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .collection-card {
+      min-height: 136px;
+      padding: 11px;
+      border: 1px solid #fde68a;
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
+    }
+
+    .collection-name {
+      display: inline-flex;
+      padding: 5px 8px;
+      border-radius: 999px;
+      background: var(--yellow);
+      border: 1px solid #fde68a;
+      color: var(--amber);
+      font-size: 11pt;
+      font-weight: 700;
+      font-family: "Times New Roman", Times, serif;
+    }
+
+    .collection-card h3 {
+      margin: 8px 0 5px;
+      font-size: 14pt;
+      font-weight: 700;
+    }
+
+    .collection-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11pt;
+      line-height: 1.4;
+      font-weight: 600;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid rgba(251, 191, 36, 0.45);
+      color: var(--muted);
+      font-size: 12pt;
+      font-weight: 600;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .dot.pink { background: var(--pink); }
+    .dot.yellow { background: var(--yellow-strong); }
+    .dot.green { background: var(--green); }
+    .dot.blue { background: var(--blue); }
+
+    .footer-note {
+      text-align: center;
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 12pt;
+      font-weight: 600;
+      line-height: 1.4;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      z-index: 10;
+      transform: translateX(-50%) translateY(20px);
+      opacity: 0;
+      padding: 12px 16px;
+      border-radius: 999px;
+      background: #111827;
+      color: #fff;
+      font-family: "Times New Roman", Times, serif;
+      font-size: 12pt;
+      font-weight: 700;
+      box-shadow: 0 16px 36px rgba(17, 24, 39, 0.22);
+      transition: opacity 180ms ease, transform 180ms ease;
+      pointer-events: none;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 980px) {
+      .summary-grid,
+      .collection-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 680px) {
+      body { padding: 24px 12px; }
+      .topbar,
+      .section-header {
+        align-items: stretch;
+        flex-direction: column;
+        border-radius: 24px;
+      }
+      .actions { width: 100%; }
+      .download-btn,
+      .hint-chip {
+        justify-content: center;
+        flex: 1;
+      }
+      .summary-grid,
+      .collection-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media print {
+      .topbar,
+      .toast { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark">S</span>
+      <span>Spill Firebase Database Flow</span>
+    </div>
+    <div class="actions">
+      <span class="hint-chip">Two PNGs · diagram + collection details</span>
+      <button id="downloadPngDiagram" class="download-btn" type="button">Save diagram PNG</button>
+      <button id="downloadPngDetails" class="download-btn" type="button">Save details PNG</button>
+    </div>
+  </div>
+
+  <main class="page">
+    <section class="hero">
+      <div class="eyebrow">Firestore architecture</div>
+      <h1>Firebase Collections Flow</h1>
+      <p class="subtitle">
+        Main Firestore collections and relationships. Exported PNG uses a flat cream panel so captures match screen without gradient artefacts.
+      </p>
+    </section>
+
+    <section class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-value">6</div>
+        <div class="summary-label">Main domains</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-value">30+</div>
+        <div class="summary-label">Firestore collections</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-value">3</div>
+        <div class="summary-label">Access layers</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-value">CF</div>
+        <div class="summary-label">Trusted writes</div>
+      </div>
+    </section>
+
+    <div id="captureDiagram" class="export-surface">
+      <h2 class="export-title">Spill — Firestore collection relationships</h2>
+      <p class="export-sub">
+        Arrows show logical linkage (ownership / foreign keys), not every read path. Functions and Storage update docs outside pure client rules.
+      </p>
+
+      <section class="diagram-card diagram-card--export">
+        <div class="mermaid">
+flowchart TB
+  Hub["Cloud Firestore<br/>primary database"]
+
+  subgraph A["Identity + social"]
+    users["users"]
+    user_blocks["user_blocks"]
+    followers["followers"]
+    match_requests["match_requests"]
+    anonymous_matches["anonymous_matches"]
+    match_messages["match_messages"]
+    expo_push_tokens["expo_push_tokens"]
+  end
+
+  subgraph B["Feed"]
+    posts["posts"]
+    comments["comments"]
+    postVotes["postVotes"]
+  end
+
+  subgraph C["Chat"]
+    conversations["conversations"]
+    messages["messages"]
+  end
+
+  subgraph D["Safety"]
+    reports["reports"]
+    notifications["notifications"]
+  end
+
+  subgraph E["Groups + challenges"]
+    groups["groups"]
+    group_members["group_members"]
+    group_invitations["group_invitations"]
+    group_activities["group_activities"]
+    group_streak_proofs["group_streak_proofs"]
+    group_messages["group_messages"]
+    used_challenge_ideas["used_challenge_ideas"]
+  end
+
+  subgraph F["Therapists"]
+    therapist_verification_requirements["therapist_verification_requirements"]
+    therapist_onboarding_requests["therapist_onboarding_requests"]
+    therapist_profiles["therapist_profiles"]
+    therapist_slots["therapist_slots"]
+    therapist_booking_requests["therapist_booking_requests"]
+    therapist_sessions["therapist_sessions"]
+    therapist_reviews["therapist_reviews"]
+    therapist_resources["therapist_resources"]
+  end
+
+  subgraph G["Live podcasts"]
+    live_podcast_rooms["live_podcast_rooms"]
+    live_podcast_transcripts["…/transcripts"]
+    live_podcast_speaker_requests["live_podcast_speaker_requests"]
+    live_podcast_invite_codes["live_podcast_invite_codes"]
+    live_podcast_reminders["live_podcast_reminders"]
+    live_podcast_audit_logs["live_podcast_audit_logs"]
+  end
+
+  Hub --- users
+  users --> posts
+  users --> conversations
+  users --> groups
+  users --> therapist_profiles
+  users --> user_blocks
+  users --> followers
+  users --> match_requests
+  users --> expo_push_tokens
+  posts --> comments
+  posts --> postVotes
+  conversations --> messages
+  users --> reports
+  reports --> notifications
+  groups --> group_members
+  groups --> group_invitations
+  groups --> group_activities
+  groups --> group_streak_proofs
+  groups --> group_messages
+  groups --> used_challenge_ideas
+  anonymous_matches --> match_messages
+  therapist_onboarding_requests --> therapist_profiles
+  therapist_profiles --> therapist_slots
+  therapist_slots --> therapist_booking_requests
+  therapist_booking_requests --> therapist_sessions
+  therapist_sessions --> therapist_reviews
+  therapist_profiles --> therapist_resources
+  live_podcast_rooms --> live_podcast_transcripts
+  live_podcast_rooms --> live_podcast_speaker_requests
+  live_podcast_rooms --> live_podcast_invite_codes
+  live_podcast_rooms --> live_podcast_reminders
+  live_podcast_rooms -. audit trail .-> live_podcast_audit_logs
+
+  classDef hub fill:#FCE7F3,stroke:#EC4899,stroke-width:3px,color:#111827
+  classDef c1 fill:#FFF7ED,stroke:#F59E0B,stroke-width:2px,color:#111827
+  classDef c2 fill:#ECFDF5,stroke:#10B981,stroke-width:2px,color:#111827
+  classDef c3 fill:#E0F2FE,stroke:#38BDF8,stroke-width:2px,color:#111827
+  classDef c4 fill:#F5F3FF,stroke:#8B5CF6,stroke-width:2px,color:#111827
+
+  class Hub hub
+  class users,user_blocks,followers,match_requests,anonymous_matches,match_messages,expo_push_tokens c1
+  class posts,comments,postVotes,conversations,messages,reports,notifications c1
+  class groups,group_members,group_invitations,group_activities,group_streak_proofs,group_messages,used_challenge_ideas c2
+  class therapist_verification_requirements,therapist_onboarding_requests,therapist_profiles,therapist_slots,therapist_booking_requests,therapist_sessions,therapist_reviews,therapist_resources c3
+  class live_podcast_rooms,live_podcast_transcripts,live_podcast_speaker_requests,live_podcast_invite_codes,live_podcast_reminders,live_podcast_audit_logs c4
+
+  linkStyle default stroke:#92400e,stroke-width:2px,stroke-dasharray:8 5
+        </div>
+      </section>
+
+      <div class="legend">
+        <span><i class="dot pink"></i>Client + admin actors</span>
+        <span><i class="dot yellow"></i>Rules, functions, storage</span>
+        <span><i class="dot blue"></i>Identity, therapy, live data</span>
+        <span><i class="dot green"></i>Groups and external managed flows</span>
+      </div>
+    </div>
+
+    <div id="captureDetails" class="export-surface export-surface--details">
+      <section class="details-card">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Collection details</h2>
+          <p class="section-copy">Grouped by the major product areas in your current app.</p>
+        </div>
+        <div class="section-pill">Rules-backed DB map</div>
+      </div>
+
+      <div class="collection-grid">
+        <article class="collection-card">
+          <span class="collection-name">users</span>
+          <h3>Identity, roles, suspension</h3>
+          <p>Stores profile info, `is_admin`, `is_staff`, therapist flags, push token, blocked/suspended account state.</p>
+        </article>
+        <article class="collection-card">
+          <span class="collection-name">posts / comments / postVotes</span>
+          <h3>Feed data</h3>
+          <p>Posts, replies, vote records, toxicity flag fields, hidden/approved moderation states.</p>
+        </article>
+        <article class="collection-card">
+          <span class="collection-name">conversations / messages</span>
+          <h3>DM system</h3>
+          <p>Participant conversation docs plus message docs for anonymous DMs, therapist sharing, and shared posts.</p>
+        </article>
+        <article class="collection-card">
+          <span class="collection-name">reports / notifications</span>
+          <h3>Moderation and alerts</h3>
+          <p>User-created reports, admin resolution workflow, warning notifications, booking/game/moderation alerts.</p>
+        </article>
+        <article class="collection-card">
+          <span class="collection-name">groups / group_members</span>
+          <h3>Groups and challenge membership</h3>
+          <p>Challenge setup, creator/admin roles, auto-added members, member labels, proof and activity linkage.</p>
+        </article>
+        <article class="collection-card">
+          <span class="collection-name">group_invitations</span>
+          <h3>Group invite flow</h3>
+          <p>Tracks inviter, target user, group id, pending/accepted/declined state, and auto-join related logic.</p>
+        </article>
+        <article class="collection-card">
+          <span class="collection-name">therapist_onboarding_requests</span>
+          <h3>Therapist verification</h3>
+          <p>Uploaded document checklist, verification video, admin status, reviewed notes, completed therapist UID.</p>
+        </article>
+        <article class="collection-card">
+          <span class="collection-name">therapist_profiles / slots</span>
+          <h3>Marketplace availability</h3>
+          <p>Verified therapist profile data, public list view, appointment slots, booked slot counts and availability.</p>
+        </article>
+        <article class="collection-card">
+          <span class="collection-name">therapist_sessions / reviews</span>
+          <h3>Session lifecycle</h3>
+          <p>Confirmed sessions, session messages, crisis signal, private session review, aggregate therapist reviews.</p>
+        </article>
+        <article class="collection-card">
+          <span class="collection-name">therapist_resources</span>
+          <h3>Learning resources</h3>
+          <p>Admin/therapist-created videos, PDF books, and article resources with files stored in Cloud Storage.</p>
+        </article>
+        <article class="collection-card">
+          <span class="collection-name">live_podcast_rooms</span>
+          <h3>Live podcast rooms</h3>
+          <p>Room metadata, host UID, co-host IDs, approved speaker UIDs, replay flags, room lifecycle.</p>
+        </article>
+        <article class="collection-card">
+          <span class="collection-name">transcripts / speaker_requests</span>
+          <h3>Live subtitles and access</h3>
+          <p>Subcollection transcript segments plus speaker access request docs managed by host/function workflow.</p>
+        </article>
+      </div>
+    </section>
+    </div>
+
+    <p class="footer-note">
+      Firestore Collections • Security Rules • Cloud Functions • Cloud Storage • Role-Based Access
+    </p>
+  </main>
+  <div id="toast" class="toast">Saved PNG</div>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      securityLevel: "loose",
+      theme: "base",
+      flowchart: {
+        curve: "basis",
+        htmlLabels: true,
+        nodeSpacing: 60,
+        rankSpacing: 84,
+        padding: 16
+      },
+      themeVariables: {
+        fontFamily: '"Times New Roman", Times, serif',
+        primaryTextColor: "#111827",
+        lineColor: "#ec4899",
+        nodeBorderRadius: "18",
+        clusterBkg: "#ffffff",
+        clusterBorder: "#fbbf24",
+        edgeLabelBackground: "#ffffff",
+        tertiaryColor: "#fef3c7"
+      }
+    });
+
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.setTimeout(() => toast.classList.remove("show"), 1800);
+    }
+
+    async function waitForDiagram() {
+      for (let i = 0; i < 30; i += 1) {
+        const svg = document.querySelector(".mermaid svg");
+        if (svg) return svg;
+        await new Promise((resolve) => window.setTimeout(resolve, 150));
+      }
+      return null;
+    }
+
+    async function captureToPng(element, button, filename, opts) {
+      const waitDiagram = opts && opts.waitDiagram;
+      if (waitDiagram) await waitForDiagram();
+
+      const dpr = window.devicePixelRatio || 2;
+      const scale = Math.min(4.5, Math.max(3.25, dpr * 1.85));
+
+      const w = Math.ceil(Math.max(element.scrollWidth, element.offsetWidth));
+      const h = Math.ceil(Math.max(element.scrollHeight, element.offsetHeight));
+
+      const prevMax = element.style.maxWidth;
+      const prevOv = element.style.overflow;
+      const prevW = element.style.width;
+
+      element.style.maxWidth = "none";
+      element.style.overflow = "visible";
+      element.style.width = w + "px";
+
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      );
+
+      try {
+        const canvas = await html2canvas(element, {
+          backgroundColor: "#fffdf8",
+          scale,
+          useCORS: true,
+          logging: false,
+          scrollX: 0,
+          scrollY: 0,
+          windowWidth: w,
+          windowHeight: h,
+          onclone(doc) {
+            const node = doc.getElementById(element.id);
+            if (!node) return;
+            node.style.maxWidth = "none";
+            node.style.overflow = "visible";
+            node.style.width = w + "px";
+          },
+        });
+
+        const link = document.createElement("a");
+        link.download = filename;
+        link.href = canvas.toDataURL("image/png");
+        link.click();
+        showToast("Saved PNG");
+      } catch (error) {
+        console.error(error);
+        showToast("Could not save image");
+      } finally {
+        element.style.maxWidth = prevMax;
+        element.style.overflow = prevOv;
+        element.style.width = prevW;
+        button.disabled = false;
+        button.textContent =
+          button.id === "downloadPngDiagram" ? "Save diagram PNG" : "Save details PNG";
+      }
+    }
+
+    async function downloadDiagramAsPng() {
+      const button = document.getElementById("downloadPngDiagram");
+      const diagram = document.getElementById("captureDiagram");
+      button.disabled = true;
+      button.textContent = "Preparing…";
+      await captureToPng(diagram, button, "spill-firebase-collections-diagram.png", {
+        waitDiagram: true,
+      });
+    }
+
+    async function downloadDetailsAsPng() {
+      const button = document.getElementById("downloadPngDetails");
+      const details = document.getElementById("captureDetails");
+      button.disabled = true;
+      button.textContent = "Preparing…";
+      await captureToPng(details, button, "spill-firebase-collections-details.png", {
+        waitDiagram: false,
+      });
+    }
+
+    document
+      .getElementById("downloadPngDiagram")
+      .addEventListener("click", downloadDiagramAsPng);
+
+    document
+      .getElementById("downloadPngDetails")
+      .addEventListener("click", downloadDetailsAsPng);
+  </script>
+</body>
+</html>

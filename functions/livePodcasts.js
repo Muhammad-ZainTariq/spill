@@ -274,13 +274,27 @@ function sanitizeRoom(data, id) {
 
 function resolveRole({ room, uid, inviteDoc }) {
   if (uid === room.host_uid) return 'host';
+  // When joining with an invite code, honor that role first (e.g. co-host) over stale
+  // approved_speaker_uids so the client gets a publishing token for mic + captions.
+  if (inviteDoc) {
+    const role = String(inviteDoc.role || '').trim();
+    if (role === 'co_host') return 'co_host';
+    if (role === 'speaker_guest') return 'speaker';
+  }
   if (Array.isArray(room.co_host_ids) && room.co_host_ids.includes(uid)) return 'co_host';
   if (Array.isArray(room.approved_speaker_uids) && room.approved_speaker_uids.includes(uid)) return 'speaker';
-  if (!inviteDoc) return 'listener';
-  const role = String(inviteDoc.role || '').trim();
-  if (role === 'co_host') return 'co_host';
-  if (role === 'speaker_guest') return 'speaker';
   return 'listener';
+}
+
+async function hasApprovedSpeakerRequest(roomId, uid) {
+  const snap = await db
+    .collection(COLLECTIONS.speakerRequests)
+    .where('room_id', '==', String(roomId || ''))
+    .where('user_uid', '==', String(uid || ''))
+    .where('status', '==', 'approved')
+    .limit(1)
+    .get();
+  return !snap.empty;
 }
 
 async function getInviteDocByRoomAndCode(roomId, inviteCode) {
@@ -299,7 +313,23 @@ async function getInviteDocByRoomAndCode(roomId, inviteCode) {
 }
 
 async function createJoinSession({ uid, roomId, room, roomRef, inviteDoc }) {
-  const role = resolveRole({ room, uid, inviteDoc });
+  let role = resolveRole({ room, uid, inviteDoc });
+  if (role === 'listener' && (await hasApprovedSpeakerRequest(roomId, uid))) {
+    role = 'speaker';
+  }
+  if (role === 'co_host') {
+    await roomRef.update({
+      co_host_ids: admin.firestore.FieldValue.arrayUnion(uid),
+      updated_at: nowIso(),
+    });
+    room.co_host_ids = Array.from(new Set([...(room.co_host_ids || []), uid]));
+  } else if (role === 'speaker') {
+    await roomRef.update({
+      approved_speaker_uids: admin.firestore.FieldValue.arrayUnion(uid),
+      updated_at: nowIso(),
+    });
+    room.approved_speaker_uids = Array.from(new Set([...(room.approved_speaker_uids || []), uid]));
+  }
   const isPrivileged = role === 'host' || role === 'co_host' || role === 'speaker';
   if (room.status !== 'live' && !isPrivileged) {
     throw new functions.https.HttpsError('failed-precondition', 'Room is not live yet.');
@@ -356,6 +386,7 @@ async function createAccessToken({ uid, displayName, roomName, role }) {
     identity: uid,
     name: displayName || 'Listener',
     ttl: '4h',
+    metadata: JSON.stringify({ role }),
   });
   const grant = {
     roomJoin: true,
@@ -658,9 +689,13 @@ exports.createLivePodcastTranscriptToken = functions.region('us-central1').https
   if (room.status !== 'live') {
     throw new functions.https.HttpsError('failed-precondition', 'Room must be live before transcription starts.');
   }
-  const canTranscribe = uid === room.host_uid || (Array.isArray(room.co_host_ids) && room.co_host_ids.includes(uid));
+  const canTranscribe =
+    uid === room.host_uid ||
+    (Array.isArray(room.co_host_ids) && room.co_host_ids.includes(uid)) ||
+    (Array.isArray(room.approved_speaker_uids) && room.approved_speaker_uids.includes(uid)) ||
+    (await hasApprovedSpeakerRequest(roomId, uid));
   if (!canTranscribe) {
-    throw new functions.https.HttpsError('permission-denied', 'Only the host or a co-host can start live captions.');
+    throw new functions.https.HttpsError('permission-denied', 'Only approved speakers can start live captions.');
   }
 
   const { apiKey } = getAssemblyAiConfig();
@@ -720,6 +755,34 @@ exports.endLivePodcastRoom = functions.region('us-central1').https.onCall(async 
   });
   await logAudit(roomId, uid, 'room_ended', null, { replay_status: replayStatus });
   return { ok: true, replayStatus };
+});
+
+exports.deleteLivePodcastReplay = functions.region('us-central1').https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+  const uid = context.auth.uid;
+  const roomId = String(data?.roomId || '').trim();
+  if (!roomId) throw new functions.https.HttpsError('invalid-argument', 'roomId is required.');
+
+  const ref = db.collection(COLLECTIONS.rooms).doc(roomId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new functions.https.HttpsError('not-found', 'Room not found.');
+  const room = snap.data() || {};
+  const user = await getUserDoc(uid);
+  if (room.host_uid !== uid && user.is_admin !== true) {
+    throw new functions.https.HttpsError('permission-denied', 'Only the host or an admin can delete this replay.');
+  }
+  if (room.status !== 'ended') {
+    throw new functions.https.HttpsError('failed-precondition', 'Only ended podcast replays can be deleted.');
+  }
+
+  await ref.update({
+    replay_status: 'deleted',
+    replay_deleted_at: nowIso(),
+    replay_deleted_by: uid,
+    updated_at: nowIso(),
+  });
+  await logAudit(roomId, uid, 'replay_deleted');
+  return { ok: true };
 });
 
 exports.createLivePodcastInviteCode = functions.region('us-central1').https.onCall(async (data, context) => {
@@ -788,7 +851,23 @@ exports.refreshLivePodcastJoin = functions.region('us-central1').https.onCall(as
     inviteDoc = await getInviteDocByRoomAndCode(roomId, inviteCode);
   }
 
-  const role = resolveRole({ room, uid, inviteDoc });
+  let role = resolveRole({ room, uid, inviteDoc });
+  if (role === 'listener' && (await hasApprovedSpeakerRequest(roomId, uid))) {
+    role = 'speaker';
+  }
+  if (role === 'co_host') {
+    await roomRef.update({
+      co_host_ids: admin.firestore.FieldValue.arrayUnion(uid),
+      updated_at: nowIso(),
+    });
+    room.co_host_ids = Array.from(new Set([...(room.co_host_ids || []), uid]));
+  } else if (role === 'speaker') {
+    await roomRef.update({
+      approved_speaker_uids: admin.firestore.FieldValue.arrayUnion(uid),
+      updated_at: nowIso(),
+    });
+    room.approved_speaker_uids = Array.from(new Set([...(room.approved_speaker_uids || []), uid]));
+  }
   if (role === 'listener') {
     throw new functions.https.HttpsError('failed-precondition', 'listener-role-refresh');
   }
@@ -932,6 +1011,22 @@ exports.resolveLivePodcastSpeakerRequest = functions.region('us-central1').https
       approved_speaker_uids: admin.firestore.FieldValue.arrayUnion(targetUid),
       updated_at: nowIso(),
     });
+    const roomName = String(room.livekit_room_name || '').trim();
+    if (roomName) {
+      try {
+        const svc = getRoomServiceClient();
+        await svc.updateParticipant(roomName, targetUid, {
+          permission: {
+            canPublish: true,
+            canSubscribe: true,
+            canPublishData: true,
+            canPublishSources: [TrackSource.MICROPHONE],
+          },
+        });
+      } catch (permErr) {
+        console.warn('resolveLivePodcastSpeakerRequest updateParticipant', permErr?.message || permErr);
+      }
+    }
   }
 
   await logAudit(String(request.room_id || ''), uid, approve ? 'speaker_request_approved' : 'speaker_request_declined', String(request.user_uid || ''), { requestId });

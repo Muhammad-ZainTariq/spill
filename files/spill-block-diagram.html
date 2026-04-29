@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spill: system block diagram</title>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <style>
+    :root {
+      --pink: #ec4899;
+      --pink-soft: #fce7f3;
+      --amber: #92400e;
+      --ink: #111827;
+      --muted: #64748b;
+      --export-bg: #fffdf8;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding: 24px 16px 32px;
+      font-family: "Times New Roman", Times, serif;
+      font-size: 13pt;
+      line-height: 1.55;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(236, 72, 153, 0.18), transparent 30rem),
+        radial-gradient(circle at bottom right, rgba(251, 191, 36, 0.32), transparent 32rem),
+        linear-gradient(135deg, #fff7ed 0%, #fff1f7 48%, #fffbeb 100%);
+    }
+
+    .wrap {
+      width: min(1560px, 98vw);
+      margin: 0 auto;
+    }
+
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+      padding: 12px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(249, 168, 212, 0.75);
+      background: rgba(255, 255, 255, 0.74);
+      box-shadow: 0 12px 28px rgba(190, 24, 93, 0.08);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      font-size: 13pt;
+      color: var(--ink);
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--pink), #f9a8d4);
+      color: #fff;
+      box-shadow: 0 10px 20px rgba(236, 72, 153, 0.22);
+      font-weight: 700;
+      font-size: 13pt;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13pt;
+    }
+
+    .download-btn {
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: var(--pink);
+      color: #fff;
+      font-weight: 700;
+      box-shadow: 0 10px 22px rgba(236, 72, 153, 0.24);
+    }
+
+    .download-btn:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    .hint-chip {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 13px;
+      border-radius: 999px;
+      border: 1px solid #fde68a;
+      background: #fffbeb;
+      color: var(--amber);
+      font-size: 12pt;
+      font-weight: 700;
+    }
+
+    .hero-note {
+      text-align: center;
+      font-size: 12pt;
+      font-weight: 600;
+      color: var(--amber);
+      margin: 0 0 12px;
+      line-height: 1.4;
+      max-width: 56em;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    #captureArea {
+      position: relative;
+      margin: 0 auto;
+      max-width: 100%;
+      background: var(--export-bg);
+      border: 1px solid #fde68a;
+      border-radius: 28px;
+      overflow: hidden;
+      box-shadow: 0 8px 28px rgba(146, 64, 14, 0.08);
+    }
+
+    .capture-pad {
+      padding: 10px 26px 14px;
+      position: relative;
+      z-index: 0;
+    }
+
+    .doc-head {
+      text-align: center;
+      margin-bottom: 10px;
+      padding: 0 8px 8px;
+      border-bottom: 1px solid rgba(251, 191, 36, 0.55);
+    }
+
+    .doc-head__kicker {
+      display: inline-block;
+      margin-bottom: 6px;
+      padding: 0 6px;
+      font-size: 11pt;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #be185d;
+    }
+
+    .doc-head__title {
+      margin: 0 0 6px;
+      padding: 0 10px;
+      font-size: clamp(17pt, 2.8vw, 21pt);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.2;
+      color: var(--ink);
+    }
+
+    .doc-lede {
+      margin: 0 0 10px;
+      padding: 0 6px;
+      font-size: 12pt;
+      line-height: 1.4;
+      color: var(--ink);
+      max-width: 58em;
+    }
+
+    /* Trust boundaries */
+    .trust-scope {
+      margin-bottom: 12px;
+    }
+
+    .trust-scope:last-child {
+      margin-bottom: 0;
+    }
+
+    .trust-scope__ribbon {
+      display: inline-block;
+      margin: 0 0 6px;
+      padding: 3px 8px;
+      border: 1px solid rgba(146, 64, 14, 0.45);
+      border-radius: 8px;
+      background: #fef3c7;
+      color: var(--amber);
+      font-size: 12pt;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .trust-scope__box {
+      border: 2px dashed rgba(146, 64, 14, 0.85);
+      border-radius: 16px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.65);
+    }
+
+    .block-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      align-items: stretch;
+    }
+
+    .row-join-down {
+      text-align: center;
+      color: #be185d;
+      font-size: 13pt;
+      font-weight: 700;
+      line-height: 1;
+      padding: 1px 0;
+      user-select: none;
+    }
+
+    .block-grid {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: stretch;
+      gap: 0;
+      margin: -2px 0;
+    }
+
+    /* Horizontal connector between neighbouring blocks */
+    .chain-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      align-self: center;
+      flex: 0 0 auto;
+      width: 1.5rem;
+      min-height: 2.25rem;
+      font-size: 14pt;
+      font-weight: 700;
+      line-height: 1;
+      color: #be185d;
+      opacity: 0.9;
+      font-family: "Times New Roman", Times, serif;
+      user-select: none;
+    }
+
+    /* When the row wraps, hide awkward orphan arrows via spacing (accept minor imperfection on tiny widths) */
+
+    .block {
+      border: 1px solid rgba(251, 191, 36, 0.85);
+      border-radius: 12px;
+      padding: 7px 9px;
+      background: #fff;
+      box-shadow: 0 2px 8px rgba(146, 64, 14, 0.06);
+      text-align: center;
+      min-height: 3.5em;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex: 1 1 160px;
+      min-width: min(100%, 150px);
+      max-width: 100%;
+    }
+
+    .block__title {
+      font-size: 12pt;
+      font-weight: 700;
+      color: var(--ink);
+      margin: 0 0 4px;
+      line-height: 1.25;
+    }
+
+    .block__note {
+      font-size: 11pt;
+      font-weight: 400;
+      color: var(--muted);
+      line-height: 1.35;
+      margin: 0;
+    }
+
+    .block__note code {
+      font-family: "Times New Roman", Times, serif;
+      font-size: 10pt;
+      color: var(--ink);
+      font-weight: 600;
+    }
+
+    .flow-gap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 6px;
+      font-size: 11pt;
+      font-weight: 700;
+      color: var(--amber);
+      letter-spacing: 0.02em;
+    }
+
+    .flow-gap__graphic {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    .flow-gap__vline {
+      width: 2px;
+      height: 12px;
+      border-radius: 2px;
+      background: linear-gradient(180deg, rgba(236, 72, 153, 0.45), rgba(251, 191, 36, 0.55));
+    }
+
+    .flow-gap__caret {
+      font-size: 16pt;
+      line-height: 0.9;
+      color: #be185d;
+      font-weight: 700;
+      margin-top: -2px;
+    }
+
+    .flow-gap__label {
+      display: inline-block;
+      padding: 2px 0;
+      border-bottom: 1px dotted rgba(146, 64, 14, 0.45);
+    }
+
+    .diag-caption {
+      margin: 12px 0 4px;
+      font-size: 12pt;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #9d174d;
+    }
+
+    .log-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12pt;
+      margin-top: 6px;
+      margin-bottom: 0;
+      background: #fff;
+      border: 1px solid rgba(251, 191, 36, 0.75);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 2px 12px rgba(146, 64, 14, 0.06);
+    }
+
+    .log-table th,
+    .log-table td {
+      border: 1px solid rgba(251, 191, 36, 0.55);
+      padding: 6px 10px;
+      vertical-align: top;
+      line-height: 1.35;
+      color: var(--ink);
+    }
+
+    .log-table thead th {
+      background: #fef3c7;
+      color: var(--amber);
+      font-weight: 700;
+      font-size: 12pt;
+      text-align: left;
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      padding: 12px 20px;
+      border-radius: 999px;
+      background: var(--ink);
+      color: #fff;
+      font-size: 13pt;
+      font-weight: 700;
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 0.25s ease, opacity 0.25s ease;
+      z-index: 50;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    @media print {
+      body {
+        background: var(--export-bg);
+        padding: 0;
+      }
+      .topbar,
+      .hero-note {
+        display: none;
+      }
+      #captureArea {
+        box-shadow: none;
+        border-radius: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">S</span>
+        <span>Block diagram · Spill dissertation</span>
+      </div>
+      <div class="actions">
+        <span class="hint-chip">PNG = full page height</span>
+        <button type="button" class="download-btn" id="downloadPng">Save as PNG</button>
+      </div>
+    </header>
+
+    <p class="hero-note">
+      Trust-boundary view matching your meeting-log styling: dashed regions mark where policy and verification apply (client, Firebase, third parties).
+    </p>
+
+    <div id="captureArea">
+      <div class="capture-pad">
+        <header class="doc-head">
+          <span class="doc-head__kicker">Architecture</span>
+          <h1 class="doc-head__title">High-level block diagram · Spill</h1>
+        </header>
+
+        <p class="doc-lede">
+          The Expo client runs on user devices under <strong>user-controlled</strong> conditions. Auth and data access are enforced by <strong>Firebase Auth</strong>, <strong>Firestore rules</strong>, and <strong>Cloud Functions</strong> (Admin SDK). Third-party APIs are reached from server-side code or via keys that must not ship in the client.
+        </p>
+
+        <div class="trust-scope">
+          <div class="trust-scope__ribbon">Trust boundary 1 · User device (client)</div>
+          <div class="trust-scope__box">
+            <div class="block-grid">
+              <div class="block">
+                <p class="block__title">Expo / React Native app</p>
+                <p class="block__note">UI (tabs, screens), local state, Expo Router; no trusted secrets.</p>
+              </div>
+              <span class="chain-arrow" aria-hidden="true">&#8594;</span>
+              <div class="block">
+                <p class="block__title">Firebase JS SDK (client)</p>
+                <p class="block__note">Auth session, Firestore &amp; Storage calls; subject to security rules.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="flow-gap">
+          <span class="flow-gap__graphic" aria-hidden="true">
+            <span class="flow-gap__vline"></span>
+            <span class="flow-gap__caret">↓</span>
+          </span>
+          <span class="flow-gap__label">HTTPS / TLS to Google Cloud (session tokens, signed requests)</span>
+        </div>
+
+        <div class="trust-scope">
+          <div class="trust-scope__ribbon">Trust boundary 2 · Firebase / Google Cloud (backend of record)</div>
+          <div class="trust-scope__box">
+            <div class="block-stack">
+              <div class="block-grid">
+                <div class="block">
+                  <p class="block__title">Firebase Authentication</p>
+                  <p class="block__note">Email/password, session tokens, email verification; custom claims for roles where used.</p>
+                </div>
+                <span class="chain-arrow" aria-hidden="true">&#8594;</span>
+                <div class="block">
+                  <p class="block__title">Cloud Firestore + rules</p>
+                  <p class="block__note">Primary data store; <strong>rules</strong> restrict reads/writes by uid and role.</p>
+                </div>
+              </div>
+              <div class="row-join-down" aria-hidden="true">↓</div>
+              <div class="block-grid">
+                <div class="block">
+                  <p class="block__title">Cloud Storage</p>
+                  <p class="block__note">Media uploads; access controlled via rules and metadata.</p>
+                </div>
+                <span class="chain-arrow" aria-hidden="true">&#8594;</span>
+                <div class="block">
+                  <p class="block__title">Cloud Functions (Node)</p>
+                  <p class="block__note">Trusted writes, callables, triggers; <strong>Admin SDK</strong> bypasses client rules only inside controlled code.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="flow-gap">
+          <span class="flow-gap__graphic" aria-hidden="true">
+            <span class="flow-gap__vline"></span>
+            <span class="flow-gap__caret">↓</span>
+          </span>
+          <span class="flow-gap__label">Server-side and secure client egress (API keys, tokens, streaming endpoints)</span>
+        </div>
+
+        <div class="trust-scope">
+          <div class="trust-scope__ribbon">Trust boundary 3 · External services</div>
+          <div class="trust-scope__box">
+            <div class="block-stack">
+              <div class="block-grid">
+                <div class="block">
+                  <p class="block__title">Perspective API</p>
+                  <p class="block__note">Toxicity scoring on new posts (via Cloud Functions).</p>
+                </div>
+                <span class="chain-arrow" aria-hidden="true">&#8594;</span>
+                <div class="block">
+                  <p class="block__title">Transactional email</p>
+                  <p class="block__note">Therapist invites, login OTP, etc. (SMTP / provider from Functions).</p>
+                </div>
+                <span class="chain-arrow" aria-hidden="true">&#8594;</span>
+                <div class="block">
+                  <p class="block__title">Expo push notifications</p>
+                  <p class="block__note">Device tokens registered; pushes orchestrated from the backend.</p>
+                </div>
+              </div>
+              <div class="row-join-down" aria-hidden="true">↓</div>
+              <div class="block-grid">
+                <div class="block">
+                  <p class="block__title">LiveKit</p>
+                  <p class="block__note">Real-time audio for live podcasts (<code>@livekit/react-native</code>, LiveKit Cloud); participants join using <strong>short-lived tokens</strong> issued from trusted code (Functions / server).</p>
+                </div>
+                <span class="chain-arrow" aria-hidden="true">&#8594;</span>
+                <div class="block">
+                  <p class="block__title">OpenAI API</p>
+                  <p class="block__note">Model calls for AI-assisted features (e.g. admin resource tooling); <strong>API keys</strong> belong in controlled config: prefer server-side or restricted keys rather than embedding full secrets in the client bundle.</p>
+                </div>
+                <span class="chain-arrow" aria-hidden="true">&#8594;</span>
+                <div class="block">
+                  <p class="block__title">AssemblyAI</p>
+                  <p class="block__note">Streaming speech-to-text over WebSocket (<code>wss://streaming.assemblyai.com</code>) inside the live podcast WebView transcript path.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <p class="diag-caption">Legend (cross-reference in testing chapter)</p>
+        <table class="log-table" aria-label="Legend">
+          <thead>
+            <tr>
+              <th scope="col">Symbol / region</th>
+              <th scope="col">Meaning</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Arrows (→, ↓)</strong></td>
+              <td>Abbreviated flow: left-to-right inside a trust boundary; downward links between boundaries. Not every production integration is shown.</td>
+            </tr>
+            <tr>
+              <td><strong>Dashed border</strong></td>
+              <td>Trust boundary: policy and threat modelling are stated at this perimeter.</td>
+            </tr>
+            <tr>
+              <td><strong>Solid blocks</strong></td>
+              <td>Major components; arrows in prose indicate data or control flow between neighbours.</td>
+            </tr>
+            <tr>
+              <td><strong>Functions + Admin SDK</strong></td>
+              <td>Privileged operations (moderation, email, merges) must not rely on client-side checks alone.</td>
+            </tr>
+            <tr>
+              <td><strong>LiveKit / AssemblyAI / OpenAI</strong></td>
+              <td>Third-party realtime and AI endpoints sit outside Firebase; route keys and tokens through policies that minimise exposure (e.g. server-minted LiveKit tokens, avoid long-lived OpenAI keys in the app binary).</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">PNG saved</div>
+
+  <script>
+    (function () {
+      const toast = document.getElementById("toast");
+      function showToast(msg) {
+        toast.textContent = msg;
+        toast.classList.add("show");
+        setTimeout(() => toast.classList.remove("show"), 2200);
+      }
+
+      document.getElementById("downloadPng").addEventListener("click", async () => {
+        const btn = document.getElementById("downloadPng");
+        const cap = document.getElementById("captureArea");
+        btn.disabled = true;
+        btn.textContent = "Rendering…";
+
+        const w = Math.ceil(Math.max(cap.scrollWidth, cap.offsetWidth));
+        const h = Math.ceil(Math.max(cap.scrollHeight, cap.offsetHeight));
+        const dpr = window.devicePixelRatio || 2;
+        const scale = Math.min(4.5, Math.max(3.25, dpr * 1.85));
+
+        const prev = {
+          maxW: cap.style.maxWidth,
+          ov: cap.style.overflow,
+          width: cap.style.width,
+        };
+        cap.style.maxWidth = "none";
+        cap.style.overflow = "visible";
+        cap.style.width = w + "px";
+
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+        try {
+          const canvas = await html2canvas(cap, {
+            backgroundColor: "#fffdf8",
+            scale,
+            useCORS: true,
+            logging: false,
+            scrollX: 0,
+            scrollY: 0,
+            windowWidth: w,
+            windowHeight: h,
+            onclone(doc) {
+              const node = doc.getElementById("captureArea");
+              if (!node) return;
+              node.style.maxWidth = "none";
+              node.style.overflow = "visible";
+              node.style.width = w + "px";
+            },
+          });
+          const a = document.createElement("a");
+          a.download = "spill-block-diagram.png";
+          a.href = canvas.toDataURL("image/png");
+          a.click();
+          showToast("Full-page PNG saved");
+        } catch (e) {
+          console.error(e);
+          showToast("Export failed");
+        } finally {
+          cap.style.maxWidth = prev.maxW;
+          cap.style.overflow = prev.ov;
+          cap.style.width = prev.width;
+          btn.disabled = false;
+          btn.textContent = "Save as PNG";
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

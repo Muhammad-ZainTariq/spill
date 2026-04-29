@@ -41,6 +41,16 @@ interface Message {
   content: string;
   sender_id: string;
   created_at: string;
+  message_type?: string;
+  shared_post?: {
+    id?: string;
+    content?: string;
+    author_name?: string;
+    media_url?: string | null;
+    youtube_url?: string | null;
+    youtube_id?: string | null;
+    created_at?: string | null;
+  } | null;
   sender?: {
     id: string;
     display_name?: string;
@@ -330,9 +340,30 @@ export default function MessagesTab() {
       const sid = item.sender_id != null ? String(item.sender_id) : '';
       const oid = otherUserId != null ? String(otherUserId) : '';
       const isMe = !!uid && sid === String(uid);
+      const sharedPost = item.message_type === 'shared_post' ? item.shared_post : null;
       const bubble = (
         <View style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleOther]}>
-          <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{item.content}</Text>
+          {sharedPost ? (
+            <Pressable
+              style={[styles.sharedPostCard, isMe && styles.sharedPostCardMe]}
+              onPress={() => {
+                if (sharedPost.id) router.push(`/comments?postId=${sharedPost.id}` as any);
+              }}
+            >
+              <View style={styles.sharedPostHeader}>
+                <Feather name="send" size={13} color={isMe ? '#be185d' : '#ec4899'} />
+                <Text style={[styles.sharedPostLabel, isMe && styles.sharedPostLabelMe]}>Shared post</Text>
+              </View>
+              <Text style={styles.sharedPostAuthor} numberOfLines={1}>
+                {sharedPost.author_name || 'Anonymous'}
+              </Text>
+              <Text style={styles.sharedPostText} numberOfLines={4}>
+                {sharedPost.content || 'Post unavailable'}
+              </Text>
+            </Pressable>
+          ) : (
+            <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{item.content}</Text>
+          )}
           <Text style={[styles.messageTime, isMe && styles.messageTimeMe]}>
             {formatTimeAgo(item.created_at)}
           </Text>
@@ -605,6 +636,13 @@ const styles = StyleSheet.create({
   messageTextMe: { color: '#fff' },
   messageTime: { fontSize: 11, color: '#6b7280' },
   messageTimeMe: { color: 'rgba(255,255,255,0.7)' },
+  sharedPostCard: { width: 240, borderRadius: 16, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', padding: 12, marginBottom: 6 },
+  sharedPostCardMe: { backgroundColor: '#fff7fb', borderColor: '#fbcfe8' },
+  sharedPostHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  sharedPostLabel: { fontSize: 11, fontWeight: '900', color: '#ec4899', textTransform: 'uppercase' },
+  sharedPostLabelMe: { color: '#be185d' },
+  sharedPostAuthor: { fontSize: 13, fontWeight: '800', color: '#0f172a', marginBottom: 4 },
+  sharedPostText: { fontSize: 14, color: '#334155', lineHeight: 19 },
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 64 },
   emptyText: { fontSize: 18, fontWeight: '600', color: '#333', marginBottom: 8 },
   emptySubtext: { fontSize: 14, color: '#666' },

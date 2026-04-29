@@ -36,6 +36,16 @@ function countUploadedFor(req: Req) {
   return { docsDone, docsTotal, videoDone, done, total, pct };
 }
 
+function statusTone(status: string, pct: number) {
+  if (status === 'approved') return { label: 'Approved', bg: '#DCFCE7', fg: '#047857', icon: 'check-circle' as const };
+  if (status === 'rejected') return { label: 'Rejected', bg: '#FEE2E2', fg: '#DC2626', icon: 'x-circle' as const };
+  if (status === 'resubmitted') return { label: 'Resubmitted', bg: '#FEF3C7', fg: '#92400E', icon: 'refresh-cw' as const };
+  if (status === 'completed') return { label: 'Ready review', bg: '#FEF3C7', fg: '#92400E', icon: 'file-text' as const };
+  if (pct >= 100) return { label: 'Complete', bg: '#DCFCE7', fg: '#047857', icon: 'check-circle' as const };
+  if (status === 'invited') return { label: 'Invited', bg: '#FCE7F3', fg: '#BE185D', icon: 'mail' as const };
+  return { label: status.replace(/_/g, ' ') || 'Pending', bg: '#F1F5F9', fg: tokens.colors.textSecondary, icon: 'clock' as const };
+}
+
 export default function AdminTherapistProgressScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -61,15 +71,26 @@ export default function AdminTherapistProgressScreen() {
     load();
   }, [load]);
 
+  const stats = useMemo(() => {
+    const progress = items.map(countUploadedFor);
+    const complete = progress.filter((p) => p.pct >= 100).length;
+    const needsDocs = progress.filter((p) => p.pct < 100).length;
+    const avg = progress.length ? Math.round(progress.reduce((sum, p) => sum + p.pct, 0) / progress.length) : 0;
+    return { total: items.length, complete, needsDocs, avg };
+  }, [items]);
+
   const renderItem = ({ item }: { item: Req }) => {
     const p = countUploadedFor(item);
     const status = String(item.status || 'pending');
     const name = String(item.name || 'Therapist');
     const email = String(item.email || '');
+    const tone = statusTone(status, p.pct);
+    const complete = p.pct >= 100;
+    const missingCount = p.total - p.done;
 
     return (
       <Pressable
-        style={styles.card}
+        style={[styles.card, complete && styles.cardComplete]}
         onPress={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
           router.push({
@@ -84,17 +105,40 @@ export default function AdminTherapistProgressScreen() {
         }}
       >
         <View style={styles.rowTop}>
-          <Text style={styles.name} numberOfLines={1}>{name}</Text>
-          <View style={styles.pill}>
-            <Text style={styles.pillText}>{status.replace(/_/g, ' ')}</Text>
+          <View style={styles.avatar}>
+            <Feather name={complete ? 'check' : 'file-text'} size={18} color={complete ? '#047857' : tokens.colors.pink} />
+          </View>
+          <View style={styles.identity}>
+            <Text style={styles.name} numberOfLines={1}>{name}</Text>
+            <Text style={styles.email} numberOfLines={1}>{email || 'No email'}</Text>
+          </View>
+          <View style={[styles.pill, { backgroundColor: tone.bg }]}>
+            <Feather name={tone.icon as any} size={12} color={tone.fg} />
+            <Text style={[styles.pillText, { color: tone.fg }]}>{tone.label}</Text>
           </View>
         </View>
-        <Text style={styles.email} numberOfLines={1}>{email}</Text>
-        <Text style={styles.meta}>
-          Docs {p.docsDone}/{p.docsTotal} • Video {p.videoDone ? 'yes' : 'no'} • {p.pct}%
-        </Text>
+        <View style={styles.progressHeader}>
+          <Text style={styles.progressTitle}>{complete ? 'Verification upload complete' : `${p.done}/${p.total} items uploaded`}</Text>
+          <Text style={styles.progressPercent}>{p.pct}%</Text>
+        </View>
         <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${p.pct}%` }]} />
+          <View style={[styles.progressFill, complete && styles.progressFillComplete, { width: `${p.pct}%` }]} />
+        </View>
+        <View style={styles.checkRow}>
+          <View style={styles.checkPill}>
+            <Feather name="file" size={13} color="#92400e" />
+            <Text style={styles.checkPillText}>Docs {p.docsDone}/{p.docsTotal}</Text>
+          </View>
+          <View style={[styles.checkPill, p.videoDone && styles.checkPillDone]}>
+            <Feather name="video" size={13} color={p.videoDone ? '#047857' : '#92400e'} />
+            <Text style={[styles.checkPillText, p.videoDone && styles.checkPillTextDone]}>Video {p.videoDone ? 'uploaded' : 'needed'}</Text>
+          </View>
+          <View style={[styles.checkPill, missingCount === 0 ? styles.checkPillDone : styles.checkPillMissing]}>
+            <Feather name={missingCount === 0 ? 'check-circle' : 'alert-circle'} size={13} color={missingCount === 0 ? '#047857' : '#BE185D'} />
+            <Text style={[styles.checkPillText, missingCount === 0 ? styles.checkPillTextDone : styles.checkPillTextMissing]}>
+              {missingCount === 0 ? 'All complete' : `${missingCount} missing`}
+            </Text>
+          </View>
         </View>
       </Pressable>
     );
@@ -125,7 +169,36 @@ export default function AdminTherapistProgressScreen() {
         <FlatList
           data={items}
           keyExtractor={(x) => x.id}
-          contentContainerStyle={{ padding: tokens.spacing.screenHorizontal, paddingBottom: 28 }}
+          contentContainerStyle={styles.listContent}
+          ListHeaderComponent={
+            <View style={styles.heroCard}>
+              <View style={styles.heroTop}>
+                <View style={styles.heroIcon}>
+                  <Feather name="clipboard" size={22} color="#92400e" />
+                </View>
+                <View style={styles.heroAccent}>
+                  <Text style={styles.heroAccentText}>{stats.avg}%</Text>
+                </View>
+              </View>
+              <Text style={styles.heroLabel}>Verification progress</Text>
+              <Text style={styles.heroTitle}>Therapist documents</Text>
+              <Text style={styles.heroText}>Track uploaded documents, ID videos, and ready-for-review therapists in one place.</Text>
+              <View style={styles.statsRow}>
+                <View style={styles.statPill}>
+                  <Text style={styles.statValue}>{stats.total}</Text>
+                  <Text style={styles.statLabel}>Total</Text>
+                </View>
+                <View style={[styles.statPill, styles.statComplete]}>
+                  <Text style={styles.statValue}>{stats.complete}</Text>
+                  <Text style={styles.statLabel}>Complete</Text>
+                </View>
+                <View style={styles.statPill}>
+                  <Text style={styles.statValue}>{stats.needsDocs}</Text>
+                  <Text style={styles.statLabel}>Needs docs</Text>
+                </View>
+              </View>
+            </View>
+          }
           renderItem={renderItem}
           ListEmptyComponent={
             <View style={styles.center}>
@@ -140,7 +213,7 @@ export default function AdminTherapistProgressScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: tokens.colors.bg },
+  safe: { flex: 1, backgroundColor: tokens.colors.bgSecondary },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -164,27 +237,117 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 18 },
   muted: { fontSize: 13, fontWeight: '600', color: tokens.colors.textMuted, textAlign: 'center' },
   emptyTitle: { fontSize: 16, fontWeight: '900', color: tokens.colors.text },
-  card: {
-    backgroundColor: tokens.colors.surface,
-    borderRadius: 18,
-    padding: 14,
+  listContent: { padding: tokens.spacing.screenHorizontal, paddingBottom: 28 },
+  heroCard: {
+    marginBottom: 14,
+    borderRadius: 28,
+    padding: 18,
+    backgroundColor: '#FEF3C7',
     borderWidth: 1,
-    borderColor: tokens.colors.border,
-    marginBottom: 12,
+    borderColor: '#FBBF24',
+    shadowColor: '#92400e',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 3,
   },
+  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  heroIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 18,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: 'rgba(180,83,9,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroAccent: {
+    minWidth: 48,
+    height: 38,
+    paddingHorizontal: 10,
+    borderRadius: 19,
+    backgroundColor: '#FCE7F3',
+    borderWidth: 1,
+    borderColor: '#F9A8D4',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroAccentText: { fontSize: 14, fontWeight: '900', color: '#BE185D' },
+  heroLabel: { fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.8, color: '#b45309' },
+  heroTitle: { marginTop: 5, fontSize: 25, lineHeight: 30, fontWeight: '900', color: tokens.colors.text },
+  heroText: { marginTop: 7, fontSize: 13, lineHeight: 19, fontWeight: '700', color: '#92400e' },
+  statsRow: { marginTop: 16, flexDirection: 'row', gap: 8 },
+  statPill: {
+    flex: 1,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.78)',
+    borderWidth: 1,
+    borderColor: 'rgba(251,191,36,0.45)',
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  statComplete: { backgroundColor: 'rgba(16,185,129,0.12)', borderColor: 'rgba(16,185,129,0.25)' },
+  statValue: { fontSize: 18, fontWeight: '900', color: tokens.colors.text },
+  statLabel: { marginTop: 2, fontSize: 10, fontWeight: '900', color: '#9A3412', textTransform: 'uppercase' },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    marginBottom: 12,
+    shadowColor: '#92400e',
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  cardComplete: { borderColor: '#FBBF24', backgroundColor: '#fff' },
   rowTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  name: { flex: 1, fontSize: 16, fontWeight: '900', color: tokens.colors.text },
-  pill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: 'rgba(244,114,182,0.14)' },
-  pillText: { fontSize: 11, fontWeight: '900', color: tokens.colors.pink, textTransform: 'capitalize' },
-  email: { marginTop: 6, fontSize: 12, fontWeight: '700', color: tokens.colors.textSecondary },
-  meta: { marginTop: 8, fontSize: 12, fontWeight: '700', color: tokens.colors.textMuted },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 17,
+    backgroundColor: '#FCE7F3',
+    borderWidth: 1,
+    borderColor: '#F9A8D4',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  identity: { flex: 1, minWidth: 0 },
+  name: { fontSize: 16, fontWeight: '900', color: tokens.colors.text },
+  pill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
+  pillText: { fontSize: 11, fontWeight: '900', textTransform: 'capitalize' },
+  email: { marginTop: 3, fontSize: 12, fontWeight: '700', color: tokens.colors.textSecondary },
+  progressHeader: { marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  progressTitle: { flex: 1, fontSize: 13, fontWeight: '900', color: tokens.colors.text },
+  progressPercent: { fontSize: 13, fontWeight: '900', color: '#BE185D' },
   progressTrack: {
-    height: 8,
+    height: 10,
     borderRadius: 999,
-    backgroundColor: tokens.colors.surfaceOverlay,
+    backgroundColor: '#F1F5F9',
     overflow: 'hidden',
     marginTop: 10,
   },
   progressFill: { height: '100%', backgroundColor: tokens.colors.pink },
+  progressFillComplete: { backgroundColor: '#10B981' },
+  checkRow: { marginTop: 11, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  checkPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  checkPillDone: { backgroundColor: 'rgba(16,185,129,0.12)', borderColor: 'rgba(16,185,129,0.24)' },
+  checkPillMissing: { backgroundColor: '#FCE7F3', borderColor: '#F9A8D4' },
+  checkPillText: { fontSize: 11, fontWeight: '900', color: '#92400e' },
+  checkPillTextDone: { color: '#047857' },
+  checkPillTextMissing: { color: '#BE185D' },
 });
 

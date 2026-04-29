@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spill System Architecture</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <style>
+    :root {
+      --pink: #ec4899;
+      --pink-soft: #fce7f3;
+      --yellow: #fef3c7;
+      --yellow-border: #fbbf24;
+      --amber-text: #92400e;
+      --ink: #111827;
+      --muted: #64748b;
+      --surface: #ffffff;
+      --bg: #fff7ed;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      padding: 44px 20px;
+      font-family: Inter, 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(236, 72, 153, 0.18), transparent 28rem),
+        radial-gradient(circle at bottom right, rgba(251, 191, 36, 0.28), transparent 28rem),
+        linear-gradient(135deg, #fff7ed 0%, #fff1f7 48%, #fffbeb 100%);
+    }
+
+    .page {
+      max-width: 1480px;
+      margin: 0 auto;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      max-width: 1480px;
+      margin: 0 auto 24px;
+      padding: 12px 14px;
+      border: 1px solid rgba(249, 168, 212, 0.75);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.72);
+      box-shadow: 0 12px 28px rgba(190, 24, 93, 0.08);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      color: var(--ink);
+      font-weight: 950;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--pink), #f9a8d4);
+      color: #fff;
+      box-shadow: 0 10px 20px rgba(236, 72, 153, 0.22);
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    .download-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: var(--pink);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 900;
+      box-shadow: 0 10px 22px rgba(236, 72, 153, 0.24);
+      transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+    }
+
+    .download-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 14px 28px rgba(236, 72, 153, 0.3);
+    }
+
+    .download-btn:disabled {
+      cursor: wait;
+      opacity: 0.65;
+      transform: none;
+    }
+
+    .hint-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 40px;
+      padding: 0 13px;
+      border-radius: 999px;
+      border: 1px solid #fde68a;
+      background: #fffbeb;
+      color: var(--amber-text);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .hero {
+      max-width: 760px;
+      margin: 0 auto 24px;
+      text-align: center;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid #f9a8d4;
+      border-radius: 999px;
+      background: var(--pink-soft);
+      color: #be185d;
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 16px 0 10px;
+      color: var(--ink);
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 0.95;
+      letter-spacing: -0.05em;
+      font-weight: 950;
+    }
+
+    .subtitle {
+      margin: 0 auto;
+      max-width: 660px;
+      color: var(--amber-text);
+      font-size: 16px;
+      line-height: 1.6;
+      font-weight: 700;
+    }
+
+    .diagram-card {
+      position: relative;
+      margin-top: 28px;
+      padding: 18px;
+      border: 1px solid rgba(251, 191, 36, 0.55);
+      border-radius: 36px;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.84), rgba(255, 251, 235, 0.72)),
+        rgba(255, 255, 255, 0.72);
+      box-shadow: 0 22px 55px rgba(146, 64, 14, 0.13);
+      backdrop-filter: blur(18px);
+      overflow: hidden;
+    }
+
+    .diagram-card::after {
+      content: "";
+      position: absolute;
+      top: -90px;
+      right: -90px;
+      width: 240px;
+      height: 240px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(236, 72, 153, 0.18), transparent 68%);
+      pointer-events: none;
+    }
+
+    .diagram-header {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 6px 8px 16px;
+    }
+
+    .diagram-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 950;
+      color: var(--ink);
+    }
+
+    .diagram-copy {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      font-weight: 700;
+    }
+
+    .diagram-pill {
+      flex: 0 0 auto;
+      padding: 9px 12px;
+      border-radius: 999px;
+      border: 1px solid #f9a8d4;
+      background: var(--pink-soft);
+      color: #be185d;
+      font-size: 12px;
+      font-weight: 950;
+    }
+
+    .diagram-card::before {
+      content: "";
+      position: absolute;
+      inset: 12px;
+      border-radius: 24px;
+      background:
+        linear-gradient(90deg, rgba(236, 72, 153, 0.06) 1px, transparent 1px),
+        linear-gradient(rgba(251, 191, 36, 0.08) 1px, transparent 1px);
+      background-size: 38px 38px;
+      pointer-events: none;
+    }
+
+    .mermaid {
+      position: relative;
+      z-index: 1;
+      min-width: 1280px;
+      min-height: 720px;
+      padding: 28px;
+      border: 1px solid rgba(249, 168, 212, 0.32);
+      border-radius: 28px;
+      background:
+        radial-gradient(circle at 18% 12%, rgba(252, 231, 243, 0.78), transparent 26rem),
+        radial-gradient(circle at 86% 70%, rgba(254, 243, 199, 0.95), transparent 30rem),
+        rgba(255, 255, 255, 0.9);
+      overflow-x: auto;
+    }
+
+    .mermaid svg .node rect,
+    .mermaid svg .cluster rect {
+      rx: 18px !important;
+      ry: 18px !important;
+    }
+
+    .mermaid svg .nodeLabel,
+    .mermaid svg .edgeLabel {
+      font-weight: 800;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 13px;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid rgba(251, 191, 36, 0.45);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .dot.pink { background: var(--pink); }
+    .dot.yellow { background: var(--yellow-border); }
+    .dot.green { background: #10b981; }
+    .dot.blue { background: #38bdf8; }
+
+    .footer-note {
+      text-align: center;
+      margin-top: 26px;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      z-index: 10;
+      transform: translateX(-50%) translateY(20px);
+      opacity: 0;
+      padding: 12px 16px;
+      border-radius: 999px;
+      background: #111827;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 900;
+      box-shadow: 0 16px 36px rgba(17, 24, 39, 0.22);
+      transition: opacity 180ms ease, transform 180ms ease;
+      pointer-events: none;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 720px) {
+      body {
+        padding: 24px 12px;
+      }
+
+      .topbar,
+      .diagram-header {
+        align-items: stretch;
+        flex-direction: column;
+        border-radius: 24px;
+      }
+
+      .actions {
+        width: 100%;
+      }
+
+      .download-btn,
+      .hint-chip {
+        justify-content: center;
+        flex: 1;
+      }
+    }
+
+    @media print {
+      .topbar,
+      .toast {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark">S</span>
+      <span>Spill Project Diagram</span>
+    </div>
+    <div class="actions">
+      <span class="hint-chip">Export-ready</span>
+      <button id="downloadPng" class="download-btn" type="button">Save as PNG</button>
+    </div>
+  </div>
+
+  <main id="captureArea" class="page">
+    <section class="hero">
+      <div class="eyebrow">Spill architecture</div>
+      <h1>Project Block Diagram</h1>
+      <p class="subtitle">
+        A clean project-level view of how Spill connects the mobile app, admin panel,
+        Firebase backend, AI/moderation, live audio, and notifications.
+      </p>
+    </section>
+
+    <section class="diagram-card">
+      <div class="diagram-header">
+        <div>
+          <h2 class="diagram-title">System blocks and data flow</h2>
+          <p class="diagram-copy">Cornered blocks show the main project parts. Broken colored threads show the different data and service flows.</p>
+        </div>
+        <div class="diagram-pill">App • Admin • Firebase • AI • Live</div>
+      </div>
+      <div class="mermaid">
+flowchart LR
+    App["Spill Mobile App<br/><span>Expo Router + React Native</span>"]
+    Admin["Admin Panel<br/><span>staff, accounts, moderation, therapists</span>"]
+
+    subgraph Features["Core App Features"]
+      Feed["Post Feed<br/>AI explain, comments, flags"]
+      Chat["Messaging<br/>DMs, therapist chat, shared posts"]
+      Groups["Groups + Challenges<br/>invites, streaks, proofs"]
+      Therapy["Therapist Marketplace<br/>slots, sessions, reviews"]
+      Live["Live Podcasts<br/>co-hosts, speakers, subtitles"]
+      Games["Mini Games<br/>chess + tic tac toe"]
+    end
+
+    subgraph Firebase["Firebase Backend"]
+      Auth["Firebase Auth<br/>login, roles, suspended users"]
+      Firestore["Cloud Firestore<br/>users, posts, chats, groups, sessions"]
+      Storage["Cloud Storage<br/>media, therapist docs, PDFs"]
+      Functions["Cloud Functions<br/>server logic + notifications"]
+      Rules["Firestore Rules<br/>admin/staff + ownership checks"]
+    end
+
+    subgraph Services["External Services"]
+      AI["OpenAI + Perspective API<br/>AI writing + toxicity checks"]
+      LiveServices["LiveKit + AssemblyAI<br/>audio rooms + subtitles"]
+      PushEmail["Expo Push + Email<br/>alerts, warnings, account emails"]
+      WebGames["Render WebView<br/>game screens"]
+    end
+
+    App <--> Feed
+    App <--> Chat
+    App <--> Groups
+    App <--> Therapy
+    App <--> Live
+    App <--> Games
+
+    Admin <--> Auth
+    Admin <--> Firestore
+    Admin --> Functions
+    Admin <--> Storage
+
+    App <--> Auth
+    App <--> Firestore
+    App <--> Storage
+    App --> Functions
+
+    Rules -. protects .-> Firestore
+    Rules -. checks roles .-> Auth
+
+    Functions <--> AI
+    Functions <--> LiveServices
+    Functions --> PushEmail
+    Games <--> WebGames
+    Live <--> LiveServices
+    Feed <--> AI
+    Chat --> PushEmail
+
+    classDef app fill:#FCE7F3,stroke:#EC4899,stroke-width:3px,color:#111827
+    classDef feature fill:#FFF7ED,stroke:#FDBA74,stroke-width:2px,color:#111827
+    classDef admin fill:#E0F2FE,stroke:#38BDF8,stroke-width:3px,color:#111827
+    classDef firebase fill:#FEF3C7,stroke:#F59E0B,stroke-width:3px,color:#111827
+    classDef service fill:#ECFDF5,stroke:#10B981,stroke-width:2px,color:#111827
+    classDef guard fill:#FCE7F3,stroke:#BE185D,stroke-width:3px,color:#111827
+
+    class App app
+    class Feed,Chat,Groups,Therapy,Live,Games feature
+    class Admin admin
+    class Auth,Firestore,Storage,Functions firebase
+    class Rules guard
+    class AI,LiveServices,PushEmail,WebGames service
+
+    linkStyle 0 stroke:#EC4899,stroke-width:3px,stroke-dasharray:9 6
+    linkStyle 1 stroke:#F59E0B,stroke-width:3px,stroke-dasharray:5 7
+    linkStyle 2 stroke:#FBBF24,stroke-width:3px,stroke-dasharray:9 6
+    linkStyle 3 stroke:#BE185D,stroke-width:3px,stroke-dasharray:5 7
+    linkStyle 4 stroke:#38BDF8,stroke-width:3px,stroke-dasharray:9 6
+    linkStyle 5 stroke:#10B981,stroke-width:3px,stroke-dasharray:5 7
+    linkStyle 6 stroke:#38BDF8,stroke-width:3px,stroke-dasharray:10 6
+    linkStyle 7 stroke:#F59E0B,stroke-width:3px,stroke-dasharray:4 7
+    linkStyle 8 stroke:#BE185D,stroke-width:3px,stroke-dasharray:10 6
+    linkStyle 9 stroke:#FBBF24,stroke-width:3px,stroke-dasharray:4 7
+    linkStyle 10 stroke:#EC4899,stroke-width:3px,stroke-dasharray:10 6
+    linkStyle 11 stroke:#F59E0B,stroke-width:3px,stroke-dasharray:4 7
+    linkStyle 12 stroke:#FBBF24,stroke-width:3px,stroke-dasharray:10 6
+    linkStyle 13 stroke:#BE185D,stroke-width:3px,stroke-dasharray:4 7
+    linkStyle 14 stroke:#64748B,stroke-width:2.5px,stroke-dasharray:3 7
+    linkStyle 15 stroke:#64748B,stroke-width:2.5px,stroke-dasharray:3 7
+    linkStyle 16 stroke:#EC4899,stroke-width:3px,stroke-dasharray:9 6
+    linkStyle 17 stroke:#38BDF8,stroke-width:3px,stroke-dasharray:5 7
+    linkStyle 18 stroke:#10B981,stroke-width:3px,stroke-dasharray:9 6
+    linkStyle 19 stroke:#F59E0B,stroke-width:3px,stroke-dasharray:5 7
+    linkStyle 20 stroke:#38BDF8,stroke-width:3px,stroke-dasharray:9 6
+    linkStyle 21 stroke:#BE185D,stroke-width:3px,stroke-dasharray:5 7
+    linkStyle 22 stroke:#10B981,stroke-width:3px,stroke-dasharray:9 6
+      </div>
+    </section>
+
+    <div class="legend">
+      <span><i class="dot pink"></i>Mobile app + admin flows</span>
+      <span><i class="dot yellow"></i>Firebase data and rules</span>
+      <span><i class="dot green"></i>External services</span>
+      <span><i class="dot blue"></i>Live/audio paths</span>
+    </div>
+
+    <p class="footer-note">
+      Secure Data Flow • Role-Based Access • Firestore Security Rules • Least Privilege
+    </p>
+  </main>
+  <div id="toast" class="toast">Saved PNG</div>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      securityLevel: 'loose',
+      theme: 'base',
+      flowchart: {
+        curve: 'basis',
+        htmlLabels: true,
+        nodeSpacing: 72,
+        rankSpacing: 105,
+        padding: 22
+      },
+      themeVariables: {
+        fontFamily: "Inter, 'Segoe UI', system-ui, sans-serif",
+        primaryTextColor: '#111827',
+        lineColor: '#ec4899',
+        nodeBorderRadius: '18',
+        clusterBkg: 'rgba(255,255,255,0.62)',
+        clusterBorder: '#fbbf24',
+        edgeLabelBackground: '#ffffff',
+        tertiaryColor: '#fef3c7'
+      }
+    });
+
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      window.setTimeout(() => toast.classList.remove('show'), 1800);
+    }
+
+    async function waitForDiagram() {
+      for (let i = 0; i < 30; i += 1) {
+        const svg = document.querySelector('.mermaid svg');
+        if (svg) return svg;
+        await new Promise((resolve) => window.setTimeout(resolve, 150));
+      }
+      return null;
+    }
+
+    async function downloadAsPng() {
+      const button = document.getElementById('downloadPng');
+      const captureArea = document.getElementById('captureArea');
+      button.disabled = true;
+      button.textContent = 'Preparing...';
+
+      await waitForDiagram();
+      const dpr = window.devicePixelRatio || 2;
+      const scale = Math.min(4.5, Math.max(3.25, dpr * 1.85));
+      const w = Math.ceil(Math.max(captureArea.scrollWidth, captureArea.offsetWidth));
+      const h = Math.ceil(Math.max(captureArea.scrollHeight, captureArea.offsetHeight));
+
+      const prevMax = captureArea.style.maxWidth;
+      const prevOv = captureArea.style.overflow;
+      const prevW = captureArea.style.width;
+
+      captureArea.style.maxWidth = 'none';
+      captureArea.style.overflow = 'visible';
+      captureArea.style.width = w + 'px';
+
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      );
+
+      try {
+        const canvas = await html2canvas(captureArea, {
+          backgroundColor: '#fffdf8',
+          scale,
+          useCORS: true,
+          logging: false,
+          scrollX: 0,
+          scrollY: 0,
+          windowWidth: w,
+          windowHeight: h,
+          onclone(doc) {
+            const node = doc.getElementById('captureArea');
+            if (!node) return;
+            node.style.maxWidth = 'none';
+            node.style.overflow = 'visible';
+            node.style.width = w + 'px';
+          },
+        });
+
+        const link = document.createElement('a');
+        link.download = 'spill-system-architecture.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        showToast('Saved PNG');
+      } catch (error) {
+        console.error(error);
+        showToast('Could not save image');
+      } finally {
+        captureArea.style.maxWidth = prevMax;
+        captureArea.style.overflow = prevOv;
+        captureArea.style.width = prevW;
+        button.disabled = false;
+        button.textContent = 'Save as PNG';
+      }
+    }
+
+    document.getElementById('downloadPng').addEventListener('click', downloadAsPng);
+  </script>
+</body>
+</html>

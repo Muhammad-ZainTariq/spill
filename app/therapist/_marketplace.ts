@@ -419,6 +419,26 @@ export const listSessionsForTherapist = async (therapistUid: string, max: number
     .slice(0, max);
 };
 
+export const countSessionsForTherapist = async (therapistUid: string): Promise<number> => {
+  if (!auth.currentUser) return 0;
+  const uid = String(therapistUid || '').trim();
+  if (!uid) return 0;
+  // User marketplace screens cannot read another therapist's private session docs.
+  // Slots are public availability data, so count booked future slots as visible session activity.
+  const q = query(collection(db, 'therapist_slots'), where('therapist_uid', '==', uid), limit(500));
+  const snap = await getDocs(q);
+  const seen = new Set<string>();
+  return snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() as any) }))
+    .filter((s) => String(s.status || '') === 'booked')
+    .filter((s) => {
+      const key = String(s.start_at || s.id);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).length;
+};
+
 /** Upcoming / recent sessions for the signed-in member (private therapist bookings). */
 export const listSessionsForUser = async (userUid: string, max: number = 40): Promise<TherapistSession[]> => {
   if (!auth.currentUser) return [];

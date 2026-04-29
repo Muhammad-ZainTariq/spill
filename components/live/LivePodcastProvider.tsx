@@ -9,9 +9,9 @@ import { auth } from '@/lib/firebase';
 import {
   createLivePodcastTranscriptToken,
   formatLiveSessionDuration,
+  joinLivePodcastRoom,
   leaveLivePodcastRoom,
   publishLivePodcastTranscriptSegment,
-  refreshLivePodcastJoin,
   subscribeLivePodcastRoom,
   subscribeSpeakerRequests,
   type LivePodcastRole,
@@ -29,6 +29,7 @@ export type ActiveLivePodcastSession = {
 export type LivePodcastParticipant = {
   identity: string;
   name: string;
+  role?: LivePodcastRole | null;
   isLocal: boolean;
   isSpeaking: boolean;
   audioLevel: number;
@@ -122,6 +123,7 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
         payload: {
           token: sessionToken,
           serverUrl: sessionServerUrl,
+          role: activeSession?.role || 'listener',
           canPublish,
           transcript,
         },
@@ -137,6 +139,7 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
     sessionRoomId,
     sessionServerUrl,
     sessionToken,
+    activeSession?.role,
     sendCommand,
     sessionConnectKey,
     webReady,
@@ -178,6 +181,20 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
       return { ...session, minimized: false };
     });
   }, []);
+
+  const reconnectToRoom = useCallback(
+    async (session: Omit<ActiveLivePodcastSession, 'minimized'>) => {
+      sendCommand({ type: 'disconnect' });
+      setActiveSession(null);
+      setParticipants([]);
+      setConnectionState('idle');
+      setMicEnabled(false);
+      setWebReady(false);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      setActiveSession({ ...session, minimized: false });
+    },
+    [sendCommand]
+  );
 
   const minimizeRoom = useCallback(() => {
     setActiveSession((prev) => (prev ? { ...prev, minimized: true } : prev));
@@ -245,8 +262,10 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
       try {
         for (let attempt = 0; attempt < 10; attempt++) {
           try {
-            const data = await refreshLivePodcastJoin(roomId);
-            connectToRoom({
+            // Use the same fresh-join path as co-host audio. A listener token cannot reliably
+            // become a publishing token in-place on every device/WebView.
+            const data = await joinLivePodcastRoom(roomId);
+            await reconnectToRoom({
               room: data.room,
               role: data.role,
               token: data.token,
@@ -263,7 +282,7 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
               continue;
             }
             if (!notReady) {
-              console.warn('[LivePodcast] refreshLivePodcastJoin failed', error);
+              console.warn('[LivePodcast] speaker reconnect failed', error);
             }
             return;
           }
@@ -272,7 +291,7 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
         speakerUpgradeInFlightRef.current = false;
       }
     },
-    [connectToRoom]
+    [reconnectToRoom]
   );
 
   useEffect(() => {
@@ -333,13 +352,14 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
         const turnId = String(msg.payload?.id || '').trim();
         const text = String(msg.payload?.text || '').trim();
         if (!currentRoomId || !turnId || !text) return;
+        const localParticipant = participants.find((participant) => participant.isLocal);
         publishLivePodcastTranscriptSegment(currentRoomId, {
           id: turnId,
           text,
           is_final: !!msg.payload?.isFinal,
           sequence: Number(msg.payload?.sequence || 0),
-          speaker_uid: activeSession?.room.host_uid || null,
-          speaker_name: activeSession?.room.host_name || null,
+          speaker_uid: auth.currentUser?.uid || activeSession?.room.host_uid || null,
+          speaker_name: localParticipant?.name || auth.currentUser?.displayName || activeSession?.room.host_name || null,
           created_at: typeof msg.payload?.createdAt === 'string' ? msg.payload.createdAt : undefined,
           updated_at: new Date().toISOString(),
         }).catch((error) => {
@@ -353,7 +373,7 @@ export function LivePodcastProvider({ children }: React.PropsWithChildren) {
     } catch (error) {
       console.warn('Failed to parse live podcast WebView message', error);
     }
-  }, [activeSession?.room.host_name, activeSession?.room.host_uid, activeSession?.room.id, leaveRoom]);
+  }, [activeSession?.room.host_name, activeSession?.room.host_uid, activeSession?.room.id, leaveRoom, participants]);
 
   const value = useMemo(
     () => ({

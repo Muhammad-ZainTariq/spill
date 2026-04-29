@@ -150,7 +150,7 @@ export default function CommentsScreen() {
 
     try {
       const comment = await addComment(postId, newComment.trim());
-      setComments(prev => [comment, ...prev]);
+      setComments(prev => [...prev, comment]);
       setNewComment('');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
@@ -259,10 +259,12 @@ export default function CommentsScreen() {
                 <TextInput
                   style={styles.replyInput}
                   placeholder="Write a reply..."
+                  placeholderTextColor="#94a3b8"
                   value={replyText}
                   onChangeText={setReplyText}
                   multiline
                   maxLength={500}
+                  textAlignVertical="center"
                 />
                 <View style={styles.replyActions}>
                   <Pressable 
@@ -311,10 +313,13 @@ export default function CommentsScreen() {
       <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
       >
         <ScrollView 
           style={styles.commentsList}
           contentContainerStyle={styles.commentsContent}
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
           {/* Post Context */}
@@ -390,10 +395,12 @@ export default function CommentsScreen() {
           <TextInput
             style={styles.commentInput}
             placeholder="Write a comment..."
+            placeholderTextColor="#94a3b8"
             value={newComment}
             onChangeText={setNewComment}
             multiline
             maxLength={500}
+            textAlignVertical="center"
           />
           <Pressable 
             style={[styles.submitButton, !newComment.trim() && styles.disabledButton]}
@@ -429,7 +436,7 @@ const styles = StyleSheet.create({
   },
   commentsContent: {
     padding: 16,
-    paddingBottom: 100,
+    paddingBottom: 130,
   },
   emptyState: {
     flex: 1,
@@ -556,19 +563,24 @@ const styles = StyleSheet.create({
   },
   commentContainer: {
     backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
+    borderRadius: 18,
+    padding: 14,
     marginBottom: 12,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.05,
+    shadowRadius: 14,
     elevation: 2,
+    borderWidth: 1,
+    borderColor: '#eef2f7',
   },
   replyContainer: {
-    marginLeft: 20,
+    marginLeft: 34,
     marginTop: 8,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: '#f8fafc',
+    borderColor: '#f1f5f9',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   commentHeader: {
     flexDirection: 'row',
@@ -603,18 +615,18 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   commentAuthor: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
     marginRight: 8,
   },
   commentTime: {
     fontSize: 12,
-    color: '#666',
+    color: '#94a3b8',
   },
   commentText: {
-    fontSize: 16,
-    color: '#333',
+    fontSize: 15,
+    color: '#334155',
     lineHeight: 22,
     marginBottom: 12,
   },
@@ -626,9 +638,9 @@ const styles = StyleSheet.create({
     marginRight: 16,
   },
   commentActionText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#ec4899',
-    fontWeight: '500',
+    fontWeight: '800',
   },
   deleteAction: {
     color: '#ff4444',
@@ -636,16 +648,23 @@ const styles = StyleSheet.create({
   replyInputContainer: {
     marginTop: 12,
     padding: 12,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
+    backgroundColor: '#fff7fb',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#fbcfe8',
   },
   replyInput: {
     backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: '#0f172a',
     maxHeight: 100,
-    marginBottom: 8,
+    minHeight: 42,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#fce7f3',
   },
   replyActions: {
     flexDirection: 'row',
@@ -664,7 +683,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ec4899',
     paddingHorizontal: 16,
     paddingVertical: 8,
-    borderRadius: 6,
+    borderRadius: 999,
   },
   replySubmitText: {
     color: '#fff',
@@ -676,27 +695,41 @@ const styles = StyleSheet.create({
   },
   inputContainer: {
     flexDirection: 'row',
-    padding: 16,
+    paddingHorizontal: 14,
+    paddingTop: 12,
     backgroundColor: '#fff',
-    borderTopWidth: 1,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#e1e5e9',
     alignItems: 'flex-end',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 8,
   },
   commentInput: {
     flex: 1,
     backgroundColor: '#f8f9fa',
-    borderRadius: 20,
+    borderRadius: 22,
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: 16,
-    maxHeight: 100,
+    paddingTop: 11,
+    paddingBottom: 11,
+    fontSize: 15,
+    color: '#0f172a',
+    minHeight: 44,
+    maxHeight: 110,
     marginRight: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   submitButton: {
     backgroundColor: '#ec4899',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 20,
+    minWidth: 58,
+    height: 44,
+    paddingHorizontal: 16,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   submitButtonText: {
     color: '#fff',

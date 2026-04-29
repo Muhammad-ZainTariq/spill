@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spill - Dissertation workplan (sheet)</title>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <style>
+    :root {
+      --pink: #ec4899;
+      --pink-soft: #fce7f3;
+      --yellow: #fef3c7;
+      --amber: #92400e;
+      --ink: #111827;
+      --muted: #64748b;
+      --export-bg: #fffdf8;
+      --grid: #fde68a;
+      --grid-soft: rgba(251, 191, 36, 0.45);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding: 24px 16px 32px;
+      font-family: "Times New Roman", Times, serif;
+      font-size: 13pt;
+      line-height: 1.55;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(236, 72, 153, 0.18), transparent 30rem),
+        radial-gradient(circle at bottom right, rgba(251, 191, 36, 0.32), transparent 32rem),
+        linear-gradient(135deg, #fff7ed 0%, #fff1f7 48%, #fffbeb 100%);
+    }
+
+    .wrap {
+      width: min(1560px, 98vw);
+      margin: 0 auto;
+    }
+
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+      padding: 12px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(249, 168, 212, 0.75);
+      background: rgba(255, 255, 255, 0.74);
+      box-shadow: 0 12px 28px rgba(190, 24, 93, 0.08);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      font-size: 13pt;
+      color: var(--ink);
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--pink), #f9a8d4);
+      color: #fff;
+      box-shadow: 0 10px 20px rgba(236, 72, 153, 0.22);
+      font-weight: 700;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13pt;
+    }
+
+    .download-btn {
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: var(--pink);
+      color: #fff;
+      font-size: 12pt;
+      font-weight: 700;
+      box-shadow: 0 10px 22px rgba(236, 72, 153, 0.24);
+    }
+
+    .download-btn:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    .download-btn-word {
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: #0f172a;
+      color: #fff;
+      font-size: 12pt;
+      font-weight: 700;
+      box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18);
+    }
+
+    .download-btn-word:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    .hint-chip {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 13px;
+      border-radius: 999px;
+      border: 1px solid #fde68a;
+      background: #fffbeb;
+      color: var(--amber);
+      font-size: 11pt;
+      font-weight: 700;
+    }
+
+    .hero-note {
+      max-width: 56em;
+      margin: 0 auto 12px;
+      text-align: center;
+      font-size: 12pt;
+      font-weight: 600;
+      color: var(--amber);
+      line-height: 1.4;
+    }
+
+    /* PNG capture area (cream card; matches spill-block-diagram) */
+    #captureArea {
+      position: relative;
+      margin: 0 auto;
+      background: var(--export-bg);
+      border: 1px solid #fde68a;
+      border-radius: 28px;
+      overflow: hidden;
+      box-shadow: 0 8px 28px rgba(146, 64, 14, 0.08);
+      max-width: 100%;
+    }
+
+    .capture-pad {
+      padding: 12px 24px 14px;
+      position: relative;
+      z-index: 0;
+    }
+
+    .sheet-chrome {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      margin: -2px -4px 10px;
+      border-radius: 16px;
+      border: 1px solid #f9a8d4;
+      background: var(--pink-soft);
+      font-size: 11pt;
+      font-weight: 700;
+      color: #9d174d;
+    }
+
+    .sheet-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #10b981;
+      flex-shrink: 0;
+      box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.35);
+    }
+
+    .sheet-filename {
+      font-family: "Times New Roman", Times, serif;
+      font-weight: 700;
+      color: #be185d;
+    }
+
+    .sheet-meta {
+      margin-left: auto;
+      font-size: 10pt;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .sheet-banner {
+      text-align: center;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--grid-soft);
+    }
+
+    .sheet-banner h2 {
+      margin: 0 0 4px;
+      font-size: clamp(17pt, 2.4vw, 21pt);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    .sheet-banner p {
+      margin: 0 auto;
+      max-width: 58em;
+      font-size: 11pt;
+      color: var(--muted);
+      font-weight: 600;
+      line-height: 1.4;
+    }
+
+    .sheet-scroll {
+      overflow-x: auto;
+      overflow-y: visible;
+      background: #fff;
+      border-radius: 20px;
+      border: 1px solid var(--grid);
+    }
+
+    table.gantt-sheet {
+      border-collapse: collapse;
+      table-layout: auto;
+      width: max-content;
+      font-family: "Times New Roman", Times, serif;
+      font-size: 10pt;
+      color: var(--ink);
+    }
+
+    .gantt-sheet th,
+    .gantt-sheet td {
+      border: 1px solid var(--grid-soft);
+      padding: 3px 4px;
+      vertical-align: middle;
+      line-height: 1.3;
+    }
+
+    .gantt-sheet thead th {
+      background: var(--yellow);
+      font-weight: 700;
+      text-align: center;
+      color: var(--amber);
+      position: sticky;
+      top: 0;
+      z-index: 3;
+    }
+
+    .gantt-sheet thead tr.month-row th {
+      background: #fff7ed;
+      font-family: "Times New Roman", Times, serif;
+      font-size: 10pt;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 5px 4px;
+      color: var(--ink);
+    }
+
+    .gantt-sheet thead tr.letters-row th {
+      background: #fffbeb;
+      font-size: 9pt;
+      color: var(--muted);
+      padding: 2px 4px;
+    }
+
+    .gantt-sheet thead tr.dates-row th {
+      background: var(--pink-soft);
+      font-size: 8pt;
+      font-weight: 700;
+      padding: 4px 3px;
+      min-width: 48px;
+      width: 48px;
+      white-space: nowrap;
+      color: #9d174d;
+    }
+
+    .gantt-sheet thead tr.dates-row th.corner {
+      background: var(--yellow);
+      min-width: 36px;
+      width: 36px;
+    }
+
+    .gantt-sheet thead tr.dates-row th.task-head {
+      min-width: 220px;
+      width: 220px;
+      text-align: left;
+      background: var(--yellow);
+    }
+
+    .gantt-sheet thead tr.dates-row th.fix {
+      min-width: 48px;
+      width: 48px;
+      background: var(--yellow);
+    }
+
+    .gantt-sheet thead tr.dates-row th.fix-wide {
+      min-width: 92px;
+      width: 92px;
+      background: var(--yellow);
+    }
+
+    .gantt-sheet tbody td.rn {
+      background: #fffbeb;
+      text-align: center;
+      font-weight: 700;
+      color: var(--amber);
+      width: 36px;
+      min-width: 36px;
+    }
+
+    .gantt-sheet tbody td.task {
+      text-align: left;
+      font-weight: 600;
+      max-width: 280px;
+      background: #fff;
+    }
+
+    .gantt-sheet tbody td.fix {
+      text-align: center;
+      background: #fff;
+      white-space: nowrap;
+      font-weight: 600;
+    }
+
+    .gantt-sheet tbody tr:nth-child(even) td:not(.wk):not(.rn) {
+      background: #fffefb;
+    }
+
+    .gantt-sheet tbody tr:nth-child(even) td.rn {
+      background: #fef9c3;
+    }
+
+    .gantt-sheet tbody tr.section-row td {
+      background: #fce7f3 !important;
+      font-family: "Times New Roman", Times, serif;
+      font-weight: 700;
+      font-size: 10pt;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #9d174d;
+      padding: 6px 6px;
+    }
+
+    .gantt-sheet tbody td.wk {
+      padding: 0;
+      border-color: var(--grid-soft);
+      background: #fff;
+    }
+
+    .gantt-sheet tbody tr:nth-child(even) td.wk {
+      background: #fffefb;
+    }
+
+    .gantt-sheet tbody td.wk.bar {
+      background: rgba(244, 114, 182, 0.42);
+      box-shadow: inset 0 0 0 1px rgba(219, 39, 119, 0.35);
+    }
+
+    .gantt-sheet tbody td.wk.bar-crit {
+      background: rgba(251, 113, 133, 0.5);
+      box-shadow: inset 0 0 0 1px rgba(225, 29, 72, 0.45);
+    }
+
+    .gantt-sheet tbody td.wk.bar-mile {
+      background: rgba(167, 139, 250, 0.45);
+      box-shadow: inset 0 0 0 1px rgba(124, 58, 237, 0.4);
+    }
+
+    .gantt-sheet tbody td.wk.bar-start {
+      border-left: 2px solid #be185d;
+    }
+
+    .gantt-sheet tbody td.wk.bar-end {
+      border-right: 2px solid #be185d;
+    }
+
+    .gantt-sheet tbody td.wk.bar-crit.bar-start {
+      border-left-color: #be123c;
+    }
+
+    .gantt-sheet tbody td.wk.bar-crit.bar-end {
+      border-right-color: #be123c;
+    }
+
+    .sheet-foot {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 16px;
+      border: 1px solid var(--grid-soft);
+      background: rgba(255, 255, 255, 0.7);
+      font-size: 10pt;
+      color: var(--muted);
+      font-weight: 600;
+      line-height: 1.4;
+    }
+
+    .sheet-foot code {
+      font-family: "Times New Roman", Times, serif;
+      font-size: 10pt;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      padding: 12px 20px;
+      border-radius: 999px;
+      background: var(--ink);
+      color: #fff;
+      font-family: "Times New Roman", Times, serif;
+      font-size: 12pt;
+      font-weight: 700;
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 0.25s ease, opacity 0.25s ease;
+      z-index: 100;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">S</span>
+        <span>Spill · dissertation workplan</span>
+      </div>
+      <div class="actions">
+        <span class="hint-chip">PNG = bitmap · Word = editable sheet</span>
+        <button type="button" class="download-btn" id="downloadPng">Save as PNG</button>
+        <button type="button" class="download-btn-word" id="downloadDocx">Save as Word (.docx)</button>
+      </div>
+    </header>
+
+    <p class="hero-note">
+      Side-scroll the timeline; <strong>Save as PNG</strong> captures the full sheet width (all week columns).
+      <strong> Save as Word (.docx)</strong> downloads a document you can open in Microsoft Word (or Pages); if your browser blocks the converter, use the fallback .doc download from the alert.
+    </p>
+
+    <div id="captureArea">
+      <div class="capture-pad">
+        <div class="sheet-chrome">
+          <span class="sheet-dot" aria-hidden="true"></span>
+          <span class="sheet-filename">Spill_Dissertation_Workplan.xlsx</span>
+          <span class="sheet-meta" id="sheetMeta"></span>
+        </div>
+        <div class="sheet-banner">
+          <h2>Delivery plan - Oct 2025 → Apr 2026</h2>
+          <p>
+            Weekly columns: <strong>dd/mm/yy</strong> (week commencing Monday). Closing phase: dissertation report and security testing.
+          </p>
+        </div>
+        <div class="sheet-scroll" id="sheetScroll">
+          <table class="gantt-sheet" id="ganttTable" aria-label="Delivery Gantt spreadsheet"></table>
+        </div>
+        <div class="sheet-foot">
+          Shaded cells = task active that week; red-tinted = dissertation-critical. Export uses the same cream background (<code>#fffdf8</code>) as the other Spill diagrams.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">Saved PNG</div>
+
+  <script>
+    (function () {
+      const MS_DAY = 86400000;
+
+      function parseYmd(s) {
+        const [y, m, d] = s.split("-").map(Number);
+        return new Date(y, m - 1, d);
+      }
+
+      function fmtDisplay(d) {
+        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        return `${String(d.getDate()).padStart(2, "0")} ${months[d.getMonth()]} ${d.getFullYear()}`;
+      }
+
+      function fmtCellDate(d) {
+        const dd = String(d.getDate()).padStart(2, "0");
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const yy = String(d.getFullYear()).slice(-2);
+        return `${dd}/${mm}/${yy}`;
+      }
+
+      function toYmd(d) {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${y}-${m}-${day}`;
+      }
+
+      function isWeekend(d) {
+        const w = d.getDay();
+        return w === 0 || w === 6;
+      }
+
+      function addWorkingDays(startYmd, nInclusive) {
+        if (nInclusive <= 1) return startYmd;
+        let d = parseYmd(startYmd);
+        let count = 1;
+        while (count < nInclusive) {
+          d = new Date(d.getTime() + MS_DAY);
+          if (!isWeekend(d)) count++;
+        }
+        return toYmd(d);
+      }
+
+      function nextWorkingDayAfter(endYmd) {
+        let d = parseYmd(endYmd);
+        do {
+          d = new Date(d.getTime() + MS_DAY);
+        } while (isWeekend(d));
+        return toYmd(d);
+      }
+
+      function countWorkingDaysBetween(startYmd, endYmd) {
+        let d = parseYmd(startYmd);
+        const end = parseYmd(endYmd);
+        let n = 0;
+        while (d <= end) {
+          if (!isWeekend(d)) n++;
+          d = new Date(d.getTime() + MS_DAY);
+        }
+        return n;
+      }
+
+      function mondayOfWeekContaining(d) {
+        const x = new Date(d.getTime());
+        const day = x.getDay();
+        const diff = day === 0 ? -6 : 1 - day;
+        x.setDate(x.getDate() + diff);
+        return x;
+      }
+
+      function rangesOverlapWeek(a0, a1, weekMon) {
+        const w0 = new Date(weekMon.getTime());
+        const w1 = new Date(weekMon.getTime() + 6 * MS_DAY);
+        return a0 <= w1 && a1 >= w0;
+      }
+
+      const RAW = [
+        { id: "m0", section: "Discovery + foundation", name: "Sprint 0 planning + backlog grooming", start: "2025-10-06", milestone: true },
+        { id: "a1", section: "Discovery + foundation", name: "Firebase + Firestore + rules baseline", start: "2025-10-06", days: 10 },
+        { id: "a2", section: "Discovery + foundation", name: "Expo shell + navigation", start: "2025-10-08", days: 12 },
+        { id: "a3", section: "Discovery + foundation", name: "UX flows + design tokens", start: "2025-10-13", days: 14 },
+        { id: "b1", section: "Identity + profiles", name: "Auth + session handling", start: "2025-10-27", days: 10 },
+        { id: "b2", section: "Identity + profiles", name: "User profiles + roles", after: "b1", days: 12 },
+        { id: "b3", section: "Identity + profiles", name: "Settings + push tokens", start: "2025-11-10", days: 8 },
+        { id: "c1", section: "Feed + engagement", name: "Posts + Cloud Storage media", start: "2025-11-05", days: 14 },
+        { id: "c2", section: "Feed + engagement", name: "Comments + postVotes", after: "c1", days: 9 },
+        { id: "c3", section: "Feed + engagement", name: "Feed polish + toxicity hooks", after: "c2", days: 7 },
+        { id: "d1", section: "Safety + moderation", name: "Reports pipeline", start: "2025-11-24", days: 11 },
+        { id: "d2", section: "Safety + moderation", name: "Notifications + admin alerts", after: "d1", days: 9 },
+        { id: "e1", section: "Messaging", name: "Conversations + messages", start: "2025-12-08", days: 12 },
+        { id: "e2", section: "Messaging", name: "Match + anonymous chat", start: "2025-12-15", days: 14 },
+        { id: "f1", section: "Groups + challenges", name: "Groups + group_members", start: "2026-01-05", days: 12 },
+        { id: "f2", section: "Groups + challenges", name: "Invitations + group chat", after: "f1", days: 10 },
+        { id: "f3", section: "Groups + challenges", name: "Activities + streak proofs", start: "2026-01-20", days: 12 },
+        { id: "g1", section: "Therapist marketplace", name: "Onboarding + verification uploads", start: "2026-02-02", days: 14 },
+        { id: "g2", section: "Therapist marketplace", name: "Profiles + booking requests", after: "g1", days: 12 },
+        { id: "g3", section: "Therapist marketplace", name: "Sessions + reviews", start: "2026-02-23", days: 14 },
+        { id: "g4", section: "Therapist marketplace", name: "Therapist resources", after: "g3", days: 10 },
+        { id: "h1", section: "Live + admin", name: "Live podcast rooms + speakers", start: "2026-03-16", days: 12 },
+        { id: "h2", section: "Live + admin", name: "Replay + transcripts", after: "h1", days: 9 },
+        { id: "h3", section: "Live + admin", name: "Admin panel + accounts", start: "2026-03-23", days: 14 },
+        { id: "rep1", section: "Dissertation + final validation", name: "Dissertation report writing + supervisor review", start: "2026-03-23", days: 22, crit: true },
+        { id: "sec1", section: "Dissertation + final validation", name: "Security testing + threat review (app + backend)", start: "2026-04-01", days: 12, crit: true },
+        { id: "i1", section: "Dissertation + final validation", name: "QA + performance + accessibility", start: "2026-04-06", days: 10 }
+      ];
+
+      function resolveTasks() {
+        const endById = {};
+        return RAW.map((t) => {
+          let start;
+          let end;
+          if (t.milestone) {
+            start = t.start;
+            end = t.start;
+          } else if (t.after) {
+            const predEnd = endById[t.after];
+            if (!predEnd) throw new Error("Missing predecessor " + t.after);
+            start = nextWorkingDayAfter(predEnd);
+            end = addWorkingDays(start, t.days);
+          } else {
+            start = t.start;
+            end = addWorkingDays(start, t.days);
+          }
+          if (t.id) endById[t.id] = end;
+          const wd = t.milestone ? 0 : countWorkingDaysBetween(start, end);
+          const sprintNum = Math.floor((parseYmd(start) - parseYmd("2025-10-06")) / (14 * MS_DAY)) + 1;
+          return { ...t, start, end, wd, sprintNum: Math.max(1, sprintNum) };
+        });
+      }
+
+      function colLetters(n) {
+        let s = "";
+        let x = n;
+        while (x >= 0) {
+          s = String.fromCharCode(65 + (x % 26)) + s;
+          x = Math.floor(x / 26) - 1;
+        }
+        return s;
+      }
+
+      function buildWeeks(fromYmd, toYmd) {
+        const weeks = [];
+        let d = mondayOfWeekContaining(parseYmd(fromYmd));
+        const end = parseYmd(toYmd);
+        while (d <= end) {
+          weeks.push(new Date(d.getTime()));
+          d = new Date(d.getTime() + 7 * MS_DAY);
+        }
+        return weeks;
+      }
+
+      function render() {
+        const tasks = resolveTasks();
+        const lastEnd = tasks.reduce((m, t) => (t.end > m ? t.end : m), tasks[0].end);
+        const weeks = buildWeeks("2025-10-06", lastEnd);
+        const fixedCols = 6;
+        const totalCols = fixedCols + weeks.length;
+
+        const monthSpans = [];
+        for (let wi = 0; wi < weeks.length; ) {
+          const m = weeks[wi].getMonth();
+          const y = weeks[wi].getFullYear();
+          let len = 0;
+          while (
+            wi + len < weeks.length &&
+            weeks[wi + len].getMonth() === m &&
+            weeks[wi + len].getFullYear() === y
+          ) {
+            len++;
+          }
+          const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+          monthSpans.push({ label: `${months[m]} ${y}`, colspan: len });
+          wi += len;
+        }
+
+        let html = "<thead>";
+
+        html += "<tr class=\"month-row\">";
+        html += `<th colspan="${fixedCols}" style="text-align:left;padding-left:10px;">Timeline (weekly columns)</th>`;
+        monthSpans.forEach((sp) => {
+          html += `<th colspan="${sp.colspan}">${sp.label}</th>`;
+        });
+        html += "</tr>";
+
+        html += "<tr class=\"letters-row\">";
+        for (let c = 0; c < fixedCols; c++) {
+          html += `<th>${c === 0 ? "" : colLetters(c - 1)}</th>`;
+        }
+        for (let i = 0; i < weeks.length; i++) {
+          html += `<th>${colLetters(fixedCols - 1 + i)}</th>`;
+        }
+        html += "</tr>";
+
+        html += "<tr class=\"dates-row\">";
+        html += "<th class=\"corner\"></th>";
+        html += "<th class=\"task-head\">Deliverable</th>";
+        html += "<th class=\"fix\">Sprint</th>";
+        html += "<th class=\"fix-wide\">Start</th>";
+        html += "<th class=\"fix-wide\">Finish</th>";
+        html += "<th class=\"fix\">WD</th>";
+        weeks.forEach((w) => {
+          html += `<th title="Week commencing ${fmtDisplay(w)}">${fmtCellDate(w)}</th>`;
+        });
+        html += "</tr>";
+        html += "</thead><tbody>";
+
+        let rowNum = 1;
+        let prevSection = "";
+        tasks.forEach((t) => {
+          if (t.section !== prevSection) {
+            prevSection = t.section;
+            html += `<tr class="section-row"><td class="rn"></td><td colspan="${totalCols - 1}">${t.section}</td></tr>`;
+          }
+
+          const a0 = parseYmd(t.start);
+          const a1 = parseYmd(t.end);
+          const hitIdx = weeks
+            .map((wMon, wi) => (rangesOverlapWeek(a0, a1, wMon) ? wi : -1))
+            .filter((i) => i >= 0);
+          const wiFirst = hitIdx.length ? hitIdx[0] : -1;
+          const wiLast = hitIdx.length ? hitIdx[hitIdx.length - 1] : -1;
+
+          html += "<tr>";
+          html += `<td class="rn">${rowNum}</td>`;
+          html += `<td class="task">${t.name}</td>`;
+          html += `<td class="fix">S${t.sprintNum}</td>`;
+          html += `<td class="fix">${fmtDisplay(a0)}</td>`;
+          html += `<td class="fix">${fmtDisplay(a1)}</td>`;
+          html += `<td class="fix">${t.milestone ? "—" : t.wd}</td>`;
+
+          weeks.forEach((wMon, wi) => {
+            const hit = rangesOverlapWeek(a0, a1, wMon);
+            if (!hit) {
+              html += `<td class="wk"></td>`;
+              return;
+            }
+            const isStart = wi === wiFirst;
+            const isEnd = wi === wiLast;
+            let cls = "wk";
+            if (t.milestone) cls += " bar-mile";
+            else if (t.crit) cls += " bar-crit";
+            else cls += " bar";
+            if (isStart) cls += " bar-start";
+            if (isEnd) cls += " bar-end";
+            html += `<td class="${cls}"></td>`;
+          });
+
+          html += "</tr>";
+          rowNum++;
+        });
+
+        html += "</tbody>";
+        document.getElementById("ganttTable").innerHTML = html;
+        document.getElementById("sheetMeta").textContent =
+          `${tasks.length} tasks · ${weeks.length} weeks · ${fmtDisplay(parseYmd("2025-10-06"))} → ${fmtDisplay(parseYmd(lastEnd))}`;
+      }
+
+      render();
+
+      function showToast(msg) {
+        const el = document.getElementById("toast");
+        el.textContent = msg;
+        el.classList.add("show");
+        setTimeout(() => el.classList.remove("show"), 2000);
+      }
+
+      function applyExportLayout(cap, sheet, exportW) {
+        cap.dataset.prevMax = cap.style.maxWidth;
+        cap.dataset.prevOv = cap.style.overflow;
+        cap.dataset.prevW = cap.style.width;
+        sheet.dataset.prevOv = sheet.style.overflow;
+        sheet.dataset.prevW = sheet.style.width;
+        sheet.dataset.prevH = sheet.style.maxHeight;
+
+        cap.style.maxWidth = "none";
+        cap.style.overflow = "visible";
+        cap.style.width = `${exportW}px`;
+        sheet.style.overflow = "visible";
+        sheet.style.width = `${exportW}px`;
+        sheet.style.maxHeight = "none";
+      }
+
+      function restoreExportLayout(cap, sheet) {
+        cap.style.maxWidth = cap.dataset.prevMax || "";
+        cap.style.overflow = cap.dataset.prevOv || "";
+        cap.style.width = cap.dataset.prevW || "";
+        sheet.style.overflow = sheet.dataset.prevOv || "";
+        sheet.style.width = sheet.dataset.prevW || "";
+        sheet.style.maxHeight = sheet.dataset.prevH || "";
+      }
+
+      function cssForWordExport() {
+        const el = document.querySelector("style");
+        let css = el ? el.textContent : "";
+        const vars = {
+          "--pink": "#ec4899",
+          "--pink-soft": "#fce7f3",
+          "--yellow": "#fef3c7",
+          "--amber": "#92400e",
+          "--ink": "#111827",
+          "--muted": "#64748b",
+          "--export-bg": "#fffdf8",
+          "--grid": "#fde68a",
+          "--grid-soft": "rgba(251, 191, 36, 0.45)",
+        };
+        Object.keys(vars).forEach((k) => {
+          css = css.split(`var(${k})`).join(vars[k]);
+        });
+        return css;
+      }
+
+      async function buildWordExportHtml() {
+        const cap = document.getElementById("captureArea");
+        const sheet = document.getElementById("sheetScroll");
+        const exportW = Math.ceil(Math.max(sheet.scrollWidth, sheet.offsetWidth, cap.getBoundingClientRect().width));
+        applyExportLayout(cap, sheet, exportW);
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const style = cssForWordExport();
+        const inner = cap.outerHTML;
+        restoreExportLayout(cap, sheet);
+        return `<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><meta name="ProgId" content="Word.Document"><style>${style}</style></head><body>${inner}</body></html>`;
+      }
+
+      function triggerDownload(blob, filename) {
+        const a = document.createElement("a");
+        a.download = filename;
+        a.href = URL.createObjectURL(blob);
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      }
+
+      function saveWordCompatibleDoc(fullHtml, filenameDoc) {
+        const blob = new Blob(["\ufeff", fullHtml], { type: "application/msword" });
+        triggerDownload(blob, filenameDoc);
+      }
+
+      document.getElementById("downloadDocx").addEventListener("click", async () => {
+        const btn = document.getElementById("downloadDocx");
+        btn.disabled = true;
+        btn.textContent = "Preparing…";
+        try {
+          const htmlString = await buildWordExportHtml();
+          let blob = null;
+          const tryConverters = [
+            () => import("https://esm.sh/html-docx-js@0.3.1?bundle"),
+            () => import("https://cdn.skypack.dev/html-docx-js"),
+          ];
+          for (const loadMod of tryConverters) {
+            try {
+              const mod = await loadMod();
+              const htmlDocx = mod.default || mod;
+              if (htmlDocx && typeof htmlDocx.asBlob === "function") {
+                blob = htmlDocx.asBlob(htmlString);
+                if (blob && blob.size > 0) break;
+              }
+            } catch (e) {
+              console.warn("docx converter attempt failed", e);
+            }
+          }
+          if (blob && blob.size > 0) {
+            triggerDownload(blob, "spill-dissertation-workplan.docx");
+            showToast("Saved spill-dissertation-workplan.docx");
+          } else {
+            saveWordCompatibleDoc(htmlString, "spill-dissertation-workplan.doc");
+            showToast("Saved .doc — in Word use File → Save As → Word (.docx)");
+          }
+        } catch (e) {
+          console.error(e);
+          showToast("Word export failed");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "Save as Word (.docx)";
+        }
+      });
+
+      document.getElementById("downloadPng").addEventListener("click", async () => {
+        const btn = document.getElementById("downloadPng");
+        const cap = document.getElementById("captureArea");
+        const sheet = document.getElementById("sheetScroll");
+        btn.disabled = true;
+        btn.textContent = "Rendering…";
+
+        const exportW = Math.ceil(Math.max(sheet.scrollWidth, sheet.offsetWidth, cap.getBoundingClientRect().width));
+        const exportH = Math.ceil(cap.scrollHeight);
+        const dpr = window.devicePixelRatio || 2;
+        const scale = Math.min(4, Math.max(3, dpr * 1.85));
+
+        applyExportLayout(cap, sheet, exportW);
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+        try {
+          const canvas = await html2canvas(cap, {
+            backgroundColor: "#fffdf8",
+            scale,
+            useCORS: true,
+            logging: false,
+            scrollX: 0,
+            scrollY: 0,
+            windowWidth: exportW,
+            windowHeight: exportH,
+            onclone(clonedDoc) {
+              const node = clonedDoc.getElementById("captureArea");
+              if (!node) return;
+              const sc = clonedDoc.getElementById("sheetScroll");
+              node.style.maxWidth = "none";
+              node.style.overflow = "visible";
+              node.style.width = `${exportW}px`;
+              if (sc) {
+                sc.style.overflow = "visible";
+                sc.style.width = `${exportW}px`;
+                sc.style.maxHeight = "none";
+              }
+              node.querySelectorAll("thead th").forEach((th) => {
+                th.style.position = "static";
+                th.style.left = "auto";
+                th.style.top = "auto";
+                th.style.zIndex = "auto";
+              });
+            }
+          });
+
+          const a = document.createElement("a");
+          a.download = "spill-dissertation-workplan-sheet.png";
+          a.href = canvas.toDataURL("image/png");
+          a.click();
+          showToast("Full-width PNG saved");
+        } catch (e) {
+          console.error(e);
+          showToast("Export failed");
+        } finally {
+          restoreExportLayout(cap, sheet);
+          btn.disabled = false;
+          btn.textContent = "Save as PNG";
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

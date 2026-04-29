@@ -1,4 +1,4 @@
-import { auth, storage, ref, uploadString, getDownloadURL } from '@/lib/firebase';
+import { auth, db, storage, ref, uploadString, getDownloadURL } from '@/lib/firebase';
 import { Feather } from '@expo/vector-icons';
 import { Buffer } from 'buffer';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { collection, deleteDoc, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
 import { cancelPremium, checkPremiumStatus, fetchUserProfile, updateUserProfile } from './functions';
+import { clearLoginOtpPending } from '@/lib/loginOtpPending';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -69,7 +70,7 @@ export default function SettingsScreen() {
         setAvatarUrl(profile.avatar_url || '');
         setAvailableForMatches(profile.available_for_matches || false);
         setMatchStruggles(profile.match_struggles || []);
-        setIsAdmin(!!profile.is_admin);
+        setIsAdmin(!!profile.is_admin || !!profile.is_staff);
       }
     } catch (error) {
       console.error('Error loading profile:', error);
@@ -166,9 +167,13 @@ export default function SettingsScreen() {
           router.replace('/(tabs)');
         }}
       ]);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving profile:', error);
-      Alert.alert('Error', 'Something went wrong.');
+      if (error?.message === 'USERNAME_TAKEN') {
+        Alert.alert('Username taken', 'That anonymous username is already being used. Please choose another one.');
+      } else {
+        Alert.alert('Error', 'Something went wrong.');
+      }
     } finally {
       setLoading(false);
     }
@@ -176,11 +181,19 @@ export default function SettingsScreen() {
 
   const handleLogout = async () => {
     try {
+      await clearLoginOtpPending();
       const { signOut } = await import('firebase/auth');
       await signOut(auth);
+    } catch (error) {
+      console.error('Error signing out:', error);
+      Alert.alert('Error', 'Could not log out. Please try again.');
+      return;
+    }
+
+    try {
       router.replace('/login');
     } catch (error) {
-      console.error('Error logging out:', error);
+      console.warn('Navigation after logout failed:', error);
     }
   };
 

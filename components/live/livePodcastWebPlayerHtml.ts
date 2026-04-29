@@ -46,6 +46,8 @@ export function getLivePodcastWebPlayerHtml() {
         var transcriptStream = null;
         var transcriptSequence = 0;
         var currentTranscriptDraftId = null;
+        var localRole = 'listener';
+        var participantRoleHints = {};
 
         function send(type, payload) {
           if (!window.ReactNativeWebView) return;
@@ -54,6 +56,37 @@ export function getLivePodcastWebPlayerHtml() {
 
         function safeName(participant) {
           return participant && (participant.name || participant.identity || 'Listener');
+        }
+
+        function participantRole(participant) {
+          try {
+            var metadata = participant && participant.metadata ? JSON.parse(participant.metadata) : null;
+            return metadata && metadata.role ? String(metadata.role) : null;
+          } catch (error) {
+            return null;
+          }
+        }
+
+        function decodeDataPayload(payload) {
+          try {
+            if (typeof payload === 'string') return payload;
+            if (payload instanceof ArrayBuffer) return new TextDecoder().decode(payload);
+            if (payload && payload.buffer instanceof ArrayBuffer) return new TextDecoder().decode(payload);
+          } catch (error) {}
+          return '';
+        }
+
+        function publishRoleHint() {
+          if (!room || !room.localParticipant || !room.localParticipant.publishData) return;
+          try {
+            var encoded = new TextEncoder().encode(JSON.stringify({
+              type: 'spillLiveRole',
+              role: localRole || 'listener',
+              identity: room.localParticipant.identity,
+            }));
+            var result = room.localParticipant.publishData(encoded, { reliable: true });
+            if (result && result.catch) result.catch(function () {});
+          } catch (error) {}
         }
 
         function stopTranscript() {
@@ -240,6 +273,7 @@ export function getLivePodcastWebPlayerHtml() {
             participants.push({
               identity: room.localParticipant.identity,
               name: safeName(room.localParticipant),
+              role: localRole || participantRole(room.localParticipant),
               isLocal: true,
               isSpeaking: !!speakerLevels[room.localParticipant.identity],
               audioLevel: Number(speakerLevels[room.localParticipant.identity] || 0),
@@ -249,6 +283,7 @@ export function getLivePodcastWebPlayerHtml() {
             participants.push({
               identity: participant.identity,
               name: safeName(participant),
+              role: participantRoleHints[participant.identity] || participantRole(participant),
               isLocal: false,
               isSpeaking: !!speakerLevels[participant.identity],
               audioLevel: Number(speakerLevels[participant.identity] || 0),
@@ -325,6 +360,8 @@ export function getLivePodcastWebPlayerHtml() {
             send('error', { message: 'LiveKit client failed to load.' });
             return;
           }
+          localRole = String((payload && payload.role) || 'listener');
+          participantRoleHints = {};
           send('state', { status: 'connecting', micEnabled: false });
           await cleanup();
           room = new LK.Room({
@@ -341,9 +378,25 @@ export function getLivePodcastWebPlayerHtml() {
               detachTrack(track, participant && participant.sid);
               syncParticipants();
             })
-            .on(LK.RoomEvent.ParticipantConnected, syncParticipants)
+            .on(LK.RoomEvent.ParticipantConnected, function () {
+              publishRoleHint();
+              syncParticipants();
+            })
             .on(LK.RoomEvent.ParticipantDisconnected, syncParticipants)
             .on(LK.RoomEvent.ActiveSpeakersChanged, syncParticipants)
+            .on(LK.RoomEvent.DataReceived, function (payload, participant) {
+              try {
+                var raw = decodeDataPayload(payload);
+                if (!raw) return;
+                var data = JSON.parse(raw);
+                if (!data || data.type !== 'spillLiveRole') return;
+                var identity = String((participant && participant.identity) || data.identity || '').trim();
+                var role = String(data.role || '').trim();
+                if (!identity || !role) return;
+                participantRoleHints[identity] = role;
+                syncParticipants();
+              } catch (error) {}
+            })
             .on(LK.RoomEvent.ConnectionStateChanged, function (state) {
               send('state', { status: String(state || '').toLowerCase(), micEnabled: micEnabled, playbackMuted: playbackMuted });
             })
@@ -389,6 +442,7 @@ export function getLivePodcastWebPlayerHtml() {
               });
             });
             send('state', { status: 'connected', micEnabled: micEnabled, playbackMuted: playbackMuted });
+            publishRoleHint();
             syncParticipants();
           } catch (error) {
             send('error', { message: error && error.message ? error.message : 'Failed to connect to room.' });

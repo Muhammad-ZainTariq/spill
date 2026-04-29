@@ -2,9 +2,9 @@ import { StoryCheckinModal } from '@/components/StoryCheckinModal';
 import { StoryTreeTimeline } from '@/components/StoryTreeTimeline';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Accelerometer } from 'expo-sensors';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { addGratitude, checkPremiumStatus, deleteGratitude, generateAIGratitude, getAverageMood, getGratitudeCount, getGratitudeEntries, getMoodEntries, getRandomGratitude, GratitudeEntry, MoodEntry, } from '../functions';
@@ -32,14 +32,17 @@ export default function MoodGratitudeScreen() {
   const [futureDate, setFutureDate] = useState('');
   const [futureNotes, setFutureNotes] = useState<string[]>([]);
   const [futureDraftNote, setFutureDraftNote] = useState('');
+  const gratitudeCountRef = useRef(0);
+
+  useEffect(() => {
+    gratitudeCountRef.current = Math.max(gratitudeCount, gratitudeEntries.length);
+  }, [gratitudeCount, gratitudeEntries.length]);
 
   useEffect(() => {
     loadData();
     checkPremium();
-    const cleanup = setupShakeDetection();
 
     return () => {
-      if (cleanup) cleanup();
       if (Platform.OS !== 'web') {
         Accelerometer.removeAllListeners();
       }
@@ -142,7 +145,7 @@ export default function MoodGratitudeScreen() {
   };
 
   const handleShake = async () => {
-    if (gratitudeCount === 0) {
+    if (gratitudeCountRef.current === 0) {
       Alert.alert('No Gratitudes Yet', 'Add some gratitudes first to see random ones!');
       return;
     }
@@ -154,6 +157,15 @@ export default function MoodGratitudeScreen() {
       setShowRandomGratitude(true);
     }
   };
+
+  useFocusEffect(
+    useCallback(() => {
+      const cleanup = setupShakeDetection();
+      return () => {
+        if (cleanup) cleanup();
+      };
+    }, [])
+  );
 
   const handleGratitudeSubmit = async () => {
     if (!gratitudeText.trim()) {

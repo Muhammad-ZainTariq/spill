@@ -364,12 +364,12 @@ export const addComment = async (postId: string, content: string, parentCommentI
   const profiles = u ? { display_name: u.display_name, anonymous_username: u.anonymous_username, avatar_url: u.avatar_url } : null;
   await updateDoc(doc(db, 'posts', postId), { comments_count: increment(1) });
   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  return { id: ref.id, content, created_at: new Date().toISOString(), parent_comment_id: parentCommentId || null, profiles };
+  return { id: ref.id, user_id: user.uid, content, created_at: new Date().toISOString(), parent_comment_id: parentCommentId || null, profiles };
 };
 
 export const fetchComments = async (postId: string) => {
   try {
-    const q = query(collection(db, 'comments'), where('post_id', '==', postId), orderBy('created_at', 'asc'));
+    const q = query(collection(db, 'comments'), where('post_id', '==', postId));
     const snap = await getDocs(q);
     const comments = await Promise.all(
       snap.docs.map(async (d) => {
@@ -378,6 +378,7 @@ export const fetchComments = async (postId: string) => {
         const u = userSnap.data();
         return {
           id: d.id,
+          user_id: data.user_id,
           content: data.content,
           created_at: data.created_at,
           parent_comment_id: data.parent_comment_id || null,
@@ -385,6 +386,7 @@ export const fetchComments = async (postId: string) => {
         };
       })
     );
+    comments.sort((a: any, b: any) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
     const parentComments = comments.filter((c: any) => !c.parent_comment_id);
     const replies = comments.filter((c: any) => c.parent_comment_id);
     return parentComments.map((parent: any) => ({ ...parent, replies: replies.filter((r: any) => r.parent_comment_id === parent.id) }));
@@ -430,11 +432,31 @@ export const fetchUserProfile = async () => {
 };
 
 export const updateUserProfile = async (updates: {
-  display_name?: string; anonymous_username?: string; avatar_url?: string;
+  display_name?: string | null; anonymous_username?: string | null; avatar_url?: string | null;
+  anonymous_username_key?: string | null;
   message_preference?: string; auto_join_groups?: boolean; available_for_matches?: boolean; match_struggles?: string[];
 }) => {
   const user = auth.currentUser;
   if (!user) throw new Error('User not authenticated');
+  const nextUsername = updates.anonymous_username?.trim();
+  if ('anonymous_username' in updates) {
+    const anonymous_username_key = nextUsername ? nextUsername.toLowerCase() : null;
+    if (anonymous_username_key) {
+      const [keySnap, exactSnap] = await Promise.all([
+        getDocs(query(collection(db, 'users'), where('anonymous_username_key', '==', anonymous_username_key), limit(1))),
+        getDocs(query(collection(db, 'users'), where('anonymous_username', '==', nextUsername), limit(1))),
+      ]);
+      const usernameTaken = [...keySnap.docs, ...exactSnap.docs].some((d) => d.id !== user.uid);
+      if (usernameTaken) {
+        throw new Error('USERNAME_TAKEN');
+      }
+    }
+    updates = {
+      ...updates,
+      anonymous_username: nextUsername || null,
+      anonymous_username_key,
+    };
+  }
   const userRef = doc(db, 'users', user.uid);
   await setDoc(userRef, updates as any, { merge: true });
   const snap = await getDoc(userRef);
@@ -555,8 +577,12 @@ export const handleShare = (postId: string) => {
 };
 
 
-export const getAIOpinion = async (content: string): Promise<string> => {
+export const getAIOpinion = async (content: string, options?: { flagged?: boolean }): Promise<string> => {
   try {
+    if (options?.flagged) {
+      return 'Something was up with this post, so it has been flagged to admins for review.';
+    }
+
     const apiKey =
       (Constants as any)?.expoConfig?.extra?.openaiApiKey ||
       (Constants as any)?.manifest?.extra?.openaiApiKey;
@@ -577,12 +603,12 @@ export const getAIOpinion = async (content: string): Promise<string> => {
         messages: [
           {
             role: 'system',
-            content: `You're a real friend replying to someone's post in a feed. Reply in 1-3 short sentences max. Sound like a human: use contractions, vary your tone (warm, wry, or just real—match the post). React to what they actually said; don't give advice unless it fits.
-Never use: "That's so valid", "Thank you for sharing", "It's great that you're", "I hear you", "You've got this", "Sending love", "That takes courage", or any list of three generic encouragements. No emojis. No "Remember that..." or "Just remember...". If the post is heavy, one genuine line beats a paragraph of support. If it's light, be brief and natural.`,
+            content: `You explain anonymous social feed posts for readers. Do not talk to the author and do not sound like you are replying to someone.
+In 1-3 short sentences, interpret what the post is about, what feeling or situation it describes, and any obvious context. Keep it plain and natural. No advice unless the post directly asks for advice. No emojis.`,
           },
           {
             role: 'user',
-            content: `Reply to this post like a friend would (one short response):\n\n"""${content}"""`,
+            content: `Explain what this post is about:\n\n"""${content}"""`,
           },
         ],
         max_tokens: 120,
@@ -879,8 +905,9 @@ export const getCurrentUserRole = async (): Promise<{ is_admin: boolean; is_staf
   try {
     const snap = await getDoc(doc(db, 'users', user.uid));
     const data = snap.data();
+    const hasAdminAccess = !!data?.is_admin || !!data?.is_staff;
     return {
-      is_admin: !!data?.is_admin,
+      is_admin: hasAdminAccess,
       is_staff: !!data?.is_staff,
       role: data?.role,
       is_therapist_verified: data?.is_therapist_verified ?? undefined,
@@ -1163,7 +1190,7 @@ export const getOrCreateConversation = async (userId: string) => {
   return { id: convId, participant1_id: p1, participant2_id: p2, status, updated_at: now, created_at: now };
 };
 
-export const sendMessage = async (conversationId: string, content: string) => {
+export const sendMessage = async (conversationId: string, content: string, extras?: Record<string, any>) => {
   const user = auth.currentUser;
   if (!user) throw new Error('Not authenticated');
   const convSnap = await getDoc(doc(db, 'conversations', conversationId));
@@ -1178,9 +1205,16 @@ export const sendMessage = async (conversationId: string, content: string) => {
     throw new Error('You cannot message this user.');
   }
   const now = new Date().toISOString();
-  const ref = await addDoc(collection(db, 'messages'), { conversation_id: conversationId, sender_id: user.uid, content, created_at: now });
+  const payload = {
+    conversation_id: conversationId,
+    sender_id: user.uid,
+    content,
+    created_at: now,
+    ...(extras || {}),
+  };
+  const ref = await addDoc(collection(db, 'messages'), payload);
   await updateDoc(doc(db, 'conversations', conversationId), { updated_at: now });
-  return { id: ref.id, conversation_id: conversationId, sender_id: user.uid, content, created_at: now };
+  return { id: ref.id, ...payload };
 };
 
 export const fetchMessages = async (convId: string, limitCount = 50) => {
@@ -1443,6 +1477,146 @@ export const joinGroup = async (groupId: string) => {
   } catch (error: any) {
     console.error('Error joining group:', error);
     Alert.alert('Error', error.message || 'Failed to join group');
+    return false;
+  }
+};
+
+function buildGroupMemberData(groupId: string, userId: string, groupData: any, extra?: Record<string, any>) {
+  const memberData: any = { group_id: groupId, user_id: userId, role: 'member', ...(extra || {}) };
+  if (groupData?.is_challenge) {
+    memberData.current_streak = 0;
+    memberData.last_proof_date = null;
+    memberData.completed_at = null;
+  }
+  return memberData;
+}
+
+export const inviteConnectedUserToGroup = async (
+  groupId: string,
+  targetUserId: string
+): Promise<{ ok: boolean; status?: 'auto_joined' | 'pending' | 'already_member'; error?: string }> => {
+  const user = auth.currentUser;
+  if (!user) return { ok: false, error: 'Not authenticated' };
+  const targetUid = String(targetUserId || '').trim();
+  if (!groupId || !targetUid || targetUid === user.uid) return { ok: false, error: 'Invalid invite target.' };
+
+  try {
+    const groupSnap = await getDoc(doc(db, 'groups', groupId));
+    if (!groupSnap.exists()) return { ok: false, error: 'Group not found.' };
+    const groupData = groupSnap.data() as any;
+    const inviterIsCreator = groupData.creator_id === user.uid;
+    const inviterMemberSnap = await getDoc(doc(db, 'group_members', `${groupId}_${user.uid}`));
+    if (!inviterIsCreator && !inviterMemberSnap.exists()) {
+      return { ok: false, error: 'Join the group before inviting friends.' };
+    }
+
+    const memberId = `${groupId}_${targetUid}`;
+    const existingMember = await getDoc(doc(db, 'group_members', memberId));
+    if (existingMember.exists() || groupData.creator_id === targetUid) {
+      return { ok: true, status: 'already_member' };
+    }
+
+    const targetSnap = await getDoc(doc(db, 'users', targetUid));
+    if (!targetSnap.exists()) return { ok: false, error: 'User not found.' };
+    const target = targetSnap.data() as any;
+    const now = new Date().toISOString();
+
+    if (target.auto_join_groups === true) {
+      await setDoc(
+        doc(db, 'group_members', memberId),
+        buildGroupMemberData(groupId, targetUid, groupData, {
+          added_by: user.uid,
+          added_by_type: 'friend',
+          join_source: 'auto_join_invite',
+          joined_at: now,
+        })
+      );
+      return { ok: true, status: 'auto_joined' };
+    }
+
+    await setDoc(doc(db, 'group_invitations', memberId), {
+      group_id: groupId,
+      group_name: groupData.name || 'Group',
+      group_cover_image_url: groupData.cover_image_url || null,
+      target_uid: targetUid,
+      inviter_id: user.uid,
+      status: 'pending',
+      created_at: now,
+    });
+    return { ok: true, status: 'pending' };
+  } catch (error: any) {
+    console.error('Error inviting user to group:', error);
+    return { ok: false, error: error?.message || 'Could not invite user.' };
+  }
+};
+
+export const getPendingGroupInvites = async (): Promise<any[]> => {
+  const user = auth.currentUser;
+  if (!user) return [];
+  try {
+    const snap = await getDocs(
+      query(collection(db, 'group_invitations'), where('target_uid', '==', user.uid), where('status', '==', 'pending'), limit(100))
+    );
+    const list = await Promise.all(
+      snap.docs.map(async (d) => {
+        const data = d.data() as any;
+        const inviterSnap = await getDoc(doc(db, 'users', data.inviter_id));
+        const inviter = inviterSnap.exists() ? { id: data.inviter_id, ...inviterSnap.data() } : null;
+        const groupSnap = await getDoc(doc(db, 'groups', data.group_id));
+        const group = groupSnap.exists() ? { id: data.group_id, ...groupSnap.data() } : null;
+        return { id: d.id, ...data, inviter, group, updated_at: data.created_at };
+      })
+    );
+    list.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+    return list;
+  } catch (error) {
+    console.error('Error fetching group invites:', error);
+    return [];
+  }
+};
+
+export const acceptGroupInvite = async (inviteId: string): Promise<boolean> => {
+  const user = auth.currentUser;
+  if (!user) return false;
+  try {
+    const inviteRef = doc(db, 'group_invitations', inviteId);
+    const inviteSnap = await getDoc(inviteRef);
+    if (!inviteSnap.exists()) return false;
+    const invite = inviteSnap.data() as any;
+    if (invite.target_uid !== user.uid || invite.status !== 'pending') return false;
+    const groupSnap = await getDoc(doc(db, 'groups', invite.group_id));
+    if (!groupSnap.exists()) return false;
+    const now = new Date().toISOString();
+    await setDoc(
+      doc(db, 'group_members', `${invite.group_id}_${user.uid}`),
+      buildGroupMemberData(invite.group_id, user.uid, groupSnap.data(), {
+        added_by: invite.inviter_id,
+        added_by_type: 'friend',
+        join_source: 'accepted_friend_invite',
+        joined_at: now,
+      })
+    );
+    await updateDoc(inviteRef, { status: 'accepted', responded_at: now });
+    return true;
+  } catch (error) {
+    console.error('Error accepting group invite:', error);
+    return false;
+  }
+};
+
+export const declineGroupInvite = async (inviteId: string): Promise<boolean> => {
+  const user = auth.currentUser;
+  if (!user) return false;
+  try {
+    const inviteRef = doc(db, 'group_invitations', inviteId);
+    const inviteSnap = await getDoc(inviteRef);
+    if (!inviteSnap.exists()) return false;
+    const invite = inviteSnap.data() as any;
+    if (invite.target_uid !== user.uid) return false;
+    await updateDoc(inviteRef, { status: 'declined', responded_at: new Date().toISOString() });
+    return true;
+  } catch (error) {
+    console.error('Error declining group invite:', error);
     return false;
   }
 };
@@ -2638,35 +2812,23 @@ export const updateGroupSettings = async (
 // Get group members with admin info
 export const getGroupMembers = async (groupId: string) => {
   try {
-    // Fetch members first (without foreign key relationship)
-    const { data: membersData, error } = await supabase
-      .from('group_members')
-      .select('*')
-      .eq('group_id', groupId)
-      .order('joined_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching members:', error);
-      return [];
-    }
-
-    if (!membersData || membersData.length === 0) {
-      return [];
-    }
-
-    // Fetch user profiles separately
+    const snap = await getDocs(query(collection(db, 'group_members'), where('group_id', '==', groupId), limit(300)));
     const membersWithProfiles = await Promise.all(
-      membersData.map(async (member: any) => {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('id, display_name, anonymous_username, avatar_url')
-          .eq('id', member.user_id)
-          .maybeSingle();
-
-        return { ...member, user: profile || null };
+      snap.docs.map(async (memberDoc) => {
+        const member = { id: memberDoc.id, ...(memberDoc.data() as any) };
+        const profileSnap = await getDoc(doc(db, 'users', member.user_id));
+        const profile = profileSnap.exists()
+          ? {
+              id: member.user_id,
+              display_name: profileSnap.data().display_name,
+              anonymous_username: profileSnap.data().anonymous_username,
+              avatar_url: profileSnap.data().avatar_url,
+            }
+          : null;
+        return { ...member, user: profile };
       })
     );
-
+    membersWithProfiles.sort((a: any, b: any) => String(b.joined_at || '').localeCompare(String(a.joined_at || '')));
     return membersWithProfiles;
   } catch (error) {
     console.error('Error getting group members:', error);
@@ -3999,12 +4161,20 @@ export const sendGameInvite = async (
     });
     await batch.commit();
     const gameLabel = GAME_LABELS[gameTypeNorm] || GAME_LABELS[gameType] || gameType;
-    await sendPushToUser(
-      partnerId,
-      'Game invite',
-      `Your match invited you to play ${gameLabel}.`,
-      { type: 'game_invite', match_id: matchId, room_id: gameRoomId, game_type: gameTypeNorm, invite_id: inviteId }
-    );
+    const [senderSnap, partnerSnap] = await Promise.all([
+      getDoc(doc(db, 'users', uid)),
+      getDoc(doc(db, 'users', partnerId)),
+    ]);
+    const senderToken = String(senderSnap.data()?.expo_push_token || '');
+    const partnerToken = String(partnerSnap.data()?.expo_push_token || '');
+    if (!senderToken || !partnerToken || senderToken !== partnerToken) {
+      await sendPushToUser(
+        partnerId,
+        'Game invite',
+        `Your match invited you to play ${gameLabel}.`,
+        { type: 'game_invite', match_id: matchId, room_id: gameRoomId, game_type: gameTypeNorm, invite_id: inviteId }
+      );
+    }
     return inviteId;
   } catch (error) {
     console.error('Error sending game invite:', error);
@@ -4351,7 +4521,7 @@ export const subscribeToGameInvites = (
         } catch {}
       }
       activeInvites.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
-      onInvites(activeInvites);
+      onInvites(activeInvites.filter((invite) => invite.from_user_id !== uid));
     },
     (err) => logFirestoreSnapshotError('subscribeToGameInvites', err)
   );
@@ -4466,17 +4636,19 @@ export const subscribeToMatchMessages = (
 };
 
 // Send message in match
-export const sendMatchMessage = async (matchId: string, content: string): Promise<any | null> => {
+export const sendMatchMessage = async (matchId: string, content: string, extras?: Record<string, any>): Promise<any | null> => {
   try {
     const uid = auth.currentUser?.uid;
     if (!uid) return null;
 
-    const ref = await addDoc(collection(db, 'match_messages'), {
+    const payload = {
       match_id: matchId,
       sender_id: uid,
       content,
       created_at: new Date().toISOString(),
-    });
+      ...(extras || {}),
+    };
+    const ref = await addDoc(collection(db, 'match_messages'), payload);
     const snap = await getDoc(ref);
     return snap.exists() ? { id: snap.id, ...snap.data() } : null;
   } catch (error) {

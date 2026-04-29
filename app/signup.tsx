@@ -3,7 +3,7 @@ import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
-import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore';
+import { collection, doc, getDocs, limit, query, setDoc, where } from 'firebase/firestore';
 import { useState } from 'react';
 import {
     Alert,
@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { tokens } from '@/app/ui/tokens';
 import { auth, db } from '../lib/firebase';
 
 export default function Signup() {
@@ -25,6 +26,7 @@ export default function Signup() {
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [anonymousUsername, setAnonymousUsername] = useState('');
+  const [usernameError, setUsernameError] = useState('');
   const [loading, setLoading] = useState(false);
   const [generatingName, setGeneratingName] = useState(false);
   const [showStopTouching, setShowStopTouching] = useState(false);
@@ -35,12 +37,19 @@ export default function Signup() {
 
   const funnyWords = ['Silly', 'Goofy', 'Wacky', 'Zany', 'Bouncy', 'Bubbly', 'Chirpy', 'Dizzy', 'Fizzy', 'Giggly'];
   const cuteAnimals = ['Panda', 'Bunny', 'Puppy', 'Kitty', 'Duck', 'Frog', 'Bear', 'Pig', 'Bee', 'Bug'];
+  const usernameTakenMessage = 'That anonymous username is already being used. Please choose another one.';
 
-  const checkUsernameExists = async (username: string) => {
+  const normalizeUsername = (username: string) => username.trim().toLowerCase();
+
+  const checkUsernameExists = async (username: string, excludeUid?: string) => {
     try {
-      const q = query(collection(db, 'users'), where('anonymous_username', '==', username));
-      const snap = await getDocs(q);
-      return !snap.empty;
+      const normalized = normalizeUsername(username);
+      if (!normalized) return false;
+      const [keySnap, exactSnap] = await Promise.all([
+        getDocs(query(collection(db, 'users'), where('anonymous_username_key', '==', normalized), limit(1))),
+        getDocs(query(collection(db, 'users'), where('anonymous_username', '==', username.trim()), limit(1))),
+      ]);
+      return [...keySnap.docs, ...exactSnap.docs].some((d) => d.id !== excludeUid);
     } catch {
       return false;
     }
@@ -60,6 +69,7 @@ export default function Signup() {
       const username = generateRandomUsername();
       const exists = await checkUsernameExists(username);
       if (!exists) {
+        setUsernameError('');
         setAnonymousUsername(username);
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         return;
@@ -83,12 +93,19 @@ export default function Signup() {
   };
 
   const handleSignup = async () => {
+    setUsernameError('');
     if (!email?.trim() || !password) {
       Alert.alert('Oops!', 'Please enter both email and password!');
       return;
     }
     if (password.length < 6) {
       Alert.alert('Oops!', 'Password must be at least 6 characters.');
+      return;
+    }
+    const username = anonymousUsername.trim();
+    if (username && (await checkUsernameExists(username))) {
+      setUsernameError(usernameTakenMessage);
+      Alert.alert('Username taken', usernameTakenMessage);
       return;
     }
 
@@ -115,6 +132,7 @@ export default function Signup() {
   };
 
   const handleVerified = async () => {
+    setUsernameError('');
     const user = auth.currentUser;
     if (!user) {
       Alert.alert('Session expired', 'Please sign up again.');
@@ -126,11 +144,19 @@ export default function Signup() {
       await user.reload();
       const updated = auth.currentUser;
       if (updated?.emailVerified) {
+        const username = anonymousUsername.trim();
+        if (username && (await checkUsernameExists(username, updated.uid))) {
+          setUsernameError(usernameTakenMessage);
+          setMode('password');
+          Alert.alert('Username taken', usernameTakenMessage);
+          return;
+        }
         // Force token refresh so Firestore rules see email_verified: true
         await updated.getIdToken(true);
         await setDoc(doc(db, 'users', updated.uid), {
           display_name: displayName?.trim() || null,
-          anonymous_username: anonymousUsername?.trim() || null,
+          anonymous_username: username || null,
+          anonymous_username_key: username ? normalizeUsername(username) : null,
           avatar_url: null,
           is_premium: false,
           premium_activated_at: null,
@@ -211,12 +237,12 @@ export default function Signup() {
                 <View style={{ paddingHorizontal: 20, width: '100%', alignItems: 'center' }}>
                   <View style={{ backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 16, padding: 20, width: '100%', maxWidth: 400 }}>
                   <View style={{ marginBottom: 16 }}>
-                    <Text style={{ color: '#374151', fontSize: 15, fontWeight: '800', marginBottom: 8, marginLeft: 4 }}>Display Name (Optional)</Text>
-                    <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 2, borderColor: '#E5E7EB', overflow: 'hidden' }}>
+                    <Text style={{ color: tokens.colors.textSecondary, fontSize: 15, fontWeight: '700', marginBottom: 8, marginLeft: 4 }}>Display Name (Optional)</Text>
+                    <View style={{ backgroundColor: tokens.colors.surfaceOverlay, borderRadius: 12, borderWidth: 1, borderColor: tokens.colors.border, overflow: 'hidden' }}>
                       <TextInput
-                        style={{ color: '#111827', paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontWeight: '600' }}
+                        style={{ color: tokens.colors.text, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontWeight: '400' }}
                         placeholder="Your display name"
-                        placeholderTextColor="#9CA3AF"
+                        placeholderTextColor={tokens.colors.textMuted}
                         value={displayName}
                         onChangeText={setDisplayName}
                         editable={!loading}
@@ -224,15 +250,18 @@ export default function Signup() {
                     </View>
                   </View>
                   <View style={{ marginBottom: 16 }}>
-                    <Text style={{ color: '#374151', fontSize: 15, fontWeight: '800', marginBottom: 8, marginLeft: 4 }}>Anonymous Username</Text>
+                    <Text style={{ color: tokens.colors.textSecondary, fontSize: 15, fontWeight: '700', marginBottom: 8, marginLeft: 4 }}>Anonymous Username</Text>
                     <View style={{ flexDirection: 'row', gap: 8 }}>
-                      <View style={{ flex: 1, backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 2, borderColor: '#E5E7EB', overflow: 'hidden' }}>
+                      <View style={{ flex: 1, backgroundColor: tokens.colors.surfaceOverlay, borderRadius: 12, borderWidth: 1, borderColor: tokens.colors.border, overflow: 'hidden' }}>
                         <TextInput
-                          style={{ color: '#111827', paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontWeight: '600' }}
+                          style={{ color: tokens.colors.text, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontWeight: '400' }}
                           placeholder="mysterious-tiger-123"
-                          placeholderTextColor="#9CA3AF"
+                          placeholderTextColor={tokens.colors.textMuted}
                           value={anonymousUsername}
-                          onChangeText={setAnonymousUsername}
+                          onChangeText={(text) => {
+                            setAnonymousUsername(text);
+                            if (usernameError) setUsernameError('');
+                          }}
                           editable={!loading}
                         />
                       </View>
@@ -252,14 +281,19 @@ export default function Signup() {
                         <Text style={{ color: 'white', fontWeight: '700', fontSize: 14 }}>{generatingName ? '...' : 'Generate'}</Text>
                       </Pressable>
                     </View>
+                    {!!usernameError && (
+                      <Text style={{ color: '#dc2626', fontSize: 13, fontWeight: '700', marginTop: 8, marginLeft: 4 }}>
+                        {usernameError}
+                      </Text>
+                    )}
                   </View>
                   <View style={{ marginBottom: 16 }}>
-                    <Text style={{ color: '#374151', fontSize: 15, fontWeight: '800', marginBottom: 8, marginLeft: 4 }}>Email Address</Text>
-                    <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 2, borderColor: '#E5E7EB', overflow: 'hidden' }}>
+                    <Text style={{ color: tokens.colors.textSecondary, fontSize: 15, fontWeight: '700', marginBottom: 8, marginLeft: 4 }}>Email Address</Text>
+                    <View style={{ backgroundColor: tokens.colors.surfaceOverlay, borderRadius: 12, borderWidth: 1, borderColor: tokens.colors.border, overflow: 'hidden' }}>
                       <TextInput
-                        style={{ color: '#111827', paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontWeight: '600' }}
-                        placeholder="your.email@example.com"
-                        placeholderTextColor="#9CA3AF"
+                        style={{ color: tokens.colors.text, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontWeight: '400' }}
+                        placeholder="you@example.com"
+                        placeholderTextColor={tokens.colors.textMuted}
                         value={email}
                         onChangeText={setEmail}
                         keyboardType="email-address"
@@ -270,19 +304,19 @@ export default function Signup() {
                     </View>
                   </View>
                   <View style={{ marginBottom: 24 }}>
-                    <Text style={{ color: '#374151', fontSize: 15, fontWeight: '800', marginBottom: 8, marginLeft: 4 }}>Password (min 6 characters)</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 2, borderColor: '#E5E7EB', overflow: 'hidden' }}>
+                    <Text style={{ color: tokens.colors.textSecondary, fontSize: 15, fontWeight: '700', marginBottom: 8, marginLeft: 4 }}>Password (min 6 characters)</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: tokens.colors.surfaceOverlay, borderRadius: 12, borderWidth: 1, borderColor: tokens.colors.border, overflow: 'hidden' }}>
                       <TextInput
-                        style={{ flex: 1, color: '#111827', paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontWeight: '600' }}
-                        placeholder="Enter password"
-                        placeholderTextColor="#9CA3AF"
+                        style={{ flex: 1, color: tokens.colors.text, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontWeight: '400' }}
+                        placeholder="Password"
+                        placeholderTextColor={tokens.colors.textMuted}
                         value={password}
                         onChangeText={setPassword}
                         secureTextEntry={!showPassword}
                         editable={!loading}
                       />
                       <Pressable onPress={() => { setShowPassword((v) => !v); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }} style={{ paddingHorizontal: 12, paddingVertical: 12 }}>
-                        <Feather name={showPassword ? 'eye-off' : 'eye'} size={22} color="#6b7280" />
+                        <Feather name={showPassword ? 'eye-off' : 'eye'} size={22} color={tokens.colors.textMuted} />
                       </Pressable>
                     </View>
                   </View>

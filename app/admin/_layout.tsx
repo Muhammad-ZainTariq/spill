@@ -39,6 +39,7 @@ export default function AdminLayout() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="index" />
       <Stack.Screen name="add-staff" />
+      <Stack.Screen name="accounts" />
       <Stack.Screen name="therapists" />
       <Stack.Screen name="therapist-request" />
       <Stack.Screen name="therapist-progress" />

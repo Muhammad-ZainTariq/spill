@@ -3,6 +3,7 @@ import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useLivePodcast } from '@/components/live/LivePodcastProvider';
@@ -10,6 +11,7 @@ import { tokens } from '@/app/ui/tokens';
 import { auth } from '@/lib/firebase';
 import {
   currentUserCanHostLivePodcasts,
+  deleteLivePodcastReplay,
   joinLivePodcastByInviteCode,
   LivePodcastRoom,
   setLivePodcastReminder,
@@ -58,13 +60,45 @@ export default function LivePodcastHubScreen() {
         serverUrl: session.serverUrl,
       });
       setCoHostCode('');
-      router.push(`/live/${session.room.id}` as any);
+      // Defer navigation so LivePodcastProvider commits activeSession before the room screen mounts.
+      // Otherwise users land without a session, tap Join without an invite → listener (no mic/captions).
+      const roomId = session.room.id;
+      setTimeout(() => {
+        router.push({
+          pathname: '/live/[id]',
+          params: { id: roomId, invite: normalizedCode },
+        } as any);
+      }, 0);
     } catch (error: any) {
       Alert.alert('Could not join as co-host', error?.message || 'Check the code and try again.');
     } finally {
       setJoiningByCode(false);
     }
   };
+
+  const handleDeleteReplay = (room: LivePodcastRoom) => {
+    Alert.alert('Delete replay', `Remove "${room.title}" from published replays?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteLivePodcastReplay(room.id);
+          } catch (error: any) {
+            Alert.alert('Could not delete replay', error?.message || 'Try again.');
+          }
+        },
+      },
+    ]);
+  };
+
+  const renderReplayDeleteAction = (room: LivePodcastRoom) => (
+    <Pressable style={styles.swipeDeleteAction} onPress={() => handleDeleteReplay(room)}>
+      <Feather name="trash-2" size={20} color="#fff" />
+      <Text style={styles.swipeDeleteText}>Delete</Text>
+    </Pressable>
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -206,24 +240,40 @@ export default function LivePodcastHubScreen() {
           {replayRooms.length === 0 ? (
             <Empty text="No published replays yet." />
           ) : (
-            replayRooms.map((room) => (
-              <Pressable key={room.id} style={styles.roomCard} onPress={() => router.push(`/live/${room.id}` as any)}>
-                <View style={styles.roomCardTop}>
-                  <View style={styles.roomCoverWrap}>
-                    {room.cover_url ? (
-                      <Image source={{ uri: room.cover_url }} style={styles.roomCover} contentFit="cover" />
-                    ) : (
-                      <View style={styles.roomCoverFallback}>
-                        <Feather name="play" size={18} color={tokens.colors.textSecondary} />
+            replayRooms.map((room) => {
+              const canDeleteReplay = canHost || room.host_uid === auth.currentUser?.uid;
+              const card = (
+                <Pressable style={styles.roomCard} onPress={() => router.push(`/live/${room.id}` as any)}>
+                  <View style={styles.roomCardTop}>
+                    <View style={styles.roomCoverWrap}>
+                      {room.cover_url ? (
+                        <Image source={{ uri: room.cover_url }} style={styles.roomCover} contentFit="cover" />
+                      ) : (
+                        <View style={styles.roomCoverFallback}>
+                          <Feather name="play" size={18} color={tokens.colors.textSecondary} />
+                        </View>
+                      )}
+                    </View>
+                    {canDeleteReplay ? (
+                      <View style={styles.swipeHint}>
+                        <Feather name="chevrons-left" size={14} color={tokens.colors.textMuted} />
+                        <Text style={styles.swipeHintText}>Swipe</Text>
                       </View>
-                    )}
+                    ) : null}
                   </View>
-                </View>
-                <Text style={styles.roomTitle}>{room.title}</Text>
-                <Text style={styles.roomMeta}>{room.host_name || 'Therapist'} · Replay available</Text>
-                {!!room.topic ? <Text style={styles.roomDesc}>{room.topic}</Text> : null}
-              </Pressable>
-            ))
+                  <Text style={styles.roomTitle}>{room.title}</Text>
+                  <Text style={styles.roomMeta}>{room.host_name || 'Therapist'} · Replay available</Text>
+                  {!!room.topic ? <Text style={styles.roomDesc}>{room.topic}</Text> : null}
+                </Pressable>
+              );
+              return canDeleteReplay ? (
+                <Swipeable key={room.id} renderRightActions={() => renderReplayDeleteAction(room)}>
+                  {card}
+                </Swipeable>
+              ) : (
+                <View key={room.id}>{card}</View>
+              );
+            })
           )}
         </Section>
       </ScrollView>
@@ -438,6 +488,18 @@ const styles = StyleSheet.create({
   roomTitle: { fontSize: 18, fontWeight: '900', color: tokens.colors.text },
   roomMeta: { fontSize: 13, fontWeight: '700', color: tokens.colors.textSecondary },
   roomDesc: { fontSize: 13, lineHeight: 18, fontWeight: '600', color: tokens.colors.textSecondary },
+  swipeHint: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  swipeHintText: { fontSize: 11, fontWeight: '800', color: tokens.colors.textMuted },
+  swipeDeleteAction: {
+    width: 92,
+    marginLeft: 8,
+    borderRadius: 18,
+    backgroundColor: tokens.colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  swipeDeleteText: { color: '#fff', fontSize: 12, fontWeight: '900' },
   roomActions: { flexDirection: 'row', gap: 10, marginTop: 8 },
   primaryBtn: {
     flex: 1,

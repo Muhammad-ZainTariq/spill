@@ -66,6 +66,19 @@ export default function AdminDashboard() {
             </View>
           </Pressable>
 
+          <Pressable style={styles.tile} onPress={() => open('/admin/accounts')}>
+            <View style={[styles.tileIcon, { backgroundColor: 'rgba(239,68,68,0.10)' }]}>
+              <Feather name="user-x" size={20} color={tokens.colors.danger} />
+            </View>
+            <Text style={styles.tileMeta}>Access</Text>
+            <Text style={styles.tileTitle}>Accounts</Text>
+            <Text style={styles.tileDesc}>Suspend or reactivate users and therapists.</Text>
+            <View style={styles.tileLink}>
+              <Text style={styles.tileLinkText}>Open</Text>
+              <Feather name="chevron-right" size={16} color={tokens.colors.pink} />
+            </View>
+          </Pressable>
+
           <Pressable style={styles.tile} onPress={() => open('/admin/therapists')}>
             <View style={[styles.tileIcon, { backgroundColor: 'rgba(16,185,129,0.10)' }]}>
               <Feather name="user-check" size={20} color={tokens.colors.green} />

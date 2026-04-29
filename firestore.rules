@@ -8,6 +8,8 @@ service cloud.firestore {
         && (
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.is_admin == true
           || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.is_admin == 'true'
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.is_staff == true
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.is_staff == 'true'
         );
     }
 
@@ -143,6 +145,38 @@ service cloud.firestore {
     match /group_members/{memberId} {
       allow read, write: if request.auth != null;
     }
+    match /group_invitations/{inviteId} {
+      function isInviteParticipant() {
+        return request.auth != null
+          && (
+            resource.data.inviter_id == request.auth.uid
+            || resource.data.target_uid == request.auth.uid
+            || isAdmin()
+          );
+      }
+
+      allow create: if request.auth != null
+        && request.resource.data.inviter_id == request.auth.uid
+        && request.resource.data.target_uid is string
+        && request.resource.data.group_id is string
+        && request.resource.data.status == 'pending';
+
+      allow get, list: if isInviteParticipant();
+
+      allow update: if request.auth != null
+        && (
+          isAdmin()
+          || (
+            resource.data.target_uid == request.auth.uid
+            && request.resource.data.inviter_id == resource.data.inviter_id
+            && request.resource.data.target_uid == resource.data.target_uid
+            && request.resource.data.group_id == resource.data.group_id
+            && request.resource.data.status in ['accepted', 'declined']
+          )
+        );
+
+      allow delete: if isInviteParticipant();
+    }
     match /group_activities/{activityId} {
       allow read, write: if request.auth != null;
     }
@@ -210,8 +244,22 @@ service cloud.firestore {
 
     // Public therapist marketplace
     match /therapist_profiles/{therapistId} {
+      function isManualReviewAggregateUpdate() {
+        return request.auth != null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['review_count', 'avg_rating', 'updated_at'])
+          && request.resource.data.review_count is number
+          && request.resource.data.avg_rating is number
+          && request.resource.data.updated_at is string;
+      }
+
       allow read: if request.auth != null;
-      allow create, update: if request.auth != null && (request.auth.uid == therapistId || isAdmin());
+      allow create: if request.auth != null && (request.auth.uid == therapistId || isAdmin());
+      allow update: if request.auth != null
+        && (
+          request.auth.uid == therapistId
+          || isAdmin()
+          || isManualReviewAggregateUpdate()
+        );
       allow delete: if isAdmin();
     }
 
@@ -229,6 +277,10 @@ service cloud.firestore {
           || (
             get(/databases/$(database)/documents/live_podcast_rooms/$(roomId)).data.co_host_ids is list
             && request.auth.uid in get(/databases/$(database)/documents/live_podcast_rooms/$(roomId)).data.co_host_ids
+          )
+          || (
+            get(/databases/$(database)/documents/live_podcast_rooms/$(roomId)).data.approved_speaker_uids is list
+            && request.auth.uid in get(/databases/$(database)/documents/live_podcast_rooms/$(roomId)).data.approved_speaker_uids
           )
         );
     }
@@ -355,13 +407,21 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Aggregated therapist reviews (written by Cloud Functions):
-    // Admin + therapist can read, nobody else.
+    // Aggregated therapist reviews (written by Cloud Function from session feedback).
+    // Any signed-in user may read (same gate as therapist_profiles); writes via Admin SDK only.
     match /therapist_reviews/{reviewId} {
-      allow read: if isAdmin()
-        || (request.auth != null && resource.data.therapist_uid == request.auth.uid);
-      allow create, update: if false;
+      allow read: if request.auth != null;
+      allow create: if false;
+      allow update: if false;
       allow delete: if isAdmin();
+    }
+
+    // Login email OTP (Cloud Functions only — Admin SDK).
+    match /login_otp_challenges/{userId} {
+      allow read, write: if false;
+    }
+    match /login_otp_rate/{userId} {
+      allow read, write: if false;
     }
 
     // Learning resources: writes are restricted; reads are open to any signed-in user so list
@@ -382,16 +442,13 @@ service cloud.firestore {
       allow update: if request.auth != null && (
         isAdmin()
         || (
-          resource.data.created_by_uid == request.auth.uid
+          isTherapist()
           && request.resource.data.created_by_uid == resource.data.created_by_uid
           && request.resource.data.created_by_role == resource.data.created_by_role
         )
       );
 
-      allow delete: if request.auth != null && (
-        isAdmin()
-        || resource.data.created_by_uid == request.auth.uid
-      );
+      allow delete: if request.auth != null && (isAdmin() || isTherapist());
     }
   }
 }

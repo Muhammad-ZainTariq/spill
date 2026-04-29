@@ -3,6 +3,7 @@ import { signOut } from 'firebase/auth';
 import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { auth } from '../lib/firebase';
+import { clearLoginOtpPending } from '../lib/loginOtpPending';
 
 export default function Logout() {
   const router = useRouter();
@@ -10,6 +11,7 @@ export default function Logout() {
   useEffect(() => {
     const doLogout = async () => {
       try {
+        await clearLoginOtpPending();
         await signOut(auth);
       } finally {
         router.replace('/login');

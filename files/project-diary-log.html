@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spill: meeting log with supervisor</title>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <style>
+    :root {
+      --pink: #ec4899;
+      --pink-soft: #fce7f3;
+      --amber: #92400e;
+      --ink: #111827;
+      --muted: #64748b;
+      --export-bg: #fffdf8;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding: 34px 18px 48px;
+      font-family: "Times New Roman", Times, serif;
+      font-size: 13pt;
+      line-height: 1.55;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(236, 72, 153, 0.18), transparent 30rem),
+        radial-gradient(circle at bottom right, rgba(251, 191, 36, 0.32), transparent 32rem),
+        linear-gradient(135deg, #fff7ed 0%, #fff1f7 48%, #fffbeb 100%);
+    }
+
+    .wrap {
+      width: min(1200px, 100%);
+      margin: 0 auto;
+    }
+
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+      padding: 12px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(249, 168, 212, 0.75);
+      background: rgba(255, 255, 255, 0.74);
+      box-shadow: 0 12px 28px rgba(190, 24, 93, 0.08);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      font-size: 13pt;
+      color: var(--ink);
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--pink), #f9a8d4);
+      color: #fff;
+      box-shadow: 0 10px 20px rgba(236, 72, 153, 0.22);
+      font-weight: 700;
+      font-size: 13pt;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13pt;
+    }
+
+    .download-btn {
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: var(--pink);
+      color: #fff;
+      font-weight: 700;
+      box-shadow: 0 10px 22px rgba(236, 72, 153, 0.24);
+    }
+
+    .download-btn:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    .hint-chip {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 13px;
+      border-radius: 999px;
+      border: 1px solid #fde68a;
+      background: #fffbeb;
+      color: var(--amber);
+      font-size: 12pt;
+      font-weight: 700;
+    }
+
+    .hero-note {
+      text-align: center;
+      font-size: 13pt;
+      font-weight: 600;
+      color: var(--amber);
+      margin: 0 0 18px;
+      line-height: 1.5;
+    }
+
+    #captureArea {
+      position: relative;
+      margin: 0 auto;
+      background: var(--export-bg);
+      border: 1px solid #fde68a;
+      border-radius: 28px;
+      overflow: hidden;
+      box-shadow: 0 8px 28px rgba(146, 64, 14, 0.08);
+    }
+
+    #captureArea::before {
+      display: none;
+    }
+
+    .capture-pad {
+      padding: 14px 22px 18px;
+      position: relative;
+      z-index: 0;
+    }
+
+    .doc-head {
+      text-align: center;
+      margin-bottom: 10px;
+      padding: 0 10px 10px;
+      border-bottom: 1px solid rgba(251, 191, 36, 0.55);
+    }
+
+    .doc-head__kicker {
+      display: inline-block;
+      margin-bottom: 6px;
+      padding: 0 6px;
+      font-size: 11pt;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #be185d;
+    }
+
+    .doc-head__title {
+      margin: 0 0 4px;
+      padding: 0 10px;
+      font-size: clamp(17pt, 2.8vw, 21pt);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.2;
+      color: var(--ink);
+    }
+
+    .doc-head__sub {
+      margin: 0;
+      padding: 0 10px;
+      font-size: 13pt;
+      font-weight: 600;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .log-caption {
+      margin: 0 0 4px;
+      padding: 0 6px 0 8px;
+      font-weight: 700;
+      font-size: 12pt;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #9d174d;
+      line-height: 1.35;
+    }
+
+    .meetings-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    @media (max-width: 880px) {
+      .meetings-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .log-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12pt;
+      margin-bottom: 10px;
+      background: #fff;
+      border: 1px solid rgba(251, 191, 36, 0.75);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 2px 12px rgba(146, 64, 14, 0.06);
+    }
+
+    .log-table th,
+    .log-table td {
+      border: 1px solid rgba(251, 191, 36, 0.55);
+      padding: 5px 8px;
+      vertical-align: top;
+      line-height: 1.32;
+      color: var(--ink);
+    }
+
+    .log-table thead th {
+      background: #fef3c7;
+      color: var(--amber);
+      font-weight: 700;
+      font-size: 12pt;
+      text-align: left;
+    }
+
+    .log-table .idx {
+      width: 44px;
+      text-align: center;
+      font-weight: 700;
+      background: #fffbeb;
+      color: var(--amber);
+    }
+
+    .log-table .meet-head {
+      background: linear-gradient(180deg, #fdf2f8 0%, #fce7f3 100%);
+      color: #831843;
+      font-weight: 700;
+      font-size: 12pt;
+      padding: 6px 10px;
+      border-color: rgba(249, 168, 212, 0.5);
+    }
+
+    .log-table td.lbl {
+      width: 24%;
+      max-width: 148px;
+      background: #fffbeb;
+      font-weight: 700;
+      font-size: 11pt;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--amber);
+    }
+
+    .log-table td.val {
+      font-weight: 600;
+      color: var(--ink);
+      background: #fff;
+    }
+
+    .log-table tbody tr:nth-child(even) td.val {
+      background: #fffefb;
+    }
+
+    .log-table .meta-key {
+      width: 110px;
+      background: #fef9c3;
+      font-weight: 700;
+      font-size: 12pt;
+      color: var(--amber);
+    }
+
+    strong {
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .compact-list {
+      margin: 0;
+      padding-left: 1em;
+    }
+
+    .compact-list li {
+      margin: 0 0 1px;
+      color: var(--ink);
+    }
+
+    .meetings-grid .meet-card {
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+      border-radius: 14px;
+      border: 1px solid rgba(251, 191, 36, 0.75);
+      background: #fff;
+      box-shadow: 0 2px 12px rgba(146, 64, 14, 0.06);
+      overflow: hidden;
+    }
+
+    .meetings-grid .meet-card .log-table {
+      flex: 1 1 auto;
+      margin-bottom: 0;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      min-height: 0;
+      height: 100%;
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      padding: 12px 20px;
+      border-radius: 999px;
+      background: var(--ink);
+      color: #fff;
+      font-size: 13pt;
+      font-weight: 700;
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 0.25s ease, opacity 0.25s ease;
+      z-index: 50;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    @media print {
+      body {
+        background: var(--export-bg);
+        padding: 0;
+      }
+      .topbar,
+      .hero-note {
+        display: none;
+      }
+      #captureArea {
+        box-shadow: none;
+        border-radius: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">S</span>
+        <span>Meeting log · Spill dissertation</span>
+      </div>
+      <div class="actions">
+        <span class="hint-chip">PNG = full page height</span>
+        <button type="button" class="download-btn" id="downloadPng">Save as PNG</button>
+      </div>
+    </header>
+
+    <p class="hero-note">
+      Project diary supporting supervision on <strong>Spill</strong>. PNG export uses the same Spill styling as your other diagrams (cream card, pink accent).
+    </p>
+
+    <div id="captureArea">
+      <div class="capture-pad">
+        <header class="doc-head">
+          <span class="doc-head__kicker">Dissertation record</span>
+          <h1 class="doc-head__title">Meeting log with supervisor</h1>
+          <p class="doc-head__sub">Muhammad Zain Tariq · Supervisor: Kamran Naeem · Spill mobile application</p>
+        </header>
+
+        <p class="log-caption" id="cap-record">Record details</p>
+        <table class="log-table" aria-labelledby="cap-record">
+          <tbody>
+            <tr>
+              <td class="lbl">Student</td>
+              <td class="val">Muhammad Zain Tariq</td>
+            </tr>
+            <tr>
+              <td class="lbl">Supervisor</td>
+              <td class="val">Kamran Naeem</td>
+            </tr>
+            <tr>
+              <td class="lbl">Project</td>
+              <td class="val">Spill: mental-health / community app. Stack: Expo, Firebase (Auth, Firestore, Functions, Storage), live features; dissertation focus on security &amp; evaluation evidence.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p class="log-caption" id="cap-index">Meeting index (summary)</p>
+        <table class="log-table" aria-labelledby="cap-index">
+          <thead>
+            <tr>
+              <th class="idx" scope="col">No.</th>
+              <th scope="col">Date</th>
+              <th scope="col">Type</th>
+              <th scope="col">Main focus</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="idx">1</td>
+              <td>02 December 2025</td>
+              <td>Planning</td>
+              <td>Scope, milestones, literature, ethics awareness</td>
+            </tr>
+            <tr>
+              <td class="idx">2</td>
+              <td>12 February 2026</td>
+              <td>Review</td>
+              <td>UX feedback, security gaps, video demo request</td>
+            </tr>
+            <tr>
+              <td class="idx">3</td>
+              <td>18 March 2026</td>
+              <td>Documentation</td>
+              <td>Block diagram, black-box testing structure</td>
+            </tr>
+            <tr>
+              <td class="idx">4</td>
+              <td>17 April 2026</td>
+              <td>Wrap-up</td>
+              <td>Overall feedback, security hardening, submission path</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="meetings-grid">
+          <div class="meet-card">
+            <table class="log-table">
+              <thead>
+                <tr>
+                  <th class="meet-head" colspan="2" scope="colgroup">Meeting 1 · 02 December 2025</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="lbl">Context</td>
+                  <td class="val"><strong>Previous:</strong> N/A · <strong>Format:</strong> In-person, ~45 min.</td>
+                </tr>
+                <tr>
+                  <td class="lbl">Objectives</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li>Present the high-level dissertation plan and expected deliverables (app, documentation, evaluation).</li>
+                      <li>Agree a realistic scope boundary so the project stays feasible alongside write-up time.</li>
+                      <li>Clarify early research expectations (sources, competitor and similar apps, basic security and privacy context).</li>
+                      <li>Align on how milestones and project-diary entries would be recorded between meetings.</li>
+                    </ul>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="lbl">Progress</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li>Walked through core user journeys: onboarding, feed, messaging, and therapist-related flows at concept level.</li>
+                      <li>Outlined technology choices (Expo, Firebase) and why they suit rapid iteration and a small solo build.</li>
+                      <li>Captured notes on splitting work into discovery, build, test, and dissertation-writing phases.</li>
+                      <li>Agreed to start a reading list on mobile health apps, data protection themes, and agile student practice.</li>
+                    </ul>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="lbl">Supervisor comments</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li>The overall direction was approved and the scope was tightened to reduce feature creep.</li>
+                      <li>Strong emphasis on <strong>traceability</strong>: requirements must map cleanly to built features and validation.</li>
+                      <li>Research was to stay ahead of implementation; technical and ethical risks should be logged as they emerge.</li>
+                      <li>Later checkpoints would prioritise runnable software, not only decks or diagrams.</li>
+                    </ul>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="meet-card">
+            <table class="log-table">
+              <thead>
+                <tr>
+                  <th class="meet-head" colspan="2" scope="colgroup">Meeting 2 · 12 February 2026</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="lbl">Context</td>
+                  <td class="val"><strong>Previous:</strong> 02 December 2025 · <strong>Format:</strong> Demo session, ~50 min.</td>
+                </tr>
+                <tr>
+                  <td class="lbl">Objectives</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li>Demonstrate the current build quality and stability.</li>
+                      <li>Collect concrete improvement points on UX and reliability.</li>
+                      <li>Surface security and privacy weaknesses early (auth, data exposure, client-side assumptions).</li>
+                      <li>Agree an async supervision format between meetings (e.g. recorded walkthrough).</li>
+                    </ul>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="lbl">Progress</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li>Showed navigation, posting, chat-related screens, and admin-facing ideas still in progress.</li>
+                      <li>Explained Firebase rules at a high level and where Cloud Functions enforce trusted writes.</li>
+                      <li>Discussed known rough edges: loading states, error messages, and edge cases on poor connectivity.</li>
+                      <li>Committed to a short recorded demo covering happy paths plus one failure path (e.g. permission denied).</li>
+                    </ul>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="lbl">Supervisor comments</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li><strong>UX:</strong> provide explicit feedback when actions fail; replace vague empty screens with actionable messaging.</li>
+                      <li><strong>Security:</strong> prioritise revisiting Firestore rules, token/session handling, and cross-role data exposure.</li>
+                      <li><strong>Async review:</strong> a narrated demo would allow paused review without scheduling another live session immediately.</li>
+                      <li><strong>Action list:</strong> keep a numbered list of raised issues and resolve or close them explicitly in the diary.</li>
+                    </ul>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="meet-card">
+            <table class="log-table">
+              <thead>
+                <tr>
+                  <th class="meet-head" colspan="2" scope="colgroup">Meeting 3 · 18 March 2026</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="lbl">Context</td>
+                  <td class="val"><strong>Previous:</strong> 12 February 2026 · <strong>Format:</strong> Documentation focus, ~40 min.</td>
+                </tr>
+                <tr>
+                  <td class="lbl">Objectives</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li>Align the dissertation structure with a clear system <strong>block diagram</strong> (client, services, data stores).</li>
+                      <li>Plan the evaluation chapter so <strong>black-box testing</strong> reads as a proper subsection, not a vague paragraph.</li>
+                      <li>List sub-headings under black-box testing (functional cases, boundaries, integration, basic security checks).</li>
+                    </ul>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="lbl">Progress</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li>Described how Spill uses Firestore collections, Storage for media, and Functions for sensitive operations.</li>
+                      <li>Drafted a rough architecture sketch; feedback was to produce a clearer, dissertation-ready revision for the final PDF.</li>
+                      <li>Discussed mapping tests to requirements IDs or user stories for the write-up.</li>
+                      <li>Noted limitations to document (single developer, test device range, no large-scale load testing).</li>
+                    </ul>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="lbl">Supervisor comments</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li>Block diagrams should be publication-quality: readable typography and explicit trust boundaries.</li>
+                      <li>The testing chapter must spell out scope: what ran, against what, what was explicitly out of scope, and how.</li>
+                      <li>Structure black-box testing with nested subsections (functional paths, boundary cases, integrations).</li>
+                      <li>Cross-reference the architecture diagram in the testing prose so reviewers can navigate evidence quickly.</li>
+                    </ul>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="meet-card">
+            <table class="log-table">
+              <thead>
+                <tr>
+                  <th class="meet-head" colspan="2" scope="colgroup">Meeting 4 · 17 April 2026</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="lbl">Context</td>
+                  <td class="val"><strong>Previous:</strong> 18 March 2026 · <strong>Format:</strong> Overall review, ~45 min.</td>
+                </tr>
+                <tr>
+                  <td class="lbl">Objectives</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li>Summarise implementation status since the video-demo feedback.</li>
+                      <li>Capture holistic feedback on the product idea and dissertation storyline.</li>
+                      <li>Lock priorities for security improvements before hand-in.</li>
+                      <li>Confirm remaining tasks: evaluation write-up, diagrams, and final polish.</li>
+                    </ul>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="lbl">Progress</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li>Reported progress on issues raised in Meeting 2 and on the diagram and testing outline from Meeting 3.</li>
+                      <li>Discussed timeline toward draft chapters and final build freeze date.</li>
+                      <li>Reviewed how evidence (screenshots, test logs, demo link) will sit in appendices.</li>
+                    </ul>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="lbl">Supervisor comments</td>
+                  <td class="val">
+                    <ul class="compact-list">
+                      <li>The concept and problem space were received positively, <strong>provided that written claims remain aligned with what the implemented artefact demonstrates.</strong></li>
+                      <li><strong>Security remains non‑negotiable:</strong> disciplined input validation, auth/session reviews, proportional threat notation.</li>
+                      <li>Keep cross‑chapter consistency: design, implementation, and testing should reference each other cleanly.</li>
+                      <li>Project diary and related artefacts stay current through the final submission stretch.</li>
+                    </ul>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">PNG saved</div>
+
+  <script>
+    (function () {
+      const toast = document.getElementById("toast");
+      function showToast(msg) {
+        toast.textContent = msg;
+        toast.classList.add("show");
+        setTimeout(() => toast.classList.remove("show"), 2200);
+      }
+
+      document.getElementById("downloadPng").addEventListener("click", async () => {
+        const btn = document.getElementById("downloadPng");
+        const cap = document.getElementById("captureArea");
+        btn.disabled = true;
+        btn.textContent = "Rendering…";
+
+        const w = Math.ceil(Math.max(cap.scrollWidth, cap.offsetWidth));
+        const h = Math.ceil(Math.max(cap.scrollHeight, cap.offsetHeight));
+        const dpr = window.devicePixelRatio || 2;
+        const scale = Math.min(4.5, Math.max(3.25, dpr * 1.85));
+
+        const prev = {
+          maxW: cap.style.maxWidth,
+          ov: cap.style.overflow,
+          width: cap.style.width,
+        };
+        cap.style.maxWidth = "none";
+        cap.style.overflow = "visible";
+        cap.style.width = w + "px";
+
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+        try {
+          const canvas = await html2canvas(cap, {
+            backgroundColor: "#fffdf8",
+            scale,
+            useCORS: true,
+            logging: false,
+            scrollX: 0,
+            scrollY: 0,
+            windowWidth: w,
+            windowHeight: h,
+            onclone(doc) {
+              const node = doc.getElementById("captureArea");
+              if (!node) return;
+              node.style.maxWidth = "none";
+              node.style.overflow = "visible";
+              node.style.width = w + "px";
+            },
+          });
+          const a = document.createElement("a");
+          a.download = "project-diary-spill-meeting-log.png";
+          a.href = canvas.toDataURL("image/png");
+          a.click();
+          showToast("Full-page PNG saved");
+        } catch (e) {
+          console.error(e);
+          showToast("Export failed");
+        } finally {
+          cap.style.maxWidth = prev.maxW;
+          cap.style.overflow = prev.ov;
+          cap.style.width = prev.width;
+          btn.disabled = false;
+          btn.textContent = "Save as PNG";
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

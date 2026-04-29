@@ -1,7 +1,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
-const { randomUUID } = require('crypto');
+const crypto = require('crypto');
 
 admin.initializeApp();
 
@@ -17,10 +17,24 @@ async function canUploadTherapistLearningFiles(uid) {
   const userDoc = await db.collection('users').doc(uid).get();
   if (userDoc.exists) {
     const d = userDoc.data() || {};
-    if (d.is_admin === true || d.is_admin === 'true') return true;
+    if (d.is_admin === true || d.is_admin === 'true' || d.is_staff === true || d.is_staff === 'true') return true;
   }
   const tp = await db.collection('therapist_profiles').doc(uid).get();
   return tp.exists;
+}
+
+async function isAdminUid(uid) {
+  if (!uid) return false;
+  try {
+    const authUser = await admin.auth().getUser(uid);
+  if (authUser.customClaims?.admin === true || authUser.customClaims?.is_admin === true || authUser.customClaims?.is_staff === true) return true;
+  } catch (err) {
+    console.warn('isAdminUid auth lookup failed', err?.message || err);
+  }
+  const userDoc = await db.collection('users').doc(uid).get();
+  if (!userDoc.exists) return false;
+  const d = userDoc.data() || {};
+  return d.is_admin === true || d.is_admin === 'true' || d.is_staff === true || d.is_staff === 'true';
 }
 
 const UK_DEFAULT_THERAPIST_REQUIREMENTS = [
@@ -109,6 +123,170 @@ if (gmailUser && gmailPass) {
 } else {
   console.warn('Gmail config not set in functions config. Therapist onboarding emails will be skipped.');
 }
+
+/** HMAC pepper for login OTP hashes. Set via: firebase functions:config:set login_otp.pepper="YOUR_LONG_RANDOM_SECRET" */
+function getLoginOtpPepper() {
+  const p = functions.config().login_otp?.pepper;
+  if (typeof p === 'string' && p.length >= 16) return p;
+  return `${gmailUser || 'spill-otp'}:dev-only-pepper-set-login_otp.pepper`;
+}
+
+function hashLoginOtp(code, uid) {
+  return crypto.createHmac('sha256', getLoginOtpPepper()).update(`${uid}:${code}`).digest('hex');
+}
+
+/**
+ * Authenticated: after email/password sign-in, send a 6-digit code to the user's email (same Gmail transport as therapist mail).
+ * Skipped client-side for admin/staff/therapist; do not call for those accounts.
+ */
+exports.sendLoginOtp = functions.region('us-central1').https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const uid = context.auth.uid;
+  let userRecord;
+  try {
+    userRecord = await admin.auth().getUser(uid);
+  } catch (e) {
+    throw new functions.https.HttpsError('not-found', 'User not found.');
+  }
+  const toEmail = userRecord.email;
+  if (!toEmail) {
+    throw new functions.https.HttpsError('failed-precondition', 'No email on account.');
+  }
+
+  const rateRef = db.collection('login_otp_rate').doc(uid);
+  const rateSnap = await rateRef.get();
+  const now = Date.now();
+  if (rateSnap.exists) {
+    const last = rateSnap.data().last_sent_ms || 0;
+    if (now - last < 60 * 1000) {
+      throw new functions.https.HttpsError(
+        'resource-exhausted',
+        'Wait a minute before requesting another code.'
+      );
+    }
+  }
+
+  if (!gmailTransport || !gmailUser) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Email is not configured on the server (Gmail).'
+    );
+  }
+
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const hash = hashLoginOtp(code, uid);
+  const expiresAt = admin.firestore.Timestamp.fromMillis(now + 10 * 60 * 1000);
+
+  await db.collection('login_otp_challenges').doc(uid).set({
+    hash,
+    expires_at: expiresAt,
+    attempts: 0,
+    created_at: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await rateRef.set({ last_sent_ms: now }, { merge: true });
+
+  try {
+    await gmailTransport.sendMail({
+      from: `"Spill" <${gmailUser}>`,
+      to: toEmail,
+      subject: 'Your Spill login code',
+      text:
+        `Your login code is: ${code}\n\nIt expires in 10 minutes. If you didn't try to log in, ignore this email.`,
+      html: `<p>Your login code is: <strong>${code}</strong></p><p>It expires in 10 minutes. If you didn't try to log in, ignore this email.</p>`,
+    });
+  } catch (err) {
+    console.error('sendLoginOtp mail error', err);
+    await db.collection('login_otp_challenges').doc(uid).delete().catch(() => {});
+    throw new functions.https.HttpsError('internal', 'Could not send email. Try again later.');
+  }
+
+  return { ok: true };
+});
+
+/**
+ * Public callable: verify email + code. Does NOT delete the challenge until the client signs in successfully
+ * (see consumeLoginOtp). If OTP was already accepted, returns ok so the user can retry sign-in without a new code.
+ */
+exports.verifyLoginOtp = functions.region('us-central1').https.onCall(async (data) => {
+  const email = typeof data?.email === 'string' ? data.email.trim().toLowerCase() : '';
+  if (!email) {
+    throw new functions.https.HttpsError('invalid-argument', 'Email is required.');
+  }
+
+  let userRecord;
+  try {
+    userRecord = await admin.auth().getUserByEmail(email);
+  } catch (e) {
+    throw new functions.https.HttpsError('permission-denied', 'Invalid or expired code.');
+  }
+  const uid = userRecord.uid;
+  const authEmail = userRecord.email || email;
+
+  const challengeRef = db.collection('login_otp_challenges').doc(uid);
+  const snap = await challengeRef.get();
+  if (!snap.exists) {
+    throw new functions.https.HttpsError('permission-denied', 'Invalid or expired code.');
+  }
+  const ch = snap.data() || {};
+
+  // OTP already accepted; password sign-in can be retried without burning the code.
+  if (ch.stage === 'awaiting_signin') {
+    const waitExp = ch.expires_at?.toMillis ? ch.expires_at.toMillis() : 0;
+    if (Date.now() > waitExp) {
+      await challengeRef.delete();
+      throw new functions.https.HttpsError('permission-denied', 'Code expired. Log in again to get a new one.');
+    }
+    return { ok: true, authEmail };
+  }
+
+  const rawCode = typeof data?.code === 'string' ? data.code.trim().replace(/\s/g, '') : '';
+  if (!/^\d{6}$/.test(rawCode)) {
+    throw new functions.https.HttpsError('invalid-argument', 'Enter the 6-digit code from your email.');
+  }
+
+  const exp = ch.expires_at?.toMillis ? ch.expires_at.toMillis() : 0;
+  if (Date.now() > exp) {
+    await challengeRef.delete();
+    throw new functions.https.HttpsError('permission-denied', 'Code expired. Log in again to get a new one.');
+  }
+
+  if (!ch.hash) {
+    await challengeRef.delete();
+    throw new functions.https.HttpsError('permission-denied', 'Invalid or expired code.');
+  }
+
+  const attempts = (ch.attempts || 0) + 1;
+  if (attempts > 5) {
+    await challengeRef.delete();
+    throw new functions.https.HttpsError('permission-denied', 'Too many attempts. Log in again.');
+  }
+
+  if (hashLoginOtp(rawCode, uid) !== ch.hash) {
+    await challengeRef.update({ attempts });
+    throw new functions.https.HttpsError('permission-denied', 'Invalid or expired code.');
+  }
+
+  const waitUntil = Date.now() + 15 * 60 * 1000;
+  await challengeRef.set({
+    stage: 'awaiting_signin',
+    expires_at: admin.firestore.Timestamp.fromMillis(waitUntil),
+    confirmed_at: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, authEmail };
+});
+
+/** Call after signInWithEmailAndPassword succeeds so the next login gets a fresh OTP. */
+exports.consumeLoginOtp = functions.region('us-central1').https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
+  }
+  await db.collection('login_otp_challenges').doc(context.auth.uid).delete().catch(() => {});
+  return { ok: true };
+});
 
 // Threshold for auto-flagging based on Perspective TOXICITY score (0–1).
 // Lower values = more aggressive flagging.
@@ -342,8 +520,7 @@ exports.approvePostAsSafe = functions
       throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
     }
     const adminUid = context.auth.uid;
-    const adminDoc = await db.collection('users').doc(adminUid).get();
-    if (!adminDoc.exists || !adminDoc.data().is_admin) {
+    if (!(await isAdminUid(adminUid))) {
       throw new functions.https.HttpsError('permission-denied', 'Only admins can approve posts.');
     }
     const { postId, reportId } = data || {};
@@ -416,8 +593,7 @@ exports.createStaffUser = functions.region('us-central1').https.onCall(async (da
     throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
   }
   const adminUid = context.auth.uid;
-  const adminDoc = await admin.firestore().collection('users').doc(adminUid).get();
-  if (!adminDoc.exists || !adminDoc.data().is_admin) {
+  if (!(await isAdminUid(adminUid))) {
     throw new functions.https.HttpsError('permission-denied', 'Only admins can add staff.');
   }
 
@@ -436,6 +612,8 @@ exports.createStaffUser = functions.region('us-central1').https.onCall(async (da
       emailVerified: true,
     });
 
+    await admin.auth().setCustomUserClaims(staffUser.uid, { admin: true, is_admin: true, is_staff: true });
+
     await admin.firestore().collection('users').doc(staffUser.uid).set({
       display_name: (staffDisplayName && typeof staffDisplayName === 'string') ? staffDisplayName.trim() || null : null,
       anonymous_username: null,
@@ -443,8 +621,9 @@ exports.createStaffUser = functions.region('us-central1').https.onCall(async (da
       is_premium: false,
       premium_activated_at: null,
       premium_expires_at: null,
-      is_admin: false,
+      is_admin: true,
       is_staff: true,
+      role: 'admin',
       created_at: new Date().toISOString(),
     });
 
@@ -458,6 +637,162 @@ exports.createStaffUser = functions.region('us-central1').https.onCall(async (da
     }
     throw new functions.https.HttpsError('internal', err.message || 'Failed to create staff user.');
   }
+});
+
+exports.adminListAccounts = functions.region('us-central1').https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+  }
+  if (!(await isAdminUid(context.auth.uid))) {
+    throw new functions.https.HttpsError('permission-denied', 'Only admins can manage accounts.');
+  }
+
+  const maxResults = Math.min(Math.max(Number(data?.maxResults || 200), 1), 1000);
+  const pageToken = typeof data?.pageToken === 'string' && data.pageToken ? data.pageToken : undefined;
+  const out = await admin.auth().listUsers(maxResults, pageToken);
+  const userIds = out.users.map((u) => u.uid);
+  const profileSnaps = await Promise.all(userIds.map((uid) => db.collection('users').doc(uid).get()));
+  const therapistSnaps = await Promise.all(userIds.map((uid) => db.collection('therapist_profiles').doc(uid).get()));
+  const emailBackfillBatch = db.batch();
+  let emailBackfillCount = 0;
+  const accounts = out.users.map((u, idx) => {
+    const profile = profileSnaps[idx].exists ? profileSnaps[idx].data() || {} : {};
+    const therapist = therapistSnaps[idx].exists ? therapistSnaps[idx].data() || {} : null;
+    if (u.email && profile.email !== u.email) {
+      emailBackfillBatch.set(
+        db.collection('users').doc(u.uid),
+        { email: u.email, updated_at: new Date().toISOString() },
+        { merge: true }
+      );
+      emailBackfillCount += 1;
+    }
+    return {
+      uid: u.uid,
+      email: u.email || profile.email || (therapist && therapist.email) || null,
+      display_name: profile.display_name || therapist?.display_name || u.displayName || null,
+      anonymous_username: profile.anonymous_username || null,
+      role: profile.is_admin === true ? 'admin' : profile.is_staff === true ? 'staff' : therapist ? 'therapist' : 'user',
+      is_admin: profile.is_admin === true,
+      is_staff: profile.is_staff === true,
+      is_therapist: !!therapist,
+      disabled: u.disabled === true || profile.account_disabled === true,
+      account_disabled_reason: profile.account_disabled_reason || null,
+      created_at: profile.created_at || u.metadata?.creationTime || null,
+      last_sign_in_at: u.metadata?.lastSignInTime || null,
+      emailVerified: u.emailVerified === true,
+    };
+  });
+  if (emailBackfillCount > 0) {
+    await emailBackfillBatch.commit();
+  }
+  return { ok: true, accounts, nextPageToken: out.pageToken || null };
+});
+
+exports.adminSetAccountDisabled = functions.region('us-central1').https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in.');
+  }
+  if (!(await isAdminUid(context.auth.uid))) {
+    throw new functions.https.HttpsError('permission-denied', 'Only admins can manage accounts.');
+  }
+
+  const targetUid = typeof data?.uid === 'string' ? data.uid.trim() : '';
+  const disabled = data?.disabled === true;
+  const reason = typeof data?.reason === 'string' ? data.reason.trim().slice(0, 500) : '';
+  const emailMessage = typeof data?.emailMessage === 'string' ? data.emailMessage.trim().slice(0, 4000) : '';
+  if (!targetUid) throw new functions.https.HttpsError('invalid-argument', 'uid is required.');
+  if (targetUid === context.auth.uid && disabled) {
+    throw new functions.https.HttpsError('failed-precondition', 'You cannot suspend your own admin account.');
+  }
+
+  const target = await admin.auth().getUser(targetUid);
+  const nowIso = new Date().toISOString();
+  await admin.auth().updateUser(targetUid, { disabled });
+  if (disabled) {
+    await admin.auth().revokeRefreshTokens(targetUid);
+  }
+
+  /** Auth record sometimes has no email; profiles often still do (therapists, legacy users). */
+  let recipientEmail =
+    target.email && typeof target.email === 'string' && target.email.includes('@')
+      ? target.email.trim()
+      : null;
+  if (!recipientEmail) {
+    try {
+      const userDoc = await db.collection('users').doc(targetUid).get();
+      const e = userDoc.exists ? userDoc.data()?.email : null;
+      if (e && typeof e === 'string' && e.includes('@')) recipientEmail = e.trim();
+    } catch (err) {
+      console.warn('adminSetAccountDisabled: users email lookup failed', err);
+    }
+  }
+  if (!recipientEmail) {
+    try {
+      const tpDoc = await db.collection('therapist_profiles').doc(targetUid).get();
+      const e = tpDoc.exists ? tpDoc.data()?.email : null;
+      if (e && typeof e === 'string' && e.includes('@')) recipientEmail = e.trim();
+    } catch (err) {
+      console.warn('adminSetAccountDisabled: therapist_profiles email lookup failed', err);
+    }
+  }
+
+  let emailSent = false;
+  let emailError = null;
+  if (!recipientEmail) {
+    emailError = 'No email address on file for this account (Firebase Auth and Firestore had none).';
+    console.warn('adminSetAccountDisabled: cannot send mail — missing recipient email', { targetUid });
+  } else if (!gmailTransport || !gmailUser) {
+    emailError = 'Email transport is not configured on the server (Gmail).';
+  } else {
+    try {
+      const bodyLines = emailMessage
+        ? emailMessage.split(/\r?\n/)
+        : [
+            `Hi ${target.displayName || recipientEmail.split('@')[0] || 'there'},`,
+            '',
+            disabled ? 'Your Spill account has been suspended by an admin.' : 'Your Spill account has been reactivated by an admin.',
+            ...(disabled && reason ? [`Reason: ${reason}`] : []),
+            '',
+            disabled
+              ? 'You will not be able to log in while the account is suspended.'
+              : 'You can now log back in and continue using Spill.',
+            '',
+            'If you think this was a mistake, please contact Spill support.',
+          ];
+      await gmailTransport.sendMail({
+        from: `"Spill" <${gmailUser}>`,
+        to: recipientEmail,
+        subject: disabled ? 'Your Spill account has been suspended' : 'Your Spill account has been reactivated',
+        text: bodyLines.filter(Boolean).join('\n'),
+        html: `<div style="font-family:sans-serif;line-height:1.5">${bodyLines
+          .map((line) => (line ? `<p>${String(line).replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>` : '<br/>'))
+          .join('')}</div>`,
+      });
+      emailSent = true;
+    } catch (err) {
+      emailError = err.message || 'Email failed.';
+      console.warn('adminSetAccountDisabled: email send failed', err);
+    }
+  }
+
+  await db.collection('users').doc(targetUid).set(
+    {
+      ...(recipientEmail ? { email: recipientEmail } : {}),
+      account_disabled: disabled,
+      account_disabled_reason: disabled ? reason || null : null,
+      account_disabled_at: disabled ? nowIso : null,
+      account_disabled_by: disabled ? context.auth.uid : null,
+      account_reenabled_at: disabled ? null : nowIso,
+      account_disabled_email_sent: disabled ? emailSent : false,
+      account_disabled_email_error: disabled ? emailError : null,
+      account_reenabled_email_sent: disabled ? false : emailSent,
+      account_reenabled_email_error: disabled ? null : emailError,
+      updated_at: nowIso,
+    },
+    { merge: true }
+  );
+
+  return { ok: true, disabled, emailSent, emailError, recipientEmail: recipientEmail || null };
 });
 
 // Public callable: submit a therapist onboarding request. No auth required.
@@ -533,8 +868,7 @@ exports.sendTherapistInvite = functions
     }
 
     const adminUid = context.auth.uid;
-    const adminDoc = await db.collection('users').doc(adminUid).get();
-    if (!adminDoc.exists || !adminDoc.data().is_admin) {
+    if (!(await isAdminUid(adminUid))) {
       throw new functions.https.HttpsError('permission-denied', 'Only admins can send therapist invites.');
     }
 
@@ -570,7 +904,7 @@ exports.sendTherapistInvite = functions
       let code =
         typeof reqData.therapist_code === 'string' && reqData.therapist_code.trim()
           ? reqData.therapist_code.trim()
-          : randomUUID().toUpperCase();
+          : crypto.randomUUID().toUpperCase();
 
       const { templateId, items } = await getTherapistRequirementsTemplate('uk_default');
       const requestedItemIds = (items || [])
@@ -1377,14 +1711,11 @@ async function sendPushToUser(recipientId, title, body, payload) {
       const tokenOwnerSnap = await db.collection('expo_push_tokens').doc(pushTokenDocId(expoPushToken)).get();
       const tokenOwner = tokenOwnerSnap.exists ? String((tokenOwnerSnap.data() || {}).owner_uid || '') : '';
       if (tokenOwner && tokenOwner !== userId) {
-        console.warn('sendPushToUser: token owner mismatch; reassigning token to recipient before push', {
+        console.warn('sendPushToUser: token owner mismatch; skipping push to avoid notifying the wrong signed-in user', {
           recipientId: userId,
           tokenOwner,
         });
-        await db.collection('expo_push_tokens').doc(pushTokenDocId(expoPushToken)).set(
-          { token: expoPushToken, owner_uid: userId, updated_at: new Date().toISOString() },
-          { merge: true }
-        );
+        return { ok: false, error: 'Push token belongs to another signed-in user' };
       }
     } catch (e) {
       console.warn('sendPushToUser: token ownership check failed', e);
@@ -1448,6 +1779,15 @@ exports.registerExpoPushToken = functions
     }
     const now = new Date().toISOString();
     const batch = db.batch();
+    const staleTokenUsers = await db.collection('users').where('expo_push_token', '==', token).limit(20).get();
+    staleTokenUsers.docs.forEach((docSnap) => {
+      if (docSnap.id === uid) return;
+      batch.update(docSnap.ref, {
+        expo_push_token: admin.firestore.FieldValue.delete(),
+        expo_push_token_owner_uid: admin.firestore.FieldValue.delete(),
+        expo_push_token_updated_at: admin.firestore.FieldValue.delete(),
+      });
+    });
     batch.set(
       db.collection('users').doc(uid),
       { expo_push_token: token, expo_push_token_owner_uid: uid, expo_push_token_updated_at: now },
@@ -1472,6 +1812,23 @@ exports.sendExpoPush = functions
     const { recipientId, title, body, data: payload } = data || {};
     if (!recipientId || typeof recipientId !== 'string' || !title || typeof title !== 'string') {
       throw new functions.https.HttpsError('invalid-argument', 'recipientId and title are required.');
+    }
+    const senderUid = context.auth.uid;
+    const recipientUid = recipientId.trim();
+    if (recipientUid !== senderUid) {
+      const [senderSnap, recipientSnap] = await Promise.all([
+        db.collection('users').doc(senderUid).get(),
+        db.collection('users').doc(recipientUid).get(),
+      ]);
+      const senderToken = String((senderSnap.data() || {}).expo_push_token || '');
+      const recipientToken = String((recipientSnap.data() || {}).expo_push_token || '');
+      if (senderToken && recipientToken && senderToken === recipientToken) {
+        console.warn('sendExpoPush: sender and recipient share the same Expo token; skipping push', {
+          senderUid,
+          recipientUid,
+        });
+        return { ok: true, skipped: true };
+      }
     }
     const res = await sendPushToUser(recipientId, title, body, payload);
     if (!res.ok) {

@@ -1,5 +1,5 @@
 import {
-  getTherapistProfile, listOpenSlotsForTherapist, listSessionsForUser, listTherapistProfiles, TherapistProfile, TherapistSession,
+  countSessionsForTherapist, getTherapistProfile, listOpenSlotsForTherapist, listSessionsForUser, listTherapistProfiles, TherapistProfile, TherapistSession,
 } from '@/app/therapist/_marketplace';
 import TherapistList from '@/components/TherapistList';
 import { auth, db } from '@/lib/firebase';
@@ -14,7 +14,7 @@ import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Platform, Pre
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   acceptMatchRequest, acceptMessageRequest, blockUser, CHALLENGE_CATEGORIES, declineMatchRequest, declineMessageRequest, fetchMessages, formatTimeAgo,
-  getConversations, getCurrentUserRole, getGroups, getOfficialChallenges, getOrCreateConversation, getPendingMatchRequests, getPendingRequests,
+  acceptGroupInvite, declineGroupInvite, getConversations, getCurrentUserRole, getGroups, getOfficialChallenges, getOrCreateConversation, getPendingGroupInvites, getPendingMatchRequests, getPendingRequests,
   Group, reportDmUser, sendMessage,
 } from '../functions';
 
@@ -23,6 +23,16 @@ interface Message {
   content?: string;
   sender_id?: string;
   created_at?: string;
+  message_type?: string;
+  shared_post?: {
+    id?: string;
+    content?: string;
+    author_name?: string;
+    media_url?: string | null;
+    youtube_url?: string | null;
+    youtube_id?: string | null;
+    created_at?: string | null;
+  } | null;
   sender?: {
     id: string;
     display_name?: string;
@@ -50,7 +60,7 @@ export default function ConnectionsScreen() {
   const [challengeCategoryFilter, setChallengeCategoryFilter] = useState<string>('All');
   const [requests, setRequests] = useState<any[]>([]);
   const [loadingRequests, setLoadingRequests] = useState(true);
-  const [therapists, setTherapists] = useState<(TherapistProfile & { nextSlotAt?: string | null; openSlots?: number })[]>([]);
+  const [therapists, setTherapists] = useState<(TherapistProfile & { nextSlotAt?: string | null; openSlots?: number; sessionsCount?: number })[]>([]);
   const [loadingTherapists, setLoadingTherapists] = useState(false);
   const [privateSessions, setPrivateSessions] = useState<TherapistSession[]>([]);
   const [privateSessionTherapistNames, setPrivateSessionTherapistNames] = useState<Record<string, string>>({});
@@ -116,9 +126,10 @@ export default function ConnectionsScreen() {
     try {
       setLoadingRequests(true);
       const uid = auth.currentUser?.uid ?? null;
-      const [dmReqs, matchReqsRaw] = await Promise.all([
+      const [dmReqs, matchReqsRaw, groupInvitesRaw] = await Promise.all([
         getPendingRequests(),
         uid ? getPendingMatchRequests(uid) : Promise.resolve([]),
+        getPendingGroupInvites(),
       ]);
       // Connections "Requests" previously only showed DM conversation invites.
       // Match requests (match_requests collection) live on Matches — merge them here too.
@@ -141,7 +152,8 @@ export default function ConnectionsScreen() {
         updated_at: m.created_at || '',
       }));
       const messageItems = dmReqs.map((r: any) => ({ kind: 'message' as const, ...r }));
-      const combined = [...matchItems, ...messageItems].sort(
+      const groupItems = groupInvitesRaw.map((g: any) => ({ kind: 'group_invite' as const, ...g }));
+      const combined = [...matchItems, ...messageItems, ...groupItems].sort(
         (a, b) => new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime()
       );
       setRequests(combined);
@@ -160,10 +172,13 @@ export default function ConnectionsScreen() {
       const enriched = await Promise.all(
         list.map(async (p) => {
           try {
-            const slots = await listOpenSlotsForTherapist(p.id, 100);
-            return { ...p, openSlots: slots.length, nextSlotAt: slots[0]?.start_at || null };
+            const [slots, sessionsCount] = await Promise.all([
+              listOpenSlotsForTherapist(p.id, 100),
+              countSessionsForTherapist(p.id),
+            ]);
+            return { ...p, openSlots: slots.length, nextSlotAt: slots[0]?.start_at || null, sessionsCount };
           } catch {
-            return { ...p, openSlots: 0, nextSlotAt: null };
+            return { ...p, openSlots: 0, nextSlotAt: null, sessionsCount: 0 };
           }
         })
       );
@@ -226,6 +241,24 @@ export default function ConnectionsScreen() {
 
   const handleDeclineMatchRequest = async (requestId: string) => {
     const success = await declineMatchRequest(requestId);
+    if (success) loadRequests();
+    else Alert.alert('Could not decline', 'Try again.');
+  };
+
+  const handleAcceptGroupInvite = async (inviteId: string, groupId?: string) => {
+    const success = await acceptGroupInvite(inviteId);
+    if (success) {
+      await Promise.all([loadRequests(), loadGroups()]);
+      Alert.alert('Joined group', 'Added by a friend. You can open it from Groups.', [
+        groupId ? { text: 'Open', onPress: () => router.push(`/group?groupId=${groupId}` as any) } : { text: 'OK' },
+      ]);
+    } else {
+      Alert.alert('Could not join', 'Try again.');
+    }
+  };
+
+  const handleDeclineGroupInvite = async (inviteId: string) => {
+    const success = await declineGroupInvite(inviteId);
     if (success) loadRequests();
     else Alert.alert('Could not decline', 'Try again.');
   };
@@ -480,6 +513,40 @@ export default function ConnectionsScreen() {
   const renderRequestItem = ({ item }: { item: any }) => {
     const displayName = item.otherUser?.display_name || item.otherUser?.anonymous_username || 'Anonymous';
     const isMatch = item.kind === 'match';
+    const isGroupInvite = item.kind === 'group_invite';
+    if (isGroupInvite) {
+      const inviterName = item.inviter?.display_name || item.inviter?.anonymous_username || 'A friend';
+      const groupName = item.group?.name || item.group_name || 'Group';
+      return (
+        <View style={styles.requestItem}>
+          <View style={styles.requestHeader}>
+            <View style={styles.avatarFallback}>
+              <Text style={styles.avatarText}>{groupName[0]?.toUpperCase() || 'G'}</Text>
+            </View>
+            <View style={styles.requestInfo}>
+              <View style={styles.requestNameRow}>
+                <Text style={styles.requestName}>{groupName}</Text>
+                <View style={styles.autoJoinLabel}>
+                  <Text style={styles.autoJoinLabelText}>Added by a friend</Text>
+                </View>
+              </View>
+              <Text style={styles.requestMessage} numberOfLines={2}>
+                {inviterName} invited you to join this group. Approve to join.
+              </Text>
+              <Text style={styles.requestTime}>{item.created_at ? formatTimeAgo(item.created_at) : ''}</Text>
+            </View>
+          </View>
+          <View style={styles.requestActions}>
+            <Pressable style={styles.declineButton} onPress={() => handleDeclineGroupInvite(item.id)}>
+              <Text style={styles.declineButtonText}>Decline</Text>
+            </Pressable>
+            <Pressable style={styles.acceptButton} onPress={() => handleAcceptGroupInvite(item.id, item.group_id)}>
+              <Text style={styles.acceptButtonText}>Join</Text>
+            </Pressable>
+          </View>
+        </View>
+      );
+    }
     return (
       <View style={styles.requestItem}>
         <View style={styles.requestHeader}>
@@ -549,9 +616,30 @@ export default function ConnectionsScreen() {
       const sid = item.sender_id != null ? String(item.sender_id) : '';
       const oid = otherUserId != null ? String(otherUserId) : '';
       const isMe = !!uid && sid === String(uid);
+      const sharedPost = item.message_type === 'shared_post' ? item.shared_post : null;
       const bubble = (
         <View style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleOther]}>
-          <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{item.content}</Text>
+          {sharedPost ? (
+            <Pressable
+              style={[styles.sharedPostCard, isMe && styles.sharedPostCardMe]}
+              onPress={() => {
+                if (sharedPost.id) router.push(`/comments?postId=${sharedPost.id}` as any);
+              }}
+            >
+              <View style={styles.sharedPostHeader}>
+                <Feather name="send" size={13} color={isMe ? '#be185d' : '#ec4899'} />
+                <Text style={[styles.sharedPostLabel, isMe && styles.sharedPostLabelMe]}>Shared post</Text>
+              </View>
+              <Text style={styles.sharedPostAuthor} numberOfLines={1}>
+                {sharedPost.author_name || 'Anonymous'}
+              </Text>
+              <Text style={styles.sharedPostText} numberOfLines={4}>
+                {sharedPost.content || 'Post unavailable'}
+              </Text>
+            </Pressable>
+          ) : (
+            <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{item.content}</Text>
+          )}
           <Text style={[styles.messageTime, isMe && styles.messageTimeMe]}>
             {item.created_at ? formatTimeAgo(item.created_at) : ''}
           </Text>
@@ -816,15 +904,16 @@ export default function ConnectionsScreen() {
                     </Text>
                     {privateSessions.map((s) => {
                       const name = privateSessionTherapistNames[s.therapist_uid] || 'Therapist';
+                      const isEnded = Number.isFinite(Date.parse(String(s.ends_at || ''))) && Date.parse(String(s.ends_at || '')) <= Date.now();
                       return (
                         <Pressable
                           key={s.id}
                           style={{
-                            backgroundColor: '#fff',
+                            backgroundColor: isEnded ? '#fef3c7' : '#fff',
                             borderRadius: 16,
                             padding: 14,
                             borderWidth: 1,
-                            borderColor: '#e5e7eb',
+                            borderColor: isEnded ? '#fcd34d' : '#e5e7eb',
                             flexDirection: 'row',
                             alignItems: 'center',
                             justifyContent: 'space-between',
@@ -838,10 +927,17 @@ export default function ConnectionsScreen() {
                             <Text style={{ fontSize: 12, fontWeight: '600', color: '#6b7280', marginTop: 4 }} numberOfLines={2}>
                               {fmtWhenSlot(s.starts_at)} – {fmtWhenSlot(s.ends_at)}
                             </Text>
+                            {isEnded ? (
+                              <Text style={{ fontSize: 12, fontWeight: '900', color: '#92400e', marginTop: 6 }}>
+                                Session ended · leave a review
+                              </Text>
+                            ) : null}
                           </View>
                           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                            <Feather name="message-circle" size={18} color="#ec4899" />
-                            <Text style={{ fontSize: 13, fontWeight: '800', color: '#ec4899' }}>Chat</Text>
+                            <Feather name={isEnded ? 'star' : 'message-circle'} size={18} color={isEnded ? '#92400e' : '#ec4899'} />
+                            <Text style={{ fontSize: 13, fontWeight: '800', color: isEnded ? '#92400e' : '#ec4899' }}>
+                              {isEnded ? 'Review' : 'Chat'}
+                            </Text>
                           </View>
                         </Pressable>
                       );
@@ -1069,7 +1165,10 @@ const styles = StyleSheet.create({
   requestItem: { backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 14, borderRadius: 16, marginBottom: 8 },
   requestHeader: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
   requestInfo: { flex: 1 },
+  requestNameRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
   requestName: { fontSize: 16, fontWeight: '600', color: '#111827', marginBottom: 4 },
+  autoJoinLabel: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, backgroundColor: '#fce7f3' },
+  autoJoinLabelText: { fontSize: 10, fontWeight: '900', color: '#be185d', textTransform: 'uppercase' },
   requestMessage: { fontSize: 13, color: '#4b5563', marginBottom: 4 },
   requestTime: { fontSize: 11, color: '#9ca3af' },
   requestActions: { flexDirection: 'row', gap: 8 },
@@ -1094,6 +1193,13 @@ const styles = StyleSheet.create({
   messageTextMe: { color: '#fff' },
   messageTime: { fontSize: 11, color: '#6b7280' },
   messageTimeMe: { color: 'rgba(255, 255, 255, 0.7)' },
+  sharedPostCard: { width: 240, borderRadius: 16, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', padding: 12, marginBottom: 6 },
+  sharedPostCardMe: { backgroundColor: '#fff7fb', borderColor: '#fbcfe8' },
+  sharedPostHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  sharedPostLabel: { fontSize: 11, fontWeight: '900', color: '#ec4899', textTransform: 'uppercase' },
+  sharedPostLabelMe: { color: '#be185d' },
+  sharedPostAuthor: { fontSize: 13, fontWeight: '800', color: '#0f172a', marginBottom: 4 },
+  sharedPostText: { fontSize: 14, color: '#334155', lineHeight: 19 },
   inputBarWrapper: { backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#e5e7eb' },
   inputContainer: { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 },
   input: { flex: 1, maxHeight: 100, backgroundColor: '#f3f4f6', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, color: '#333', marginRight: 8, borderWidth: 1, borderColor: '#e1e5e9' },

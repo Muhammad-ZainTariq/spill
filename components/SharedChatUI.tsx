@@ -41,7 +41,19 @@ export function formatDayLabel(d: Date | null): string {
 
 export type ChatDataItem =
   | { _type: 'day'; id: string; day: Date | null }
-  | { _type: 'msg'; id: string; fromUid: string; text: string; createdAt: Date | null }
+  | {
+      _type: 'msg';
+      id: string;
+      fromUid: string;
+      text: string;
+      createdAt: Date | null;
+      messageType?: string;
+      sharedPost?: {
+        id?: string;
+        content?: string;
+        author_name?: string;
+      } | null;
+    }
   | { _skeleton: true; id: string };
 
 export interface SharedChatLayoutProps {
@@ -61,6 +73,7 @@ export interface SharedChatLayoutProps {
   onScrollToBottom?: () => void;
   /** Long-press someone else’s bubble to report that message */
   onReportMessage?: (msg: { id: string; fromUid: string; text: string }) => void;
+  onOpenSharedPost?: (postId: string) => void;
 }
 
 export function SharedChatLayout({
@@ -79,6 +92,7 @@ export function SharedChatLayout({
   inputEditable = true,
   onScrollToBottom,
   onReportMessage,
+  onOpenSharedPost,
 }: SharedChatLayoutProps) {
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<any>>(null);
@@ -174,15 +188,36 @@ export function SharedChatLayout({
             }
             if (item?._type !== 'msg') return null;
             const mine = item.fromUid === currentUserId;
+            const sharedPost = item.messageType === 'shared_post' ? item.sharedPost : null;
             const bubble = (
               <View style={[chatStyles.bubble, mine ? chatStyles.bubbleMine : chatStyles.bubbleTheirs]}>
-                <Text style={[chatStyles.bubbleText, mine ? chatStyles.bubbleTextMine : chatStyles.bubbleTextTheirs]}>
-                  {String(item.text || '')}
-                  <Text style={[chatStyles.timeInline, !mine && chatStyles.timeInlineTheirs]}>
-                    {'  '}
-                    {formatTime(item.createdAt)}
+                {sharedPost ? (
+                  <Pressable
+                    style={[chatStyles.sharedPostCard, mine && chatStyles.sharedPostCardMine]}
+                    onPress={() => {
+                      if (sharedPost.id) onOpenSharedPost?.(sharedPost.id);
+                    }}
+                  >
+                    <Text style={[chatStyles.sharedPostLabel, mine && chatStyles.sharedPostLabelMine]}>Shared post</Text>
+                    <Text style={chatStyles.sharedPostAuthor} numberOfLines={1}>
+                      {sharedPost.author_name || 'Anonymous'}
+                    </Text>
+                    <Text style={chatStyles.sharedPostText} numberOfLines={4}>
+                      {sharedPost.content || 'Post unavailable'}
+                    </Text>
+                    <Text style={[chatStyles.sharedPostTime, mine && chatStyles.sharedPostTimeMine]}>
+                      {formatTime(item.createdAt)}
+                    </Text>
+                  </Pressable>
+                ) : (
+                  <Text style={[chatStyles.bubbleText, mine ? chatStyles.bubbleTextMine : chatStyles.bubbleTextTheirs]}>
+                    {String(item.text || '')}
+                    <Text style={[chatStyles.timeInline, !mine && chatStyles.timeInlineTheirs]}>
+                      {'  '}
+                      {formatTime(item.createdAt)}
+                    </Text>
                   </Text>
-                </Text>
+                )}
               </View>
             );
             return (
@@ -218,7 +253,7 @@ export function SharedChatLayout({
             <HuzzPressable
               key={e}
               style={chatStyles.emojiBtn}
-              onPress={() => setText((t) => `${t || ''}${e}`)}
+              onPress={() => setText(`${text || ''}${e}`)}
               haptic="light"
             >
               <Text style={chatStyles.emoji}>{e}</Text>
@@ -293,6 +328,14 @@ export const chatStyles = StyleSheet.create<{
   bubbleText: TextStyle;
   bubbleTextMine: TextStyle;
   bubbleTextTheirs: TextStyle;
+  sharedPostCard: ViewStyle;
+  sharedPostCardMine: ViewStyle;
+  sharedPostLabel: TextStyle;
+  sharedPostLabelMine: TextStyle;
+  sharedPostAuthor: TextStyle;
+  sharedPostText: TextStyle;
+  sharedPostTime: TextStyle;
+  sharedPostTimeMine: TextStyle;
   timeInline: TextStyle;
   timeInlineTheirs: TextStyle;
   dayRow: ViewStyle;
@@ -329,6 +372,24 @@ export const chatStyles = StyleSheet.create<{
   bubbleText: { fontSize: 14, fontWeight: '400', lineHeight: 20 },
   bubbleTextMine: { color: '#FFFFFF' },
   bubbleTextTheirs: { color: tokens.colors.text },
+  sharedPostCard: {
+    width: 240,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+    padding: 12,
+  },
+  sharedPostCardMine: {
+    backgroundColor: '#fff7fb',
+    borderColor: '#fbcfe8',
+  },
+  sharedPostLabel: { fontSize: 11, fontWeight: '900', color: tokens.colors.pink, textTransform: 'uppercase', marginBottom: 8 },
+  sharedPostLabelMine: { color: '#be185d' },
+  sharedPostAuthor: { fontSize: 13, fontWeight: '800', color: tokens.colors.text, marginBottom: 4 },
+  sharedPostText: { fontSize: 14, fontWeight: '400', color: tokens.colors.textSecondary, lineHeight: 19 },
+  sharedPostTime: { marginTop: 8, fontSize: 10, fontWeight: '500', color: tokens.colors.textMuted },
+  sharedPostTimeMine: { color: '#be185d' },
   timeInline: { fontSize: 9, fontWeight: '400', opacity: 0.7, letterSpacing: 0.5 },
   timeInlineTheirs: { color: tokens.colors.textMuted, fontSize: 9, fontWeight: '400' },
   dayRow: { alignItems: 'center', marginBottom: 10 },

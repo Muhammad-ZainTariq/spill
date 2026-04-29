@@ -6,6 +6,17 @@ import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withT
 import { auth } from '@/lib/firebase';
 import { getCurrentUserRole } from './functions';
 
+/** Wait until Firebase Auth has hydrated the session (avoids routing as logged-out after OTP login). */
+async function waitForAuthUser(maxMs = 5000): Promise<boolean> {
+  if (auth.currentUser) return true;
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    await new Promise((r) => setTimeout(r, 120));
+    if (auth.currentUser) return true;
+  }
+  return !!auth.currentUser;
+}
+
 export default function Success() {
   const router = useRouter();
   const opacity = useSharedValue(0);
@@ -18,20 +29,36 @@ export default function Success() {
       withTiming(1.0, { duration: 400, easing: Easing.inOut(Easing.cubic) })
     );
 
+    let cancelled = false;
+
     const timeout = setTimeout(async () => {
-      const role = await getCurrentUserRole();
-      if (role.is_admin) {
-        router.replace('/admin');
-      } else if (role.role === 'therapist') {
-        const uid = auth.currentUser?.uid;
-        if (role.is_therapist_verified && uid) router.replace(`/therapist/${uid}` as any);
-        else router.replace('/therapist/verification' as any);
-      } else {
+      const ok = await waitForAuthUser(12000);
+      if (cancelled) return;
+      if (!ok || !auth.currentUser) {
+        router.replace('/login');
+        return;
+      }
+      try {
+        const role = await getCurrentUserRole();
+        if (cancelled) return;
+        if (role.is_admin) {
+          router.replace('/admin');
+        } else if (role.role === 'therapist') {
+          const uid = auth.currentUser.uid;
+          if (role.is_therapist_verified && uid) router.replace(`/therapist/${uid}` as any);
+          else router.replace('/therapist/verification' as any);
+        } else {
+          router.replace('/(tabs)');
+        }
+      } catch {
         router.replace('/(tabs)');
       }
     }, 1800);
 
-    return () => clearTimeout(timeout);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
   }, [opacity, scale, router]);
 
   const animatedStyle = useAnimatedStyle(() => ({

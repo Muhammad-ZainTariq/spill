@@ -11,8 +11,9 @@ import { BookCoverImage } from '@/components/LearningResourceWidgets';
 import { tokens } from '@/app/ui/tokens';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useFocusEffect } from '@react-navigation/native';
 import { Stack, useRouter } from 'expo-router';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -84,28 +85,35 @@ const DEFAULT_EMPTY_HINTS: Record<ResourceSection, string> = {
 export type ResourcesLibraryScreenProps = {
   subtitle: string;
   fetchResources: () => Promise<TherapistResource[]>;
+  /** When set (e.g. from route params after save), selects this Videos/Books/Articles tab. */
+  initialSection?: ResourceSection;
   /** Shown before the refresh icon (e.g. Add resource). */
   headerTrailing?: ReactNode;
   /** Per-section empty message when not filtering by topic. */
   emptySectionHints?: Partial<Record<ResourceSection, string>>;
-  /** Show an Edit row on items owned by this uid. */
+  /** Show an Edit row on items owned by this uid (unless manageAllResources). */
   manageUid?: string | null;
+  /** Therapist curators: show Edit on every item (same library scope as admin). */
+  manageAllResources?: boolean;
   onEditOwnResource?: (item: TherapistResource) => void;
 };
 
 export function ResourcesLibraryScreen({
   subtitle,
   fetchResources,
+  initialSection,
   headerTrailing,
   emptySectionHints,
   manageUid,
+  manageAllResources,
   onEditOwnResource,
 }: ResourcesLibraryScreenProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [resources, setResources] = useState<TherapistResource[]>([]);
   const [loading, setLoading] = useState(true);
-  const [section, setSection] = useState<ResourceSection>('video');
+  const [section, setSection] = useState<ResourceSection>(initialSection ?? 'video');
+  const firstFocusRef = useRef(true);
   const [filter, setFilter] = useState<string | null>(null);
   const [topicPickerOpen, setTopicPickerOpen] = useState(false);
   const [playingVideo, setPlayingVideo] = useState<{ youtubeId: string; title: string } | null>(null);
@@ -118,22 +126,35 @@ export function ResourcesLibraryScreen({
     []
   );
 
-  const load = async () => {
-    setLoading(true);
-    try {
-      const list = await fetchResources();
-      setResources(list);
-    } catch (e) {
-      console.error(e);
-      setResources([]);
-    } finally {
-      setLoading(false);
+  useLayoutEffect(() => {
+    if (initialSection === 'video' || initialSection === 'book' || initialSection === 'article') {
+      setSection(initialSection);
     }
-  };
+  }, [initialSection]);
 
-  useEffect(() => {
-    load();
-  }, []);
+  const load = useCallback(
+    async (silentRefresh = false) => {
+      if (!silentRefresh) setLoading(true);
+      try {
+        const list = await fetchResources();
+        setResources(list);
+      } catch (e) {
+        console.error(e);
+        setResources([]);
+      } finally {
+        if (!silentRefresh) setLoading(false);
+      }
+    },
+    [fetchResources]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      const silentRefresh = !firstFocusRef.current;
+      firstFocusRef.current = false;
+      void load(silentRefresh);
+    }, [load])
+  );
 
   const filtered = resources.filter(
     (r) =>
@@ -163,7 +184,9 @@ export function ResourcesLibraryScreen({
     emptySectionHints?.[s] ?? DEFAULT_EMPTY_HINTS[s];
 
   const canManage = (item: TherapistResource) =>
-    !!manageUid && !!item.created_by_uid && item.created_by_uid === manageUid && !!onEditOwnResource;
+    !!onEditOwnResource &&
+    (manageAllResources === true ||
+      (!!manageUid && !!item.created_by_uid && item.created_by_uid === manageUid));
 
   return (
     <View style={[styles.safe, { paddingTop: insets.top }]}>
@@ -177,7 +200,7 @@ export function ResourcesLibraryScreen({
           <Text style={styles.subtitle}>{subtitle}</Text>
         </View>
         {headerTrailing ? <View style={styles.headerTrailing}>{headerTrailing}</View> : null}
-        <Pressable onPress={load} style={styles.headerBtn} hitSlop={10}>
+        <Pressable onPress={() => void load(false)} style={styles.headerBtn} hitSlop={10}>
           <Feather name="refresh-cw" size={18} color={tokens.colors.text} />
         </Pressable>
       </View>
@@ -351,7 +374,9 @@ export function ResourcesLibraryScreen({
                     style={styles.editOwnRow}
                   >
                     <Feather name="edit-2" size={16} color={tokens.colors.pink} />
-                    <Text style={styles.editOwnText}>Edit your resource</Text>
+                    <Text style={styles.editOwnText}>
+                      {manageAllResources ? 'Edit resource' : 'Edit your resource'}
+                    </Text>
                   </Pressable>
                 ) : null}
               </View>

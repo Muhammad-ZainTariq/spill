@@ -1,11 +1,13 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Modal,
@@ -18,8 +20,48 @@ import {
   View,
 } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { tokens } from '@/app/ui/tokens';
 import { auth, functions } from '../lib/firebase';
+import {
+  clearLoginOtpPending,
+  LOGIN_OTP_PENDING_KEY,
+  LOGIN_OTP_PENDING_MAX_MS,
+  persistLoginOtpPending,
+} from '../lib/loginOtpPending';
+
+/**
+ * Detects suspended accounts and accounts allowed to sign in without verified email
+ * (admins/staff/therapists often promoted via claims or therapist_profiles).
+ * Login OTP is required for everyone — this does not skip OTP.
+ */
+async function resolvePrivilegedLoginBypass(user: import('firebase/auth').User): Promise<{
+  privileged: boolean;
+  accountDisabled: boolean;
+}> {
+  const { doc, getDoc } = await import('firebase/firestore');
+  const { db } = await import('@/lib/firebase');
+  const uid = user.uid;
+  const [userSnap, therapistSnap, tokenResult] = await Promise.all([
+    getDoc(doc(db, 'users', uid)),
+    getDoc(doc(db, 'therapist_profiles', uid)),
+    user.getIdTokenResult(true),
+  ]);
+  const data = userSnap.data();
+  const accountDisabled = data?.account_disabled === true;
+  const claims = tokenResult.claims || {};
+  const privileged =
+    data?.is_admin === true ||
+    data?.is_staff === true ||
+    data?.role === 'therapist' ||
+    data?.is_admin === 'true' ||
+    data?.is_staff === 'true' ||
+    claims.admin === true ||
+    claims.is_admin === true ||
+    claims.is_staff === true ||
+    therapistSnap.exists();
+  return { privileged: !!privileged, accountDisabled };
+}
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -37,8 +79,39 @@ export default function Login() {
   const [therapistSubmitting, setTherapistSubmitting] = useState(false);
   const [therapistCode, setTherapistCode] = useState('');
   const [verifyingCode, setVerifyingCode] = useState(false);
+  const [loginStep, setLoginStep] = useState<'password' | 'otp'>('password');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const logoScale = useSharedValue(1);
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(LOGIN_OTP_PENDING_KEY);
+        if (!raw || cancelled) return;
+        const parsed = JSON.parse(raw) as { email?: string; at?: number };
+        const emailStored = typeof parsed.email === 'string' ? parsed.email.trim() : '';
+        const at = typeof parsed.at === 'number' ? parsed.at : 0;
+        if (!emailStored || !at || Date.now() - at > LOGIN_OTP_PENDING_MAX_MS) {
+          await clearLoginOtpPending();
+          return;
+        }
+        setEmail(emailStored);
+        setLoginStep('otp');
+      } catch {
+        await clearLoginOtpPending();
+      } finally {
+        if (!cancelled) setHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const SPECIALIZATION_OPTIONS = [
     'CBT',
@@ -56,6 +129,50 @@ export default function Login() {
     'Other',
   ];
 
+  const finalizeLoginAfterUser = useCallback(
+    async (user: import('firebase/auth').User, opts?: { afterEmailOtp?: boolean }) => {
+      const { signOut } = await import('firebase/auth');
+      try {
+        await user.reload();
+      } catch {
+        /* ignore */
+      }
+      const sessionUser = auth.currentUser ?? user;
+
+      let privileged = false;
+      let accountDisabled = false;
+      try {
+        const resolved = await resolvePrivilegedLoginBypass(sessionUser);
+        privileged = resolved.privileged;
+        accountDisabled = resolved.accountDisabled;
+      } catch (e) {
+        console.warn('[login] profile check failed', e);
+      }
+
+      if (accountDisabled) {
+        await signOut(auth);
+        Alert.alert('Account suspended', 'Your account has been suspended by admin.');
+        return;
+      }
+
+      const emailVerifiedOk =
+        opts?.afterEmailOtp === true ||
+        !!sessionUser.emailVerified ||
+        privileged;
+      if (!emailVerifiedOk) {
+        await signOut(auth);
+        Alert.alert(
+          'Verify your email',
+          'We sent you a verification link when you signed up. Open that link in your email, then try logging in again.'
+        );
+        return;
+      }
+
+      router.replace('/success');
+    },
+    [router]
+  );
+
   const handleLogin = useCallback(
     async () => {
       if (loading || !email || !password) {
@@ -66,27 +183,55 @@ export default function Login() {
       setLoading(true);
       try {
         const { user } = await signInWithEmailAndPassword(auth, email.trim(), password);
-        if (!user.emailVerified) {
-          const { doc, getDoc } = await import('firebase/firestore');
-          const { db } = await import('@/lib/firebase');
-          const userSnap = await getDoc(doc(db, 'users', user.uid));
-          const data = userSnap.data();
-          const exempt = data?.is_admin === true || data?.is_staff === true || data?.role === 'therapist';
-          if (!exempt) {
-            const { signOut } = await import('firebase/auth');
-            await signOut(auth);
-            Alert.alert('Verify your email', 'We sent you a verification link when you signed up. Open that link in your email, then try logging in again.');
-            return;
-          }
+        const { privileged, accountDisabled } = await resolvePrivilegedLoginBypass(user);
+        if (accountDisabled) {
+          const { signOut } = await import('firebase/auth');
+          await signOut(auth);
+          Alert.alert('Account suspended', 'Your account has been suspended by admin.');
+          return;
         }
-        router.replace('/success');
+        if (!user.emailVerified && !privileged) {
+          const { signOut } = await import('firebase/auth');
+          await signOut(auth);
+          Alert.alert(
+            'Verify your email',
+            'We sent you a verification link when you signed up. Open that link in your email, then try logging in again.'
+          );
+          return;
+        }
+
+        const sendFn = httpsCallable(functions, 'sendLoginOtp');
+        try {
+          await sendFn({});
+        } catch (sendErr: any) {
+          const { signOut } = await import('firebase/auth');
+          await signOut(auth);
+          await clearLoginOtpPending();
+          const sendMsg =
+            sendErr?.code === 'functions/resource-exhausted'
+              ? sendErr?.message || 'Wait before requesting another code.'
+              : sendErr?.message || 'Could not send login code. Check email configuration or try again.';
+          Alert.alert('Login code', sendMsg);
+          return;
+        }
+
+        const emailTrimmed = email.trim();
+        await persistLoginOtpPending(emailTrimmed);
+        setOtpCode('');
+        setLoginStep('otp');
+
+        const { signOut } = await import('firebase/auth');
+        await signOut(auth);
       } catch (err: any) {
         const code = err?.code;
-        const msg = code === 'auth/user-not-found' || code === 'auth/invalid-credential'
-          ? 'Invalid email or password.'
-          : code === 'auth/invalid-email'
-            ? 'Invalid email address.'
-            : err?.message || 'Failed to log in';
+        const msg =
+          code === 'auth/user-not-found' || code === 'auth/invalid-credential'
+            ? 'Invalid email or password.'
+            : code === 'auth/user-disabled'
+              ? 'Account suspended by admin.'
+              : code === 'auth/invalid-email'
+                ? 'Invalid email address.'
+                : err?.message || 'Failed to log in';
         router.push({ pathname: '/error', params: { message: msg } });
       } finally {
         setLoading(false);
@@ -94,6 +239,73 @@ export default function Login() {
     },
     [email, password, loading, router]
   );
+
+  const handleVerifyLoginOtp = useCallback(async () => {
+    if (otpLoading) return;
+    const trimmed = otpCode.trim().replace(/\s/g, '');
+    if (!/^\d{6}$/.test(trimmed)) {
+      Alert.alert('Invalid code', 'Enter the 6-digit code from your email.');
+      return;
+    }
+    if (!password) {
+      Alert.alert('Session expired', 'Go back and enter your password again, then request a new code.');
+      return;
+    }
+    setOtpLoading(true);
+    try {
+      const verifyFn = httpsCallable<
+        { email: string; code: string },
+        { ok?: boolean; authEmail?: string }
+      >(functions, 'verifyLoginOtp');
+      const res = await verifyFn({ email: email.trim(), code: trimmed });
+      const payload = res.data;
+      if (!payload || payload.ok !== true) {
+        Alert.alert('Login code', 'Could not verify. Try again.');
+        return;
+      }
+      const authEmail = (typeof payload.authEmail === 'string' && payload.authEmail.trim())
+        ? payload.authEmail.trim()
+        : email.trim();
+
+      let user;
+      try {
+        const cred = await signInWithEmailAndPassword(auth, authEmail, password);
+        user = cred.user;
+      } catch (authErr: any) {
+        const ac = authErr?.code ?? '';
+        const am =
+          ac === 'auth/invalid-credential' || ac === 'auth/wrong-password' || ac === 'auth/invalid-email'
+            ? 'Sign-in failed. Go back, check your password, and request a new code if needed.'
+            : authErr?.message || 'Could not sign in. Tap Verify again to retry.';
+        Alert.alert('Sign in', am);
+        return;
+      }
+
+      try {
+        const consumeFn = httpsCallable(functions, 'consumeLoginOtp');
+        await consumeFn({});
+      } catch {
+        // Non-fatal: challenge will be overwritten on next OTP send.
+      }
+
+      setPassword('');
+      setLoginStep('password');
+      setOtpCode('');
+      await clearLoginOtpPending();
+      await finalizeLoginAfterUser(user, { afterEmailOtp: true });
+    } catch (err: any) {
+      const code = err?.code ?? '';
+      const msg =
+        code === 'functions/not-found'
+          ? 'Deploy verifyLoginOtp (Cloud Functions) and try again.'
+          : code === 'functions/internal'
+            ? 'Server error while verifying. Redeploy functions or try again in a moment.'
+            : err?.message || 'Invalid or expired code.';
+      Alert.alert('Login code', msg);
+    } finally {
+      setOtpLoading(false);
+    }
+  }, [otpLoading, otpCode, email, password, finalizeLoginAfterUser]);
 
   const handleSubmitTherapistRequest = useCallback(async () => {
     if (therapistSubmitting) return;
@@ -185,6 +397,19 @@ export default function Login() {
     }
   }, [therapistCode, verifyingCode, router]);
 
+  const logoAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: logoScale.value }],
+  }));
+
+  if (!hydrated) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#ec4899', justifyContent: 'center', alignItems: 'center' }}>
+        <StatusBar barStyle="light-content" />
+        <ActivityIndicator size="large" color="#ffffff" />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#ec4899' }}>
       <StatusBar barStyle="light-content" />
@@ -192,9 +417,20 @@ export default function Login() {
         <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 8 : 0}
         >
-          <View style={{ flex: 1, paddingHorizontal: 12, paddingTop: 16, paddingBottom: 16, justifyContent: 'space-between' }}>
-            <View style={{ alignItems: 'center' }}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
+            contentContainerStyle={{
+              flexGrow: 1,
+              paddingHorizontal: 12,
+              paddingTop: 16,
+              paddingBottom: Math.max(insets.bottom, 24),
+            }}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
               <Pressable
                 onPressIn={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -207,7 +443,7 @@ export default function Login() {
                 }}
                 hitSlop={10}
               >
-                <Animated.View style={useAnimatedStyle(() => ({ transform: [{ scale: logoScale.value }] }))}>
+                <Animated.View style={logoAnimatedStyle}>
                   <Image
                     source={showStopTouching ? require('@/assets/images/stop-touching.png') : require('@/assets/images/logo12.png')}
                     style={{ width: 120, height: 120, borderRadius: 24, marginBottom: 12 }}
@@ -225,81 +461,162 @@ export default function Login() {
             </View>
 
             <View style={{ backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 16, padding: 18, alignSelf: 'stretch' }}>
-              <View style={{ marginBottom: 16 }}>
-                <Text style={{ color: '#374151', fontSize: 15, fontWeight: '800', marginBottom: 8, marginLeft: 4 }}>Email Address</Text>
-                <View style={{ backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 2, borderColor: '#E5E7EB', overflow: 'hidden' }}>
-                  <TextInput
-                    style={{ color: '#111827', paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontWeight: '600' }}
-                    placeholder="your.email@example.com"
-                    placeholderTextColor="#9CA3AF"
-                    value={email}
-                    onChangeText={setEmail}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    autoComplete="email"
-                    editable={!loading}
-                  />
-                </View>
-              </View>
-              <View style={{ marginBottom: 16 }}>
-                <Text style={{ color: '#374151', fontSize: 15, fontWeight: '800', marginBottom: 8, marginLeft: 4 }}>Password</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F3F4F6', borderRadius: 12, borderWidth: 2, borderColor: '#E5E7EB', overflow: 'hidden' }}>
-                  <TextInput
-                    style={{ flex: 1, color: '#111827', paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontWeight: '600' }}
-                    placeholder="Enter password"
-                    placeholderTextColor="#9CA3AF"
-                    value={password}
-                    onChangeText={setPassword}
-                    secureTextEntry={!showPassword}
-                    editable={!loading}
-                  />
-                  <Pressable onPress={() => { setShowPassword((v) => !v); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }} style={{ paddingHorizontal: 12, paddingVertical: 12 }}>
-                    <Feather name={showPassword ? 'eye-off' : 'eye'} size={22} color="#6b7280" />
+              {loginStep === 'otp' ? (
+                <>
+                  <Text style={{ color: '#374151', fontSize: 15, fontWeight: '800', marginBottom: 8, textAlign: 'center' }}>
+                    Check your email
+                  </Text>
+                  <Text style={{ color: '#6b7280', fontSize: 14, lineHeight: 20, marginBottom: 16, textAlign: 'center' }}>
+                    We sent a 6-digit code to{' '}
+                    <Text style={{ fontWeight: '700', color: '#111827' }}>{email.trim() || 'your inbox'}</Text>. Enter it below
+                    (expires in 10 minutes).
+                  </Text>
+                  <View style={{ marginBottom: 16 }}>
+                    <Text style={{ color: tokens.colors.textSecondary, fontSize: 15, fontWeight: '700', marginBottom: 8, marginLeft: 4 }}>Login code</Text>
+                    <View style={{ backgroundColor: tokens.colors.surfaceOverlay, borderRadius: 12, borderWidth: 1, borderColor: tokens.colors.border, overflow: 'hidden' }}>
+                      <TextInput
+                        style={{
+                          color: tokens.colors.text,
+                          paddingHorizontal: 14,
+                          paddingVertical: 12,
+                          fontSize: 18,
+                          fontWeight: '500',
+                          letterSpacing: 3,
+                        }}
+                        placeholder="000000"
+                        placeholderTextColor={tokens.colors.textMuted}
+                        value={otpCode}
+                        onChangeText={(t) => setOtpCode(t.replace(/[^\d]/g, '').slice(0, 6))}
+                        keyboardType="number-pad"
+                        maxLength={6}
+                        editable={!otpLoading}
+                        autoFocus
+                      />
+                    </View>
+                  </View>
+                  <Pressable
+                    onPress={handleVerifyLoginOtp}
+                    disabled={otpLoading}
+                    style={{
+                      backgroundColor: otpLoading ? '#c084fc' : '#ec4899',
+                      paddingVertical: 12,
+                      borderRadius: 12,
+                      alignItems: 'center',
+                      marginBottom: 8,
+                      opacity: otpLoading ? 0.6 : 1,
+                    }}
+                    onPressIn={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)}
+                  >
+                    <Text style={{ color: 'white', fontWeight: '800', fontSize: 17 }}>
+                      {otpLoading ? 'Verifying...' : 'Verify & continue'}
+                    </Text>
                   </Pressable>
-                </View>
-              </View>
-              <Pressable
-                onPress={handleLogin}
-                disabled={loading}
-                style={{
-                  backgroundColor: loading ? '#c084fc' : '#ec4899',
-                  paddingVertical: 12,
-                  borderRadius: 12,
-                  alignItems: 'center',
-                  marginBottom: 8,
-                  opacity: loading ? 0.6 : 1,
-                }}
-                onPressIn={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)}
-              >
-                <Text style={{ color: 'white', fontWeight: '800', fontSize: 17 }}>
-                  {loading ? 'Logging In...' : 'Log In'}
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowTherapistCode(true);
-                }}
-                style={{ paddingVertical: 8, alignItems: 'center', marginTop: 4 }}
-              >
-                <Text style={{ color: '#ec4899', fontSize: 14, fontWeight: '600', textDecorationLine: 'underline' }}>
-                  I have a therapist code
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowTherapistApply(true);
-                }}
-                style={{ paddingVertical: 6, alignItems: 'center', marginTop: 2 }}
-              >
-                <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: '600' }}>
-                  Apply as a therapist
-                </Text>
-              </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      void clearLoginOtpPending();
+                      setLoginStep('password');
+                      setOtpCode('');
+                      setPassword('');
+                    }}
+                    disabled={otpLoading}
+                    style={{ paddingVertical: 8, alignItems: 'center' }}
+                  >
+                    <Text style={{ color: '#6b7280', fontSize: 14, fontWeight: '600' }}>← Back to email & password</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <View style={{ marginBottom: 16 }}>
+                    <Text style={{ color: tokens.colors.textSecondary, fontSize: 15, fontWeight: '700', marginBottom: 8, marginLeft: 4 }}>Email Address</Text>
+                    <View style={{ backgroundColor: tokens.colors.surfaceOverlay, borderRadius: 12, borderWidth: 1, borderColor: tokens.colors.border, overflow: 'hidden' }}>
+                      <TextInput
+                        style={{
+                          color: tokens.colors.text,
+                          paddingHorizontal: 14,
+                          paddingVertical: 12,
+                          fontSize: 16,
+                          fontWeight: '400',
+                        }}
+                        placeholder="you@example.com"
+                        placeholderTextColor={tokens.colors.textMuted}
+                        value={email}
+                        onChangeText={setEmail}
+                        keyboardType="email-address"
+                        autoCapitalize="none"
+                        autoComplete="email"
+                        editable={!loading}
+                      />
+                    </View>
+                  </View>
+                  <View style={{ marginBottom: 16 }}>
+                    <Text style={{ color: tokens.colors.textSecondary, fontSize: 15, fontWeight: '700', marginBottom: 8, marginLeft: 4 }}>Password</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: tokens.colors.surfaceOverlay, borderRadius: 12, borderWidth: 1, borderColor: tokens.colors.border, overflow: 'hidden' }}>
+                      <TextInput
+                        style={{
+                          flex: 1,
+                          color: tokens.colors.text,
+                          paddingHorizontal: 14,
+                          paddingVertical: 12,
+                          fontSize: 16,
+                          fontWeight: '400',
+                        }}
+                        placeholder="Password"
+                        placeholderTextColor={tokens.colors.textMuted}
+                        value={password}
+                        onChangeText={setPassword}
+                        secureTextEntry={!showPassword}
+                        editable={!loading}
+                      />
+                      <Pressable onPress={() => { setShowPassword((v) => !v); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }} style={{ paddingHorizontal: 12, paddingVertical: 12 }}>
+                        <Feather name={showPassword ? 'eye-off' : 'eye'} size={22} color={tokens.colors.textMuted} />
+                      </Pressable>
+                    </View>
+                  </View>
+                  <Pressable
+                    onPress={handleLogin}
+                    disabled={loading}
+                    style={{
+                      backgroundColor: loading ? '#c084fc' : '#ec4899',
+                      paddingVertical: 12,
+                      borderRadius: 12,
+                      alignItems: 'center',
+                      marginBottom: 8,
+                      opacity: loading ? 0.6 : 1,
+                    }}
+                    onPressIn={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)}
+                  >
+                    <Text style={{ color: 'white', fontWeight: '800', fontSize: 17 }}>
+                      {loading ? 'Logging In...' : 'Log In'}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setShowTherapistCode(true);
+                    }}
+                    style={{ paddingVertical: 8, alignItems: 'center', marginTop: 4 }}
+                  >
+                    <Text style={{ color: '#ec4899', fontSize: 14, fontWeight: '600', textDecorationLine: 'underline' }}>
+                      I have a therapist code
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setShowTherapistApply(true);
+                    }}
+                    style={{ paddingVertical: 6, alignItems: 'center', marginTop: 2 }}
+                  >
+                    <Text style={{ color: '#6b7280', fontSize: 13, fontWeight: '600' }}>
+                      Apply as a therapist
+                    </Text>
+                  </Pressable>
+                </>
+              )}
             </View>
 
-            <View>
+            <View style={{ marginTop: 8 }}>
               <Text style={{ color: 'rgba(255,255,255,0.7)', textAlign: 'center', fontSize: 12, paddingHorizontal: 16, lineHeight: 18 }}>
                 By logging in, you agree to our Terms of Service & Privacy Policy
               </Text>
@@ -308,13 +625,19 @@ export default function Login() {
                   Forgot password?
                 </Text>
               </Pressable>
-              <Pressable onPress={() => router.replace('/signup')} style={{ marginTop: 16, paddingVertical: 8 }}>
+              <Pressable
+                onPress={() => {
+                  void clearLoginOtpPending();
+                  router.replace('/signup');
+                }}
+                style={{ marginTop: 16, paddingVertical: 8 }}
+              >
                 <Text style={{ color: 'rgba(255,255,255,0.9)', textAlign: 'center', fontSize: 15, textDecorationLine: 'underline' }}>
                   Don't have an account? Sign up
                 </Text>
               </Pressable>
             </View>
-          </View>
+          </ScrollView>
         </KeyboardAvoidingView>
 
         {/* Apply as therapist modal (specialization “dropdown” is inline here — nested Modal breaks on web) */}

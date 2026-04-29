@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Dimensions, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, } from 'react-native';
 import Reanimated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { addComment, cancelPremium, checkPremiumStatus, deletePost, downvotePost, fetchComments, fetchPosts, fetchUserProfile, formatTimeAgo, getAIOpinion, handleMoreOptions, handleScroll, Post, removeVote, subscribeToPosts, upvotePost } from '../functions';
+import { addComment, addReply, cancelPremium, checkPremiumStatus, deletePost, downvotePost, fetchComments, fetchPosts, fetchUserProfile, formatTimeAgo, getActiveMatch, getAIOpinion, getConversations, getPartnerProfile, handleMoreOptions, handleScroll, Post, removeVote, sendMatchMessage, sendMessage, subscribeToPosts, upvotePost } from '../functions';
 
 type SheetComment = {
   id: string;
@@ -261,9 +261,14 @@ export default function HomeScreen() {
   const [sheetComments, setSheetComments] = useState<SheetComment[]>([]);
   const [sheetCommentsLoading, setSheetCommentsLoading] = useState(false);
   const [newCommentText, setNewCommentText] = useState('');
+  const [replyingToSheetComment, setReplyingToSheetComment] = useState<SheetComment | null>(null);
   const [submittingComment, setSubmittingComment] = useState(false);
   const [showLivePeek, setShowLivePeek] = useState(false);
   const [dismissedLiveRoomId, setDismissedLiveRoomId] = useState<string | null>(null);
+  const [sharePost, setSharePost] = useState<Post | null>(null);
+  const [shareConversations, setShareConversations] = useState<any[]>([]);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareSendingId, setShareSendingId] = useState<string | null>(null);
   const menuTranslateX = useSharedValue(-320);
   
   // Animated style for side menu - must be called unconditionally
@@ -335,6 +340,7 @@ export default function HomeScreen() {
     if (!commentSheetPostId) {
       setSheetComments([]);
       setNewCommentText('');
+      setReplyingToSheetComment(null);
       return;
     }
     let cancelled = false;
@@ -377,7 +383,10 @@ export default function HomeScreen() {
     if (!commentSheetPostId || !newCommentText.trim() || submittingComment) return;
     setSubmittingComment(true);
     try {
-      const comment = await addComment(commentSheetPostId, newCommentText.trim());
+      const parentId = replyingToSheetComment?.id;
+      const comment = parentId
+        ? await addReply(commentSheetPostId, parentId, newCommentText.trim())
+        : await addComment(commentSheetPostId, newCommentText.trim());
       const newC: SheetComment = {
         id: comment.id,
         content: comment.content,
@@ -386,8 +395,12 @@ export default function HomeScreen() {
         profiles: comment.profiles ?? null,
         replies: [],
       };
-      setSheetComments(prev => [newC, ...prev]);
+      setSheetComments(prev => parentId
+        ? prev.map(c => c.id === parentId ? { ...c, replies: [...(c.replies || []), newC] } : c)
+        : [...prev, newC]
+      );
       setNewCommentText('');
+      setReplyingToSheetComment(null);
       setPosts(prev => prev.map(p => p.id === commentSheetPostId ? {
         ...p,
         post_stats: {
@@ -402,6 +415,119 @@ export default function HomeScreen() {
       Alert.alert('Error', 'Could not add comment.');
     } finally {
       setSubmittingComment(false);
+    }
+  };
+
+  const renderSheetComment = (comment: SheetComment, isReply = false) => {
+    const displayName = comment.profiles?.display_name || comment.profiles?.anonymous_username || 'Anonymous';
+    return (
+      <View key={comment.id} style={[styles.sheetCommentRow, isReply && styles.sheetReplyRow]}>
+        {!isReply ? (
+          <View style={styles.sheetThreadLine} />
+        ) : null}
+        <View style={[styles.sheetCommentAvatar, isReply && styles.sheetReplyAvatar]}>
+          <Text style={[styles.sheetCommentAvatarText, isReply && styles.sheetReplyAvatarText]}>
+            {displayName.charAt(0).toUpperCase()}
+          </Text>
+        </View>
+        <View style={styles.sheetCommentBody}>
+          <View style={[styles.sheetCommentBubble, isReply && styles.sheetReplyBubble]}>
+            <Text style={styles.sheetCommentAuthor}>{displayName}</Text>
+            <Text style={styles.sheetCommentText}>{comment.content}</Text>
+          </View>
+          <View style={styles.sheetCommentMetaRow}>
+            <Text style={styles.sheetCommentTime}>{formatTimeAgo(comment.created_at)}</Text>
+            {!isReply ? (
+              <Pressable
+                onPress={() => {
+                  setReplyingToSheetComment(comment);
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                }}
+                hitSlop={8}
+              >
+                <Text style={styles.sheetReplyAction}>Reply</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          {!isReply && comment.replies?.length ? (
+            <View style={styles.sheetReplies}>
+              {comment.replies.map(reply => renderSheetComment(reply, true))}
+            </View>
+          ) : null}
+        </View>
+      </View>
+    );
+  };
+
+  const openShareSheet = async (post: Post) => {
+    setSharePost(post);
+    setShareLoading(true);
+    try {
+      const [convs, activeMatch] = await Promise.all([
+        getConversations(),
+        getActiveMatch(),
+      ]);
+      const targets = Array.isArray(convs)
+        ? convs.map((c: any) => ({ ...c, shareType: 'dm' }))
+        : [];
+      if (activeMatch?.id && activeMatch.partnerId) {
+        const partner = await getPartnerProfile(activeMatch.partnerId);
+        targets.unshift({
+          id: activeMatch.id,
+          shareType: 'match',
+          otherUser: {
+            id: activeMatch.partnerId,
+            ...(partner || {}),
+          },
+          updated_at: '',
+        });
+      }
+      setShareConversations(targets);
+    } catch (error) {
+      console.error('Error loading share conversations:', error);
+      setShareConversations([]);
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const closeShareSheet = () => {
+    if (shareSendingId) return;
+    setSharePost(null);
+    setShareConversations([]);
+  };
+
+  const sharePostToConversation = async (conversation: any) => {
+    if (!sharePost || !conversation?.id || shareSendingId) return;
+    setShareSendingId(conversation.id);
+    try {
+      const authorName = sharePost.profiles?.display_name || sharePost.profiles?.anonymous_username || 'Anonymous';
+      const sharedPostPayload = {
+        message_type: 'shared_post',
+        shared_post: {
+          id: sharePost.id,
+          content: String(sharePost.content || '').slice(0, 500),
+          author_name: authorName,
+          media_url: sharePost.media_url || null,
+          youtube_url: sharePost.youtube_url || null,
+          youtube_id: sharePost.youtube_id || null,
+          created_at: sharePost.created_at || null,
+        },
+      };
+      if (conversation.shareType === 'match') {
+        await sendMatchMessage(conversation.id, 'Shared a post', sharedPostPayload);
+      } else {
+        await sendMessage(conversation.id, 'Shared a post', sharedPostPayload);
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setSharePost(null);
+      setShareConversations([]);
+      Alert.alert('Sent', `Post shared with ${conversation.otherUser?.display_name || conversation.otherUser?.anonymous_username || 'them'}.`);
+    } catch (error: any) {
+      console.error('Error sharing post:', error);
+      Alert.alert('Could not share', error?.message || 'Try again.');
+    } finally {
+      setShareSendingId(null);
     }
   };
 
@@ -659,7 +785,7 @@ export default function HomeScreen() {
                   <Text style={styles.sideMenuItemText}>Settings</Text>
                   <Feather name="chevron-right" size={20} color="#9ca3af" />
                 </Pressable>
-                {userProfile?.is_admin && (
+                {(userProfile?.is_admin || userProfile?.is_staff) && (
                   <Pressable
                     style={styles.sideMenuItem}
                     onPress={() => {
@@ -826,7 +952,7 @@ export default function HomeScreen() {
                       if (aiResponses[post.id]) return;
                       try {
                         setAiLoadingId(post.id);
-                        const response = await getAIOpinion(post.content);
+                        const response = await getAIOpinion(post.content, { flagged: !!isFlagged });
                         setAiResponses(prev => ({ ...prev, [post.id]: response }));
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                       } catch (error) {
@@ -935,7 +1061,7 @@ export default function HomeScreen() {
                   style={({ pressed }) => [styles.actionItem, pressed && styles.actionItemPressed]}
                   onPress={() => {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    router.push('/message' as any);
+                    openShareSheet(post);
                   }}
                 >
                   <Feather name="send" size={18} color="#94a3b8" strokeWidth={2} />
@@ -983,75 +1109,159 @@ export default function HomeScreen() {
         onRequestClose={() => setCommentSheetPostId(null)}
       >
         <Pressable style={styles.sheetOverlay} onPress={() => setCommentSheetPostId(null)}>
-          <Pressable style={[styles.sheet, { maxHeight: '85%', paddingBottom: insets.bottom + 16 }]} onPress={e => e.stopPropagation()}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.sheetAvoiding}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+          >
+            <Pressable style={[styles.sheet, { height: '85%', paddingBottom: insets.bottom + 12 }]} onPress={e => e.stopPropagation()}>
+              <View style={styles.sheetHandle} />
+              <View style={styles.sheetHeader}>
+                <Text style={styles.sheetTitle}>Comments</Text>
+                <Pressable onPress={() => setCommentSheetPostId(null)} hitSlop={12} style={styles.sheetClose}>
+                  <Feather name="x" size={24} color="#64748b" />
+                </Pressable>
+              </View>
+              {sheetCommentsLoading ? (
+                <View style={styles.sheetLoading}>
+                  <ActivityIndicator size="small" color="#ec4899" />
+                  <Text style={styles.sheetLoadingText}>Loading comments...</Text>
+                </View>
+              ) : (
+                <View style={styles.sheetKeyboard}>
+                  <ScrollView
+                    style={styles.sheetScroll}
+                    contentContainerStyle={styles.sheetScrollContent}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                  >
+                    {sheetComments.length === 0 && !sheetCommentsLoading && (
+                      <Text style={styles.sheetEmpty}>No comments yet. Be the first!</Text>
+                    )}
+                    {sheetComments.map((c) => renderSheetComment(c))}
+                  </ScrollView>
+                  {replyingToSheetComment ? (
+                    <View style={styles.sheetReplyingBar}>
+                      <Text style={styles.sheetReplyingText} numberOfLines={1}>
+                        Replying to {replyingToSheetComment.profiles?.display_name || replyingToSheetComment.profiles?.anonymous_username || 'Anonymous'}
+                      </Text>
+                      <Pressable
+                        onPress={() => {
+                          setReplyingToSheetComment(null);
+                          setNewCommentText('');
+                        }}
+                        hitSlop={10}
+                      >
+                        <Feather name="x" size={18} color="#64748b" />
+                      </Pressable>
+                    </View>
+                  ) : null}
+                  <View style={styles.sheetInputRow}>
+                    <TextInput
+                      style={styles.sheetInput}
+                      placeholder={replyingToSheetComment ? 'Write a reply...' : 'Add a comment...'}
+                      placeholderTextColor="#94a3b8"
+                      value={newCommentText}
+                      onChangeText={setNewCommentText}
+                      multiline
+                      maxLength={500}
+                      editable={!submittingComment}
+                      textAlignVertical="center"
+                    />
+                    <Pressable
+                      style={[styles.sheetSendBtn, (!newCommentText.trim() || submittingComment) && styles.sheetSendBtnDisabled]}
+                      onPress={handleAddCommentSheet}
+                      disabled={!newCommentText.trim() || submittingComment}
+                    >
+                      {submittingComment ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <Feather name="send" size={20} color="#fff" strokeWidth={2} />
+                      )}
+                    </Pressable>
+                  </View>
+                </View>
+              )}
+            </Pressable>
+          </KeyboardAvoidingView>
+        </Pressable>
+      </Modal>
+
+      {/* Share post to active DM */}
+      <Modal
+        visible={!!sharePost}
+        animationType="slide"
+        transparent
+        onRequestClose={closeShareSheet}
+      >
+        <Pressable style={styles.shareOverlay} onPress={closeShareSheet}>
+          <Pressable style={[styles.shareSheet, { paddingBottom: insets.bottom + 16 }]} onPress={e => e.stopPropagation()}>
             <View style={styles.sheetHandle} />
-            <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>Comments</Text>
-              <Pressable onPress={() => setCommentSheetPostId(null)} hitSlop={12} style={styles.sheetClose}>
+            <View style={styles.shareHeader}>
+              <View>
+                <Text style={styles.shareTitle}>Share post</Text>
+                <Text style={styles.shareSubtitle}>Send to an active conversation</Text>
+              </View>
+              <Pressable onPress={closeShareSheet} hitSlop={12}>
                 <Feather name="x" size={24} color="#64748b" />
               </Pressable>
             </View>
-            {sheetCommentsLoading ? (
-              <View style={styles.sheetLoading}>
+
+            {sharePost ? (
+              <View style={styles.sharePostPreview}>
+                <Text style={styles.sharePostLabel}>Post preview</Text>
+                <Text style={styles.sharePostAuthor}>
+                  {sharePost.profiles?.display_name || sharePost.profiles?.anonymous_username || 'Anonymous'}
+                </Text>
+                <Text style={styles.sharePostText} numberOfLines={3}>{sharePost.content}</Text>
+              </View>
+            ) : null}
+
+            {shareLoading ? (
+              <View style={styles.shareLoading}>
                 <ActivityIndicator size="small" color="#ec4899" />
-                <Text style={styles.sheetLoadingText}>Loading comments...</Text>
+                <Text style={styles.shareLoadingText}>Loading conversations...</Text>
+              </View>
+            ) : shareConversations.length === 0 ? (
+              <View style={styles.shareEmpty}>
+                <Feather name="message-circle" size={34} color="#cbd5e1" />
+                <Text style={styles.shareEmptyTitle}>No active conversations</Text>
+                <Text style={styles.shareEmptyText}>Start or accept a DM first, then you can share posts here.</Text>
               </View>
             ) : (
-              <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                style={styles.sheetKeyboard}
-                keyboardVerticalOffset={0}
-              >
-                <ScrollView
-                  style={styles.sheetScroll}
-                  contentContainerStyle={styles.sheetScrollContent}
-                  keyboardShouldPersistTaps="handled"
-                  showsVerticalScrollIndicator={false}
-                >
-                  {sheetComments.length === 0 && !sheetCommentsLoading && (
-                    <Text style={styles.sheetEmpty}>No comments yet. Be the first!</Text>
-                  )}
-                  {sheetComments.map((c) => (
-                    <View key={c.id} style={styles.sheetCommentRow}>
-                      <View style={styles.sheetCommentAvatar}>
-                        <Text style={styles.sheetCommentAvatarText}>
-                          {(c.profiles?.display_name || c.profiles?.anonymous_username || '?').charAt(0).toUpperCase()}
+              <ScrollView style={styles.shareList} contentContainerStyle={styles.shareListContent}>
+                {shareConversations.map((conversation) => {
+                  const name = conversation.otherUser?.display_name || conversation.otherUser?.anonymous_username || 'Anonymous';
+                  const sendingThis = shareSendingId === conversation.id;
+                  return (
+                    <Pressable
+                      key={conversation.id}
+                      style={({ pressed }) => [styles.sharePersonRow, pressed && styles.sharePersonRowPressed]}
+                      onPress={() => sharePostToConversation(conversation)}
+                      disabled={!!shareSendingId}
+                    >
+                      {conversation.otherUser?.avatar_url ? (
+                        <Image source={{ uri: conversation.otherUser.avatar_url }} style={styles.shareAvatar} />
+                      ) : (
+                        <View style={styles.shareAvatarFallback}>
+                          <Text style={styles.shareAvatarText}>{name.charAt(0).toUpperCase()}</Text>
+                        </View>
+                      )}
+                      <View style={styles.sharePersonInfo}>
+                        <Text style={styles.sharePersonName} numberOfLines={1}>{name}</Text>
+                        <Text style={styles.sharePersonSubtext} numberOfLines={1}>
+                          {conversation.shareType === 'match' ? 'Your friend chat' : 'Active conversation'}
                         </Text>
                       </View>
-                      <View style={styles.sheetCommentBody}>
-                        <Text style={styles.sheetCommentAuthor}>
-                          {c.profiles?.display_name || c.profiles?.anonymous_username || 'Anonymous'}
-                        </Text>
-                        <Text style={styles.sheetCommentText}>{c.content}</Text>
-                        <Text style={styles.sheetCommentTime}>{formatTimeAgo(c.created_at)}</Text>
-                      </View>
-                    </View>
-                  ))}
-                </ScrollView>
-                <View style={styles.sheetInputRow}>
-                  <TextInput
-                    style={styles.sheetInput}
-                    placeholder="Add a comment..."
-                    placeholderTextColor="#94a3b8"
-                    value={newCommentText}
-                    onChangeText={setNewCommentText}
-                    multiline
-                    maxLength={500}
-                    editable={!submittingComment}
-                  />
-                  <Pressable
-                    style={[styles.sheetSendBtn, (!newCommentText.trim() || submittingComment) && styles.sheetSendBtnDisabled]}
-                    onPress={handleAddCommentSheet}
-                    disabled={!newCommentText.trim() || submittingComment}
-                  >
-                    {submittingComment ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <Feather name="send" size={20} color="#fff" strokeWidth={2} />
-                    )}
-                  </Pressable>
-                </View>
-              </KeyboardAvoidingView>
+                      {sendingThis ? (
+                        <ActivityIndicator size="small" color="#ec4899" />
+                      ) : (
+                        <Feather name="send" size={18} color="#ec4899" />
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
             )}
           </Pressable>
         </Pressable>
@@ -1716,6 +1926,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'flex-end',
   },
+  sheetAvoiding: {
+    width: '100%',
+    justifyContent: 'flex-end',
+  },
   sheet: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
@@ -1767,9 +1981,9 @@ const styles = StyleSheet.create({
     flexGrow: 1,
   },
   sheetScrollContent: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingTop: 16,
-    paddingBottom: 24,
+    paddingBottom: 18,
   },
   sheetEmpty: {
     fontSize: 15,
@@ -1779,8 +1993,22 @@ const styles = StyleSheet.create({
   },
   sheetCommentRow: {
     flexDirection: 'row',
-    marginBottom: 16,
-    gap: 12,
+    marginBottom: 14,
+    gap: 10,
+    position: 'relative',
+  },
+  sheetReplyRow: {
+    marginTop: 8,
+    marginBottom: 0,
+  },
+  sheetThreadLine: {
+    position: 'absolute',
+    left: 19,
+    top: 44,
+    bottom: -8,
+    width: 2,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 2,
   },
   sheetCommentAvatar: {
     width: 40,
@@ -1790,49 +2018,108 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  sheetReplyAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#f8fafc',
+  },
   sheetCommentAvatarText: {
     fontSize: 16,
     fontWeight: '700',
     color: '#ec4899',
   },
+  sheetReplyAvatarText: {
+    fontSize: 13,
+    color: '#64748b',
+  },
   sheetCommentBody: {
     flex: 1,
+  },
+  sheetCommentBubble: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    backgroundColor: '#f8fafc',
+    borderRadius: 18,
+    borderTopLeftRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#eef2f7',
+  },
+  sheetReplyBubble: {
+    backgroundColor: '#fff',
+    borderColor: '#f1f5f9',
   },
   sheetCommentAuthor: {
     fontSize: 14,
     fontWeight: '700',
     color: '#0f172a',
-    marginBottom: 2,
+    marginBottom: 3,
   },
   sheetCommentText: {
     fontSize: 15,
     color: '#334155',
     lineHeight: 22,
-    marginBottom: 4,
+  },
+  sheetCommentMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginTop: 5,
+    marginLeft: 4,
   },
   sheetCommentTime: {
     fontSize: 12,
     color: '#94a3b8',
   },
+  sheetReplyAction: {
+    fontSize: 12,
+    color: '#ec4899',
+    fontWeight: '700',
+  },
+  sheetReplies: {
+    marginTop: 4,
+  },
+  sheetReplyingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    backgroundColor: '#fff7fb',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#fbcfe8',
+  },
+  sheetReplyingText: {
+    flex: 1,
+    marginRight: 10,
+    color: '#be185d',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   sheetInputRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingTop: 12,
+    paddingBottom: 14,
     gap: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#e2e8f0',
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#fff',
   },
   sheetInput: {
     flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 20,
+    minHeight: 44,
+    backgroundColor: '#f8fafc',
+    borderRadius: 22,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingTop: 11,
+    paddingBottom: 11,
     fontSize: 15,
     color: '#0f172a',
-    maxHeight: 100,
+    maxHeight: 110,
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
@@ -1846,6 +2133,150 @@ const styles = StyleSheet.create({
   },
   sheetSendBtnDisabled: {
     opacity: 0.5,
+  },
+  shareOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.45)',
+    justifyContent: 'flex-end',
+  },
+  shareSheet: {
+    maxHeight: '82%',
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: 'hidden',
+  },
+  shareHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e2e8f0',
+  },
+  shareTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  shareSubtitle: {
+    marginTop: 2,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  sharePostPreview: {
+    margin: 16,
+    padding: 14,
+    borderRadius: 18,
+    backgroundColor: '#fff7fb',
+    borderWidth: 1,
+    borderColor: '#fbcfe8',
+  },
+  sharePostLabel: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#be185d',
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  sharePostAuthor: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  sharePostText: {
+    fontSize: 14,
+    color: '#334155',
+    lineHeight: 20,
+  },
+  shareLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 28,
+  },
+  shareLoadingText: {
+    fontSize: 14,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  shareEmpty: {
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    paddingVertical: 34,
+  },
+  shareEmptyTitle: {
+    marginTop: 10,
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  shareEmptyText: {
+    marginTop: 6,
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  shareList: {
+    maxHeight: 360,
+  },
+  shareListContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  sharePersonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#eef2f7',
+    marginBottom: 10,
+  },
+  sharePersonRowPressed: {
+    backgroundColor: '#f8fafc',
+  },
+  shareAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    marginRight: 12,
+  },
+  shareAvatarFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    marginRight: 12,
+    backgroundColor: '#fce7f3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shareAvatarText: {
+    color: '#ec4899',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  sharePersonInfo: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  sharePersonName: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  sharePersonSubtext: {
+    marginTop: 3,
+    fontSize: 12,
+    color: '#94a3b8',
+    fontWeight: '600',
   },
   fab: {
     position: 'absolute',

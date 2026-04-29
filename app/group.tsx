@@ -14,6 +14,7 @@ import {
     Easing,
     FlatList,
     Keyboard,
+    Modal,
     Platform,
     Pressable,
     ScrollView,
@@ -39,10 +40,14 @@ import {
     getGroup,
     getGroupInviteLink,
     getGroupMembers,
+    getActiveMatch,
+    getConversations,
     getUserStreaks,
+    getPartnerProfile,
     hasProofToday,
     isGroupAdmin,
     issueWarningToMember,
+    leaveGroup,
     leaveChallengeGroup,
     removeMemberFromGroup,
     subscribeToGroupStreakFeed,
@@ -50,7 +55,8 @@ import {
     submitChallengeProof,
     TodayProof,
     updateGroupCoverImage,
-    updateGroupSettings
+    updateGroupSettings,
+    inviteConnectedUserToGroup
 } from './functions';
 
     export default function GroupScreen() {
@@ -65,10 +71,15 @@ import {
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [isAdmin, setIsAdminState] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
+    const [showInviteModal, setShowInviteModal] = useState(false);
+    const [inviteTargets, setInviteTargets] = useState<any[]>([]);
+    const [loadingInviteTargets, setLoadingInviteTargets] = useState(false);
+    const [invitingTargetId, setInvitingTargetId] = useState<string | null>(null);
     const [uploadingImage, setUploadingImage] = useState(false);
     const [members, setMembers] = useState<any[]>([]);
     const [loadingMembers, setLoadingMembers] = useState(false);
     const [isMember, setIsMember] = useState(false);
+    const [myMembership, setMyMembership] = useState<any>(null);
     // Streak-only: no normal group messaging
     
     // Settings state
@@ -203,6 +214,12 @@ import {
             const isCreator = uid === (groupData as any).creator_id;
             const isMemberCheck = groupData.is_member || isCreator;
             setIsMember(isMemberCheck);
+            if (uid && !isCreator) {
+                const memberSnap = await getDoc(doc(db, 'group_members', `${groupId}_${uid}`));
+                setMyMembership(memberSnap.exists() ? ({ id: memberSnap.id, ...memberSnap.data() } as any) : null);
+            } else {
+                setMyMembership(null);
+            }
             
             // If creator, automatically check admin status
             if (isCreator) {
@@ -216,6 +233,33 @@ import {
         } finally {
         setLoading(false);
         }
+    };
+
+    const handleLeaveAutoJoinedGroup = () => {
+        if (!groupId || typeof groupId !== 'string') return;
+        Alert.alert(
+            'Leave group?',
+            'You were auto-added by a friend. You can leave now if you do not want to be in this group.',
+            [
+                { text: 'Stay', style: 'cancel' },
+                {
+                    text: 'Leave',
+                    style: 'destructive',
+                    onPress: async () => {
+                        const success = await leaveGroup(groupId);
+                        if (success) {
+                            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                            setIsMember(false);
+                            setMyMembership(null);
+                            await loadGroup();
+                            router.back();
+                        } else {
+                            Alert.alert('Could not leave', 'Try again.');
+                        }
+                    },
+                },
+            ]
+        );
     };
 
     // No loadMessages: group is streak-only (photo + caption posts)
@@ -239,6 +283,62 @@ import {
         console.error('Error loading members:', error);
         } finally {
         setLoadingMembers(false);
+        }
+    };
+
+    const openInviteModal = async () => {
+        if (!groupId || typeof groupId !== 'string') return;
+        setShowInviteModal(true);
+        setLoadingInviteTargets(true);
+        try {
+            const [convs, activeMatch] = await Promise.all([getConversations(), getActiveMatch()]);
+            const targets = Array.isArray(convs)
+                ? convs.map((c: any) => ({ ...c, inviteType: 'dm', targetUser: c.otherUser }))
+                : [];
+            if (activeMatch?.partnerId) {
+                const partner = await getPartnerProfile(activeMatch.partnerId);
+                targets.unshift({
+                    id: activeMatch.id,
+                    inviteType: 'match',
+                    targetUser: { id: activeMatch.partnerId, ...(partner || {}) },
+                });
+            }
+            const seen = new Set<string>();
+            const uniqueTargets = targets.filter((target: any) => {
+                const uid = target.targetUser?.id;
+                if (!uid || uid === currentUserId || seen.has(uid)) return false;
+                seen.add(uid);
+                return true;
+            });
+            setInviteTargets(uniqueTargets);
+        } catch (error) {
+            console.error('Error loading invite targets:', error);
+            setInviteTargets([]);
+        } finally {
+            setLoadingInviteTargets(false);
+        }
+    };
+
+    const handleInviteTarget = async (target: any) => {
+        if (!groupId || typeof groupId !== 'string' || !target?.targetUser?.id) return;
+        setInvitingTargetId(target.targetUser.id);
+        try {
+            const result = await inviteConnectedUserToGroup(groupId, target.targetUser.id);
+            const name = target.targetUser.display_name || target.targetUser.anonymous_username || 'your friend';
+            if (!result.ok) {
+                Alert.alert('Could not invite', result.error || 'Try again.');
+            } else if (result.status === 'auto_joined') {
+                Alert.alert('Added', `${name} auto-joined because they allow group auto-join.`);
+                await loadMembers();
+                await loadGroup();
+            } else if (result.status === 'already_member') {
+                Alert.alert('Already in group', `${name} is already a member.`);
+            } else {
+                Alert.alert('Invite sent', `${name} can approve or decline it in Requests.`);
+            }
+            setShowInviteModal(false);
+        } finally {
+            setInvitingTargetId(null);
         }
     };
 
@@ -591,6 +691,9 @@ import {
         );
     }
 
+    const iWasAutoAddedByFriend =
+        myMembership?.join_source === 'auto_join_invite' && myMembership?.added_by_type === 'friend';
+
     return (
         <View style={styles.container}>
         {/* Header */}
@@ -611,23 +714,34 @@ import {
                 <Text style={styles.headerDescription} numberOfLines={1}>{group.description}</Text>
             )}
             </Pressable>
-            {isAdmin && groupId && typeof groupId === 'string' ? (
-                <Pressable
-                    style={styles.headerShareBtn}
-                    onPress={async () => {
-                        const url = getGroupInviteLink(groupId);
-                        try {
-                            await Share.share({
-                                message: `Join "${group.name}" on Spill: ${url}\n\nAnyone with this link can open the app and join the group.`,
-                                url: Platform.OS !== 'web' ? url : undefined,
-                            });
-                        } catch (e) {
-                            Alert.alert('Share', 'Could not share link.');
-                        }
-                    }}
-                >
-                    <Feather name="share-2" size={22} color="#333" />
-                </Pressable>
+            {(isMember || group.creator_id === currentUserId) && groupId && typeof groupId === 'string' ? (
+                <View style={styles.headerActions}>
+                    <Pressable
+                        style={styles.headerInviteBtn}
+                        onPress={openInviteModal}
+                    >
+                        <Feather name="user-plus" size={18} color="#fff" />
+                        <Text style={styles.headerInviteText}>Invite</Text>
+                    </Pressable>
+                    {isAdmin ? (
+                        <Pressable
+                            style={styles.headerShareBtn}
+                            onPress={async () => {
+                                const url = getGroupInviteLink(groupId);
+                                try {
+                                    await Share.share({
+                                        message: `Join "${group.name}" on Spill: ${url}\n\nAnyone with this link can open the app and join the group.`,
+                                        url: Platform.OS !== 'web' ? url : undefined,
+                                    });
+                                } catch (e) {
+                                    Alert.alert('Share', 'Could not share link.');
+                                }
+                            }}
+                        >
+                            <Feather name="share-2" size={20} color="#333" />
+                        </Pressable>
+                    ) : null}
+                </View>
             ) : (
                 <View style={{ width: 24 }} />
             )}
@@ -637,6 +751,21 @@ import {
         {group.cover_image_url && (
             <Image source={{ uri: group.cover_image_url }} style={styles.coverImage} />
         )}
+
+        {iWasAutoAddedByFriend ? (
+            <View style={styles.autoAddedBanner}>
+                <View style={styles.autoAddedIcon}>
+                    <Feather name="user-plus" size={18} color="#be185d" />
+                </View>
+                <View style={styles.autoAddedTextWrap}>
+                    <Text style={styles.autoAddedTitle}>Auto added by a friend</Text>
+                    <Text style={styles.autoAddedText}>You joined automatically because Auto-Join Groups is on.</Text>
+                </View>
+                <Pressable style={styles.autoAddedQuitBtn} onPress={handleLeaveAutoJoinedGroup}>
+                    <Text style={styles.autoAddedQuitText}>Quit</Text>
+                </Pressable>
+            </View>
+        ) : null}
 
         {/* Challenge summary (when this is a challenge group) */}
         {group.is_challenge && (
@@ -782,6 +911,82 @@ import {
         )}
 
 
+        <Modal
+            visible={showInviteModal}
+            animationType="slide"
+            transparent
+            onRequestClose={() => setShowInviteModal(false)}
+        >
+            <Pressable style={styles.inviteOverlay} onPress={() => setShowInviteModal(false)}>
+                <Pressable style={[styles.inviteSheet, { paddingBottom: insets.bottom + 16 }]} onPress={(e) => e.stopPropagation()}>
+                    <View style={styles.inviteHandle} />
+                    <View style={styles.inviteHeader}>
+                        <View>
+                            <Text style={styles.inviteTitle}>Invite a friend</Text>
+                            <Text style={styles.inviteSubtitle}>Pick someone from your active chats</Text>
+                        </View>
+                        <Pressable onPress={() => setShowInviteModal(false)} hitSlop={12}>
+                            <Feather name="x" size={24} color="#64748b" />
+                        </Pressable>
+                    </View>
+                    <View style={styles.inviteGroupPreview}>
+                        <Text style={styles.inviteGroupLabel}>Group</Text>
+                        <Text style={styles.inviteGroupName} numberOfLines={1}>{group.name}</Text>
+                        <Text style={styles.inviteGroupHint}>
+                            Friends with Auto-Join Groups on are added instantly. Others approve it in Requests.
+                        </Text>
+                    </View>
+                    {loadingInviteTargets ? (
+                        <View style={styles.inviteLoading}>
+                            <ActivityIndicator size="small" color="#ec4899" />
+                            <Text style={styles.inviteLoadingText}>Loading active chats...</Text>
+                        </View>
+                    ) : inviteTargets.length === 0 ? (
+                        <View style={styles.inviteEmpty}>
+                            <Feather name="message-circle" size={34} color="#cbd5e1" />
+                            <Text style={styles.inviteEmptyTitle}>No active chats</Text>
+                            <Text style={styles.inviteEmptyText}>Start a DM or friend chat first, then you can invite them here.</Text>
+                        </View>
+                    ) : (
+                        <ScrollView style={styles.inviteList} contentContainerStyle={styles.inviteListContent}>
+                            {inviteTargets.map((target: any) => {
+                                const person = target.targetUser || {};
+                                const name = person.display_name || person.anonymous_username || 'Anonymous';
+                                const sending = invitingTargetId === person.id;
+                                return (
+                                    <Pressable
+                                        key={`${target.inviteType}-${target.id}-${person.id}`}
+                                        style={({ pressed }) => [styles.invitePersonRow, pressed && styles.invitePersonRowPressed]}
+                                        onPress={() => handleInviteTarget(target)}
+                                        disabled={!!invitingTargetId}
+                                    >
+                                        {person.avatar_url ? (
+                                            <Image source={{ uri: person.avatar_url }} style={styles.inviteAvatar} />
+                                        ) : (
+                                            <View style={styles.inviteAvatarFallback}>
+                                                <Text style={styles.inviteAvatarText}>{name.charAt(0).toUpperCase()}</Text>
+                                            </View>
+                                        )}
+                                        <View style={styles.invitePersonInfo}>
+                                            <Text style={styles.invitePersonName} numberOfLines={1}>{name}</Text>
+                                            <Text style={styles.invitePersonSubtext} numberOfLines={1}>
+                                                {target.inviteType === 'match' ? 'Friend chat' : 'Active conversation'}
+                                            </Text>
+                                        </View>
+                                        {sending ? (
+                                            <ActivityIndicator size="small" color="#ec4899" />
+                                        ) : (
+                                            <Feather name="user-plus" size={18} color="#ec4899" />
+                                        )}
+                                    </Pressable>
+                                );
+                            })}
+                        </ScrollView>
+                    )}
+                </Pressable>
+            </Pressable>
+        </Modal>
+
         {/* Admin Settings Modal */}
         {showSettings && isAdmin && (
             <View style={styles.modalOverlay}>
@@ -875,6 +1080,7 @@ import {
                     const username = member.user?.display_name || member.user?.anonymous_username || 'Anonymous';
                     const isCreator = member.role === 'creator';
                     const isCurrentUser = member.user_id === currentUserId;
+                    const autoJoinedByFriend = member.join_source === 'auto_join_invite' && member.added_by_type === 'friend';
                     
                     return (
                     <View key={member.id} style={styles.memberRow}>
@@ -892,6 +1098,11 @@ import {
                             {isCreator ? 'Creator' : member.role === 'admin' ? 'Admin' : 'Member'}
                             {member.warnings > 0 && ` • ${member.warnings} warning${member.warnings > 1 ? 's' : ''}`}
                             </Text>
+                            {autoJoinedByFriend ? (
+                                <View style={styles.memberAutoJoinBadge}>
+                                    <Text style={styles.memberAutoJoinBadgeText}>Added by a friend - auto joined</Text>
+                                </View>
+                            ) : null}
                         </View>
                         </View>
                         {!isCurrentUser && !isCreator && (
@@ -1351,6 +1562,155 @@ import {
         padding: 8,
         justifyContent: 'center',
         alignItems: 'center',
+    },
+    headerActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    headerInviteBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        backgroundColor: '#ec4899',
+        paddingHorizontal: 12,
+        paddingVertical: 9,
+        borderRadius: 999,
+        shadowColor: '#ec4899',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 5,
+        elevation: 2,
+    },
+    headerInviteText: {
+        color: '#fff',
+        fontSize: 13,
+        fontWeight: '800',
+    },
+    inviteOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(15,23,42,0.45)',
+        justifyContent: 'flex-end',
+    },
+    inviteSheet: {
+        maxHeight: '82%',
+        backgroundColor: '#fff',
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        overflow: 'hidden',
+    },
+    inviteHandle: {
+        width: 40,
+        height: 4,
+        borderRadius: 2,
+        backgroundColor: '#e2e8f0',
+        alignSelf: 'center',
+        marginTop: 12,
+        marginBottom: 4,
+    },
+    inviteHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 20,
+        paddingVertical: 14,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: '#e2e8f0',
+    },
+    inviteTitle: { fontSize: 20, fontWeight: '900', color: '#0f172a' },
+    inviteSubtitle: { marginTop: 2, fontSize: 13, fontWeight: '600', color: '#64748b' },
+    inviteGroupPreview: {
+        margin: 16,
+        padding: 14,
+        borderRadius: 18,
+        backgroundColor: '#fff7fb',
+        borderWidth: 1,
+        borderColor: '#fbcfe8',
+    },
+    inviteGroupLabel: { fontSize: 11, fontWeight: '900', color: '#be185d', textTransform: 'uppercase', marginBottom: 6 },
+    inviteGroupName: { fontSize: 15, fontWeight: '900', color: '#0f172a', marginBottom: 5 },
+    inviteGroupHint: { fontSize: 13, color: '#64748b', lineHeight: 19 },
+    inviteLoading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 28 },
+    inviteLoadingText: { fontSize: 14, color: '#64748b', fontWeight: '600' },
+    inviteEmpty: { alignItems: 'center', paddingHorizontal: 32, paddingVertical: 34 },
+    inviteEmptyTitle: { marginTop: 10, fontSize: 17, fontWeight: '800', color: '#0f172a' },
+    inviteEmptyText: { marginTop: 6, fontSize: 14, color: '#64748b', textAlign: 'center', lineHeight: 20 },
+    inviteList: { maxHeight: 360 },
+    inviteListContent: { paddingHorizontal: 16, paddingBottom: 12 },
+    invitePersonRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 12,
+        borderRadius: 16,
+        backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: '#eef2f7',
+        marginBottom: 10,
+    },
+    invitePersonRowPressed: { backgroundColor: '#f8fafc' },
+    inviteAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 12 },
+    inviteAvatarFallback: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        marginRight: 12,
+        backgroundColor: '#fce7f3',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    inviteAvatarText: { color: '#ec4899', fontSize: 17, fontWeight: '900' },
+    invitePersonInfo: { flex: 1, paddingRight: 10 },
+    invitePersonName: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+    invitePersonSubtext: { marginTop: 3, fontSize: 12, color: '#94a3b8', fontWeight: '600' },
+    autoAddedBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginHorizontal: 16,
+        marginTop: 14,
+        padding: 12,
+        borderRadius: 18,
+        backgroundColor: '#fff7fb',
+        borderWidth: 1,
+        borderColor: '#fbcfe8',
+    },
+    autoAddedIcon: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: '#fce7f3',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 10,
+    },
+    autoAddedTextWrap: {
+        flex: 1,
+        paddingRight: 10,
+    },
+    autoAddedTitle: {
+        fontSize: 14,
+        fontWeight: '900',
+        color: '#be185d',
+    },
+    autoAddedText: {
+        marginTop: 2,
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#64748b',
+        lineHeight: 17,
+    },
+    autoAddedQuitBtn: {
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 999,
+        backgroundColor: '#fee2e2',
+        borderWidth: 1,
+        borderColor: '#fecaca',
+    },
+    autoAddedQuitText: {
+        fontSize: 12,
+        fontWeight: '900',
+        color: '#dc2626',
     },
     scrollToBottomBtn: {
         position: 'absolute',
@@ -1893,6 +2253,20 @@ import {
         color: '#999',
         marginTop: 2,
         fontWeight: '500',
+    },
+    memberAutoJoinBadge: {
+        alignSelf: 'flex-start',
+        marginTop: 5,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 999,
+        backgroundColor: '#fce7f3',
+    },
+    memberAutoJoinBadgeText: {
+        fontSize: 10,
+        fontWeight: '900',
+        color: '#be185d',
+        textTransform: 'uppercase',
     },
     memberActions: {
         flexDirection: 'row',

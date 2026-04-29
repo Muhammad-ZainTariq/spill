@@ -425,6 +425,12 @@ export async function endLivePodcastRoom(roomId: string) {
   return data as { ok: true; replayStatus: string };
 }
 
+export async function deleteLivePodcastReplay(roomId: string) {
+  const fn = httpsCallable(functions, 'deleteLivePodcastReplay', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });
+  const { data } = await fn({ roomId });
+  return data as { ok: true };
+}
+
 export async function joinLivePodcastRoom(roomId: string, inviteCode?: string) {
   logLiveKitNetworkAuditHintOnce();
   const fn = httpsCallable(functions, 'joinLivePodcastRoom', { timeout: LIVE_PODCAST_FN_TIMEOUT_MS });

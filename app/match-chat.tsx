@@ -6,6 +6,7 @@ import { Alert, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
+  blockUser,
   endMatch,
   fetchUserProfile,
   getPartnerProfile,
@@ -25,6 +26,18 @@ type RawMatchMessage = {
   sender_id: string;
   content: string;
   created_at: any;
+  message_type?: string;
+  shared_post?: SharedPost | null;
+};
+
+type SharedPost = {
+  id?: string;
+  content?: string;
+  author_name?: string;
+  media_url?: string | null;
+  youtube_url?: string | null;
+  youtube_id?: string | null;
+  created_at?: string | null;
 };
 
 type ChatMessage = {
@@ -32,6 +45,8 @@ type ChatMessage = {
   fromUid: string;
   text: string;
   createdAt: Date | null;
+  messageType?: string;
+  sharedPost?: SharedPost | null;
 };
 
 function routeParam(v: string | string[] | undefined): string {
@@ -121,6 +136,8 @@ export default function MatchChatScreen() {
         fromUid: String(m.sender_id),
         text: String(m.content ?? ''),
         createdAt: toDate(m.created_at),
+        messageType: m.message_type ? String(m.message_type) : undefined,
+        sharedPost: m.shared_post ?? null,
       }));
       setMessages(mapped);
       setLoadingMessages(false);
@@ -148,10 +165,30 @@ export default function MatchChatScreen() {
     }
   }, [text, matchId, sending]);
 
+  const blockMatchedUser = async () => {
+    try {
+      const blocked = await blockUser(partnerId, 'match');
+      if (!blocked) {
+        Alert.alert('Error', 'Failed to block user.');
+        return;
+      }
+      await endMatch(matchId);
+      Alert.alert('Blocked', 'User blocked.');
+      router.back();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'Failed to block user.');
+    }
+  };
+
   const handleUnfriend = () => {
     if (!matchId) return;
     Alert.alert('Unfriend', 'End this match and remove the connection?', [
       { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Block',
+        style: 'destructive',
+        onPress: blockMatchedUser,
+      },
       {
         text: 'Unfriend',
         style: 'destructive',
@@ -160,6 +197,18 @@ export default function MatchChatScreen() {
           if (success) router.back();
           else Alert.alert('Error', 'Failed to end match.');
         },
+      },
+    ]);
+  };
+
+  const handleBlock = () => {
+    if (!matchId || !partnerId) return;
+    Alert.alert('Block', 'Block this user and remove the match?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Block',
+        style: 'destructive',
+        onPress: blockMatchedUser,
       },
     ]);
   };
@@ -267,6 +316,9 @@ export default function MatchChatScreen() {
         <HuzzPressable style={chatStyles.headerBtn} onPress={handlePlay} haptic="light">
           <Feather name="grid" size={18} color={tokens.colors.text} />
         </HuzzPressable>
+        <HuzzPressable style={chatStyles.headerBtn} onPress={handleBlock} haptic="light">
+          <Feather name="slash" size={18} color={tokens.colors.text} />
+        </HuzzPressable>
         <HuzzPressable style={chatStyles.headerBtn} onPress={handleUnfriend} haptic="light">
           <Feather name="user-minus" size={18} color={tokens.colors.text} />
         </HuzzPressable>
@@ -288,6 +340,7 @@ export default function MatchChatScreen() {
         showEmoji={true}
         placeholder="Message..."
         onReportMessage={handleReportMessage}
+        onOpenSharedPost={(postId) => router.push(`/comments?postId=${postId}` as any)}
       />
     </SafeAreaView>
   );

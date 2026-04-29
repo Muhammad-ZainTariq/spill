@@ -3,6 +3,7 @@ import {
   bookTherapistSlot,
   cancelTherapistSession,
   cancelTherapistSlot,
+  countSessionsForTherapist,
   createTherapistSlot,
   getTherapistProfile,
   getUserLite,
@@ -25,6 +26,7 @@ import {
 } from '@/app/therapist/_marketplace';
 import { tokens } from '@/app/ui/tokens';
 import { auth, db } from '@/lib/firebase';
+import { clearLoginOtpPending } from '@/lib/loginOtpPending';
 import { Feather } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -93,6 +95,7 @@ export default function TherapistProfileScreen() {
   const [userMap, setUserMap] = useState<Record<string, any>>({});
   const [reviews, setReviews] = useState<TherapistReview[]>([]);
   const [saving, setSaving] = useState(false);
+  const [therapistSessionsCount, setTherapistSessionsCount] = useState(0);
   /** Visitor: approved sessions with this therapist only */
   const [mySessionsWithThisTherapist, setMySessionsWithThisTherapist] = useState<TherapistSession[]>([]);
 
@@ -115,6 +118,7 @@ export default function TherapistProfileScreen() {
         style: 'destructive',
         onPress: async () => {
           try {
+            await clearLoginOtpPending();
             const { signOut } = await import('firebase/auth');
             await signOut(auth);
             router.replace('/login' as any);
@@ -141,18 +145,19 @@ export default function TherapistProfileScreen() {
     if (!therapistId) return;
     setLoading(true);
     try {
-      const [p, s, allS, sess, revs, reqs, mineHere] = await Promise.all([
+      const [p, s, allS, sess, revs, reqs, mineHere, totalSessionsCount] = await Promise.all([
         getTherapistProfile(therapistId),
         listOpenSlotsForTherapist(therapistId, 25),
         isMe ? listAllSlotsForTherapist(therapistId, 100) : Promise.resolve([]),
         isMe ? listSessionsForTherapist(therapistId, 80) : Promise.resolve([]),
-        isMe ? listReviewsForTherapist(therapistId, 30) : Promise.resolve([]),
+        listReviewsForTherapist(therapistId, 30),
         isMe ? listBookingRequestsForTherapist(therapistId, 50) : Promise.resolve([]),
         !isMe && meUid
           ? listSessionsForUser(meUid, 40).then((all) =>
               all.filter((x) => String(x.therapist_uid || '') === therapistId)
             )
           : Promise.resolve([] as TherapistSession[]),
+        countSessionsForTherapist(therapistId),
       ]);
       setProfile(p);
       setSlots(s);
@@ -161,6 +166,7 @@ export default function TherapistProfileScreen() {
       setReviews(revs);
       setRequests(reqs);
       setMySessionsWithThisTherapist(mineHere);
+      setTherapistSessionsCount(totalSessionsCount);
       if (p) {
         setEditName(String(p.display_name || ''));
         setEditSpec(String(p.specialization || ''));
@@ -1000,8 +1006,8 @@ export default function TherapistProfileScreen() {
                 </View>
               ) : activeSection === 'reviews' ? (
                 <View style={styles.sectionCard}>
-                  <Text style={styles.sectionTitle}>Reviews (private)</Text>
-                  <Text style={styles.helperMuted}>Only you and admins can see feedback.</Text>
+                  <Text style={styles.sectionTitle}>Reviews</Text>
+                  <Text style={styles.helperMuted}>Feedback from completed sessions is also shown on your public profile.</Text>
 
                   {reviews.length === 0 ? (
                     <Text style={styles.muted}>No reviews yet.</Text>
@@ -1287,6 +1293,64 @@ export default function TherapistProfileScreen() {
                 ) : profile.bio ? (
                   <Text style={styles.heroBio}>{profile.bio}</Text>
                 ) : null}
+                <View style={styles.therapistInfoCard}>
+                  <View style={styles.therapistInfoHeader}>
+                    <View style={styles.therapistInfoIcon}>
+                      <Feather name="calendar" size={18} color="#92400e" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.therapistInfoTitle}>Appointment availability</Text>
+                      <Text style={styles.therapistInfoSubtitle}>
+                        {slots.length > 0 ? `${slots.length} open slot${slots.length === 1 ? '' : 's'} ready to book` : 'No open slots yet'}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.therapistInfoStats}>
+                    <View style={styles.therapistInfoStat}>
+                      <Text style={styles.therapistInfoNumber}>{slots.length}</Text>
+                      <Text style={styles.therapistInfoLabel}>Slots</Text>
+                    </View>
+                    <View style={styles.therapistInfoDivider} />
+                    <View style={styles.therapistInfoStat}>
+                      <Text style={styles.therapistInfoNumber}>{therapistSessionsCount}</Text>
+                      <Text style={styles.therapistInfoLabel}>Sessions</Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Member reviews</Text>
+                <Text style={styles.helperMuted}>Ratings from people who finished a private session. Names are not shown.</Text>
+                {Number(profile.avg_rating || 0) > 0 || Number(profile.review_count || 0) > 0 ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
+                    <Feather name="star" size={18} color={tokens.colors.pink} />
+                    <Text style={styles.noteText}>
+                      {Number(profile.avg_rating || 0).toFixed(1)} average · {Number(profile.review_count || 0)} reviews
+                    </Text>
+                  </View>
+                ) : null}
+                {reviews.length === 0 ? (
+                  <Text style={[styles.muted, { marginTop: 10 }]}>No reviews yet.</Text>
+                ) : (
+                  <View style={{ marginTop: 12, gap: 10 }}>
+                    {reviews.map((r) => (
+                      <View key={r.id} style={styles.reviewRow}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Text style={styles.reviewStars}>
+                            {'★★★★★'.slice(0, Math.max(1, Math.min(5, Number(r.rating || 0))))}
+                          </Text>
+                          <Text style={styles.reviewDate}>{String(r.created_at || '').slice(0, 10)}</Text>
+                        </View>
+                        {r.comment ? (
+                          <Text style={styles.reviewText}>{String(r.comment)}</Text>
+                        ) : (
+                          <Text style={[styles.muted, { marginTop: 6 }]}>No written comment.</Text>
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                )}
               </View>
 
               {mySessionsWithThisTherapist.length > 0 ? (
@@ -1439,6 +1503,37 @@ const styles = StyleSheet.create({
   heroMeta: { marginTop: 6, fontSize: 13, fontWeight: '700', color: tokens.colors.textSecondary },
   heroLangs: { marginTop: 6, fontSize: 12, fontWeight: '700', color: tokens.colors.textMuted },
   heroBio: { marginTop: 10, fontSize: 13, fontWeight: '600', color: tokens.colors.text, lineHeight: 18 },
+  therapistInfoCard: {
+    marginTop: 14,
+    backgroundColor: '#fef3c7',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    padding: 14,
+  },
+  therapistInfoHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  therapistInfoIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    backgroundColor: '#fde68a',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  therapistInfoTitle: { fontSize: 15, fontWeight: '900', color: '#0f172a' },
+  therapistInfoSubtitle: { marginTop: 3, fontSize: 12, fontWeight: '700', color: '#64748b' },
+  therapistInfoStats: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.45)',
+    borderRadius: 14,
+    paddingVertical: 10,
+  },
+  therapistInfoStat: { flex: 1, alignItems: 'center' },
+  therapistInfoNumber: { fontSize: 20, fontWeight: '900', color: '#0f172a' },
+  therapistInfoLabel: { marginTop: 2, fontSize: 11, fontWeight: '800', color: '#92400e', textTransform: 'uppercase' },
+  therapistInfoDivider: { width: 1, alignSelf: 'stretch', backgroundColor: '#fcd34d' },
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
